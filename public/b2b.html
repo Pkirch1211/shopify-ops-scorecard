@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>B2B Order Process — LifeLines</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
+
+  :root {
+    --bg: #0a0c0f;
+    --surface: #111419;
+    --surface2: #181c22;
+    --border: #1e2530;
+    --border2: #252d3a;
+    --text: #e2e8f0;
+    --muted: #64748b;
+    --dim: #3a4555;
+    --b2b: #10b981;
+    --b2b-dim: rgba(16,185,129,0.12);
+    --accent: #f59e0b;
+    --accent-dim: rgba(245,158,11,0.1);
+    --danger: #ef4444;
+    --warn: #f97316;
+    --mono: 'IBM Plex Mono', monospace;
+    --sans: 'IBM Plex Sans', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 14px; min-height: 100vh; }
+
+  /* ── Header ── */
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 18px 32px; border-bottom: 1px solid var(--border);
+    background: var(--surface); position: sticky; top: 0; z-index: 100;
+  }
+  .logo { font-family: var(--mono); font-size: 13px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); }
+  .logo span { color: var(--muted); font-weight: 400; }
+  .nav-links { display: flex; gap: 4px; }
+  .nav-link {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.07em; text-transform: uppercase;
+    padding: 6px 14px; border-radius: 4px; text-decoration: none; color: var(--muted);
+    transition: color 0.15s, background 0.15s;
+  }
+  .nav-link:hover { color: var(--text); background: var(--surface2); }
+  .nav-link.active { color: var(--b2b); background: var(--b2b-dim); }
+  .header-right { display: flex; align-items: center; gap: 10px; }
+  .btn {
+    background: var(--accent); color: #000; border: none; font-family: var(--mono);
+    font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 8px 18px; border-radius: 4px; cursor: pointer; transition: opacity 0.15s;
+  }
+  .btn:hover { opacity: 0.85; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-ghost {
+    background: transparent; border: 1px solid var(--border2); color: var(--muted); padding: 7px 14px;
+  }
+  .btn-ghost:hover { border-color: var(--dim); color: var(--text); }
+  .btn-b2b { background: var(--b2b); color: #000; }
+
+  /* ── Config drawer ── */
+  .config-drawer {
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 20px 32px; display: none; gap: 12px; flex-wrap: wrap; align-items: flex-end;
+  }
+  .config-drawer.open { display: flex; }
+  .config-group { display: flex; flex-direction: column; gap: 5px; }
+  .config-group label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+  .config-group input { width: 240px; }
+  input, select {
+    background: var(--surface2); border: 1px solid var(--border2); color: var(--text);
+    font-family: var(--mono); font-size: 12px; padding: 7px 12px; border-radius: 4px; outline: none; transition: border-color 0.15s;
+  }
+  input:focus { border-color: var(--accent); }
+
+  /* ── Main ── */
+  main { padding: 28px 32px; max-width: 1400px; margin: 0 auto; }
+
+  .section-header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 16px; margin-top: 32px; }
+  .section-header:first-child { margin-top: 0; }
+  .section-title { font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+  .section-line { flex: 1; height: 1px; background: var(--border); }
+
+  /* ── KPI strip ── */
+  .kpi-row { display: flex; gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; margin-bottom: 0; }
+  .kpi-card { background: var(--surface); padding: 20px 28px; flex: 1; cursor: default; }
+  .kpi-card.clickable { cursor: pointer; transition: background 0.15s; }
+  .kpi-card.clickable:hover { background: var(--surface2); }
+  .kpi-label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+  .kpi-value { font-family: var(--mono); font-size: 36px; font-weight: 600; color: var(--text); line-height: 1; }
+  .kpi-value.highlight { color: var(--warn); }
+  .kpi-hint { font-family: var(--mono); font-size: 10px; color: var(--dim); margin-top: 8px; }
+  .kpi-hint.clickable-hint { color: var(--b2b); }
+
+  /* ── Tables ── */
+  .table-wrap { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; }
+  thead tr { background: var(--surface2); }
+  th {
+    font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--muted); padding: 12px 18px; text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+  th.sortable { cursor: pointer; user-select: none; }
+  th.sortable:hover { color: var(--text); }
+  th .sort-icon { margin-left: 4px; opacity: 0.4; font-size: 10px; }
+  th.sorted .sort-icon { opacity: 1; color: var(--accent); }
+  td { padding: 13px 18px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 12px; }
+  tr:last-child td { border-bottom: none; }
+  tbody tr { background: var(--surface); }
+  tbody tr:hover { background: var(--surface2); }
+
+  .rank-num { color: var(--dim); font-size: 11px; width: 28px; display: inline-block; }
+  .customer-name { color: var(--text); font-weight: 500; }
+  .customer-email { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .count-bar-wrap { display: flex; align-items: center; gap: 10px; }
+  .count-bar { height: 4px; background: var(--b2b); border-radius: 2px; opacity: 0.6; min-width: 2px; }
+  .val-cell { color: var(--text); }
+  .money-cell { color: var(--b2b); }
+  .oos-title { color: var(--text); font-weight: 500; }
+  .oos-variant { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .oos-sku { color: var(--dim); font-size: 10px; }
+  .oos-count { color: var(--warn); font-weight: 600; }
+  .oos-units { color: var(--muted); }
+  .affected-drafts { color: var(--dim); font-size: 10px; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+  .avail-zero { color: var(--danger); font-weight: 600; }
+  .avail-neg { color: #f97316; font-weight: 600; }
+
+  /* ── States ── */
+  .state-panel { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 80px 40px; gap: 12px; text-align: center; }
+  .state-icon { font-size: 32px; margin-bottom: 4px; }
+  .state-title { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--text); letter-spacing: 0.05em; }
+  .state-sub { font-size: 13px; color: var(--muted); max-width: 340px; line-height: 1.6; }
+  .spinner { width: 20px; height: 20px; border: 2px solid var(--border2); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .error-banner { background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); color: #fca5a5; font-family: var(--mono); font-size: 12px; padding: 12px 18px; border-radius: 6px; margin-bottom: 20px; display: none; }
+
+  /* ── Search ── */
+  .table-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; gap: 10px; }
+  .search-input { width: 220px; font-size: 12px; }
+
+  /* ── Timestamp ── */
+  .fetch-time { font-family: var(--mono); font-size: 10px; color: var(--dim); margin-top: 6px; }
+
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+  @media (max-width: 960px) { .two-col { grid-template-columns: 1fr; } header { padding: 14px 16px; } main { padding: 20px 16px; } }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">LifeLines <span>/ B2B Order Process</span></div>
+  <nav class="nav-links">
+    <a href="/" class="nav-link">Ops Scorecard</a>
+    <a href="/b2b.html" class="nav-link active">B2B Process</a>
+  </nav>
+  <div class="header-right">
+    <button class="btn btn-ghost" onclick="toggleConfig()" id="configBtn">⚙ Config</button>
+    <button class="btn btn-b2b" onclick="runFetch()" id="fetchBtn">Refresh</button>
+  </div>
+</header>
+
+<div class="config-drawer" id="configDrawer">
+  <div class="config-group">
+    <label>B2B Store URL</label>
+    <input type="text" id="b2bStore" placeholder="b2b-store.myshopify.com">
+  </div>
+  <div class="config-group">
+    <label>B2B Admin API Token</label>
+    <input type="password" id="b2bToken" placeholder="shpat_...">
+  </div>
+  <div class="config-group" style="justify-content: flex-end;">
+    <label>&nbsp;</label>
+    <button class="btn" onclick="saveConfig()">Save</button>
+  </div>
+</div>
+
+<main>
+  <div class="error-banner" id="errorBanner"></div>
+
+  <div id="emptyState" class="state-panel">
+    <div class="state-icon">🏭</div>
+    <div class="state-title">No data loaded</div>
+    <div class="state-sub">Open Config, enter your B2B store credentials, then hit Refresh.</div>
+  </div>
+
+  <div id="loadingState" class="state-panel" style="display:none">
+    <div class="spinner"></div>
+    <div class="state-title">Fetching B2B draft orders...</div>
+    <div class="state-sub">Pulling drafts and checking inventory — may take a moment for large catalogs.</div>
+  </div>
+
+  <div id="dashboard" style="display:none">
+
+    <!-- KPI strip -->
+    <div class="section-header">
+      <span class="section-title">Open Drafts Overview</span>
+      <div class="section-line"></div>
+      <span id="fetchTime" class="fetch-time"></span>
+    </div>
+
+    <div class="kpi-row">
+      <div class="kpi-card">
+        <div class="kpi-label">Total Open Drafts</div>
+        <div class="kpi-value" id="kpiTotal">—</div>
+        <div class="kpi-hint">All statuses</div>
+      </div>
+      <div class="kpi-card clickable" onclick="exportNeedsReview()" id="kpiNeedsReviewCard">
+        <div class="kpi-label">Needs Review</div>
+        <div class="kpi-value highlight" id="kpiNeedsReview">—</div>
+        <div class="kpi-hint clickable-hint" id="kpiNeedsReviewHint">↓ Click to export CSV</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">OOS Line Items</div>
+        <div class="kpi-value" id="kpiOOS">—</div>
+        <div class="kpi-hint">Variants at 0 inventory</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Unique Customers</div>
+        <div class="kpi-value" id="kpiCustomers">—</div>
+        <div class="kpi-hint">With open drafts</div>
+      </div>
+    </div>
+
+    <!-- Customers + OOS side by side -->
+    <div class="section-header" style="margin-top:32px">
+      <span class="section-title">Draft Orders by Customer</span>
+      <div class="section-line"></div>
+    </div>
+
+    <div class="two-col">
+      <!-- By customer -->
+      <div>
+        <div class="table-toolbar">
+          <input class="search-input" type="text" placeholder="Search customer..." oninput="filterCustomers(this.value)">
+          <span id="customerCount" style="font-family:var(--mono);font-size:11px;color:var(--muted)"></span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Customer</th>
+                <th class="sortable sorted" onclick="sortCustomers('draftCount', this)" data-col="draftCount">
+                  Drafts <span class="sort-icon">↓</span>
+                </th>
+                <th class="sortable" onclick="sortCustomers('totalValue', this)" data-col="totalValue">
+                  Total Value <span class="sort-icon">↕</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody id="customerBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- OOS items -->
+      <div>
+        <div class="section-header" style="margin-top:0; margin-bottom:10px;">
+          <span class="section-title">Out-of-Stock Items in Open Drafts</span>
+          <div class="section-line"></div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Product / SKU</th>
+                <th class="sortable sorted" onclick="sortOOS('draftCount', this)" data-col="draftCount">
+                  # Drafts <span class="sort-icon">↓</span>
+                </th>
+                <th>Units Req.</th>
+                <th>On Hand</th>
+              </tr>
+            </thead>
+            <tbody id="oosBody"></tbody>
+          </table>
+        </div>
+        <div id="oosEmpty" style="display:none; padding:32px; text-align:center; font-family:var(--mono); font-size:12px; color:var(--b2b);">
+          ✓ No out-of-stock items in open drafts
+        </div>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+let allCustomers = [];
+let allOOS = [];
+let exportData = [];
+let customerSortCol = 'draftCount';
+let customerSortDir = -1;
+let oosSortCol = 'draftCount';
+let oosSortDir = -1;
+
+// ── Config ────────────────────────────────────────────────────────────────────
+function loadConfig() {
+  ['b2bStore', 'b2bToken'].forEach(k => {
+    const v = localStorage.getItem('ops_' + k);
+    if (v) document.getElementById(k).value = v;
+  });
+}
+function saveConfig() {
+  ['b2bStore', 'b2bToken'].forEach(k => {
+    localStorage.setItem('ops_' + k, document.getElementById(k).value.trim());
+  });
+  toggleConfig();
+}
+function toggleConfig() {
+  document.getElementById('configDrawer').classList.toggle('open');
+}
+loadConfig();
+
+// ── Fetch ─────────────────────────────────────────────────────────────────────
+async function runFetch() {
+  const b2bStore = document.getElementById('b2bStore').value.trim();
+  const b2bToken = document.getElementById('b2bToken').value.trim();
+  if (!b2bStore || !b2bToken) {
+    showError('Missing credentials — open Config and fill in both fields.');
+    return;
+  }
+  setLoading(true);
+  hideError();
+  try {
+    const res = await fetch('/api/b2b-drafts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ b2bStore, b2bToken }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Server error');
+    render(data);
+  } catch (err) {
+    showError(err.message);
+    setLoading(false);
+    show('emptyState');
+  }
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function render(data) {
+  setLoading(false);
+  show('dashboard');
+
+  document.getElementById('kpiTotal').textContent = data.totalDrafts.toLocaleString();
+  document.getElementById('kpiNeedsReview').textContent = data.needsReviewCount.toLocaleString();
+  document.getElementById('kpiOOS').textContent = data.oosItems.length.toLocaleString();
+  document.getElementById('kpiCustomers').textContent = data.byCustomer.length.toLocaleString();
+  document.getElementById('fetchTime').textContent = 'Last fetched ' + new Date().toLocaleTimeString();
+
+  if (data.needsReviewCount === 0) {
+    document.getElementById('kpiNeedsReviewHint').textContent = 'None flagged';
+    document.getElementById('kpiNeedsReviewCard').classList.remove('clickable');
+    document.getElementById('kpiNeedsReviewCard').style.cursor = 'default';
+  }
+
+  allCustomers = data.byCustomer;
+  allOOS = data.oosItems;
+  exportData = data.needsReviewExport;
+
+  renderCustomers(allCustomers);
+  renderOOS(allOOS);
+}
+
+// ── Customer table ────────────────────────────────────────────────────────────
+function renderCustomers(rows) {
+  const tbody = document.getElementById('customerBody');
+  const maxCount = rows[0]?.draftCount || 1;
+  document.getElementById('customerCount').textContent = rows.length + ' customers';
+
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:32px;font-size:12px">No open draft orders</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = rows.map((r, i) => `
+    <tr>
+      <td><span class="rank-num">${i + 1}</span></td>
+      <td>
+        <div class="customer-name">${esc(r.customer)}</div>
+        ${r.email !== '—' ? `<div class="customer-email">${esc(r.email)}</div>` : ''}
+      </td>
+      <td>
+        <div class="count-bar-wrap">
+          <span class="val-cell">${r.draftCount}</span>
+          <div class="count-bar" style="width:${Math.max(4, Math.round((r.draftCount / maxCount) * 80))}px"></div>
+        </div>
+      </td>
+      <td class="money-cell">$${r.totalValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+    </tr>
+  `).join('');
+}
+
+function filterCustomers(query) {
+  const q = query.toLowerCase();
+  const filtered = q
+    ? allCustomers.filter(r => r.customer.toLowerCase().includes(q) || r.email.toLowerCase().includes(q))
+    : allCustomers;
+  renderCustomers(filtered);
+}
+
+function sortCustomers(col, thEl) {
+  if (customerSortCol === col) {
+    customerSortDir *= -1;
+  } else {
+    customerSortCol = col;
+    customerSortDir = -1;
+  }
+  document.querySelectorAll('#customerBody').forEach(() => {});
+  document.querySelectorAll('th[data-col]').forEach(th => {
+    if (th.closest('table') === thEl.closest('table')) {
+      th.classList.remove('sorted');
+      th.querySelector('.sort-icon').textContent = '↕';
+    }
+  });
+  thEl.classList.add('sorted');
+  thEl.querySelector('.sort-icon').textContent = customerSortDir === -1 ? '↓' : '↑';
+  allCustomers.sort((a, b) => customerSortDir * (b[col] - a[col]));
+  renderCustomers(allCustomers);
+}
+
+// ── OOS table ─────────────────────────────────────────────────────────────────
+function renderOOS(rows) {
+  const tbody = document.getElementById('oosBody');
+  const empty = document.getElementById('oosEmpty');
+
+  if (!rows.length) {
+    tbody.innerHTML = '';
+    empty.style.display = 'block';
+    document.getElementById('oosBody').closest('.table-wrap').style.display = 'none';
+    return;
+  }
+  document.getElementById('oosBody').closest('.table-wrap').style.display = '';
+  empty.style.display = 'none';
+
+  tbody.innerHTML = rows.map(r => {
+    const availClass = r.available < 0 ? 'avail-neg' : 'avail-zero';
+    const draftList = [...new Set(r.affectedDrafts)].slice(0, 5).join(', ') + (r.affectedDrafts.length > 5 ? ` +${r.affectedDrafts.length - 5} more` : '');
+    return `<tr>
+      <td>
+        <div class="oos-title">${esc(r.productTitle)}</div>
+        ${r.variantTitle ? `<div class="oos-variant">${esc(r.variantTitle)}</div>` : ''}
+        <div class="oos-sku">SKU: ${esc(r.sku)}</div>
+        <div class="affected-drafts">${esc(draftList)}</div>
+      </td>
+      <td class="oos-count">${r.draftCount}</td>
+      <td class="oos-units">${r.totalUnitsRequested}</td>
+      <td class="${availClass}">${r.available}</td>
+    </tr>`;
+  }).join('');
+}
+
+function sortOOS(col, thEl) {
+  if (oosSortCol === col) {
+    oosSortDir *= -1;
+  } else {
+    oosSortCol = col;
+    oosSortDir = -1;
+  }
+  document.querySelectorAll('th[data-col]').forEach(th => {
+    if (th.closest('table') === thEl.closest('table')) {
+      th.classList.remove('sorted');
+      th.querySelector('.sort-icon').textContent = '↕';
+    }
+  });
+  thEl.classList.add('sorted');
+  thEl.querySelector('.sort-icon').textContent = oosSortDir === -1 ? '↓' : '↑';
+  allOOS.sort((a, b) => oosSortDir * (b[col] - a[col]));
+  renderOOS(allOOS);
+}
+
+// ── CSV Export ────────────────────────────────────────────────────────────────
+function exportNeedsReview() {
+  if (!exportData.length) return;
+
+  const rows = [];
+  // Header
+  rows.push([
+    'Draft #', 'Customer', 'Email', 'Created At', 'Updated At',
+    'Tags', 'Note', 'Subtotal', 'Total',
+    'Line Item', 'Variant', 'SKU', 'Qty', 'Unit Price'
+  ].map(csvEsc).join(','));
+
+  for (const d of exportData) {
+    if (!d.lineItems.length) {
+      rows.push([
+        d.name, d.customerName, d.email,
+        d.createdAt, d.updatedAt, d.tags, d.note,
+        d.subtotal, d.total,
+        '', '', '', '', ''
+      ].map(csvEsc).join(','));
+    } else {
+      for (const li of d.lineItems) {
+        rows.push([
+          d.name, d.customerName, d.email,
+          d.createdAt, d.updatedAt, d.tags, d.note,
+          d.subtotal, d.total,
+          li.title, li.variantTitle, li.sku, li.quantity, li.price
+        ].map(csvEsc).join(','));
+      }
+    }
+  }
+
+  const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `needs-review-drafts-${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function csvEsc(val) {
+  const s = String(val ?? '');
+  if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+  return s;
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+function esc(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function show(id) {
+  ['emptyState', 'loadingState', 'dashboard'].forEach(s => {
+    const el = document.getElementById(s);
+    if (s === id) {
+      el.style.display = s === 'dashboard' ? 'block' : 'flex';
+    } else {
+      el.style.display = 'none';
+    }
+  });
+}
+
+function setLoading(on) {
+  document.getElementById('fetchBtn').disabled = on;
+  if (on) show('loadingState');
+}
+
+function showError(msg) {
+  const el = document.getElementById('errorBanner');
+  el.textContent = '⚠ ' + msg;
+  el.style.display = 'block';
+}
+
+function hideError() {
+  document.getElementById('errorBanner').style.display = 'none';
+}
+
+// Auto-fetch if creds already saved
+window.addEventListener('DOMContentLoaded', () => {
+  loadConfig();
+  const b2bStore = document.getElementById('b2bStore').value;
+  const b2bToken = document.getElementById('b2bToken').value;
+  if (b2bStore && b2bToken) runFetch();
+});
+</script>
+</body>
+</html>
