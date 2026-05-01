@@ -99,26 +99,28 @@ app.post("/api/scorecard", async (req, res) => {
       stores.map(async ({ label, store, token }) => {
         // Fetch orders + draft orders in parallel
         const orderQS = `/orders.json?status=any&created_at_min=${start}&created_at_max=${end}&limit=250&fields=id,order_number,created_at,tags,fulfillments,closed_at,line_items,email,shipping_address,billing_address`;
-        const draftQS = `/draft_orders.json?status=any&updated_at_min=${start}&updated_at_max=${end}&limit=250&fields=id,created_at,completed_at,order_id`;
+        const draftQS = `/draft_orders.json?status=any&updated_at_min=${start}&updated_at_max=${end}&limit=250&fields=id,created_at,completed_at,status`;
 
         const [orders, draftOrders] = await Promise.all([
           shopifyFetchAll(store, token, orderQS, "orders"),
           shopifyFetchAll(store, token, draftQS, "draft_orders"),
         ]);
 
-        // Build a map of order_id → draft_order for processing time
-        const draftByOrderId = {};
-        for (const d of draftOrders) {
-          if (d.order_id) draftByOrderId[d.order_id] = d;
+        // Processing time = draft created_at → draft completed_at (when draft was converted to order)
+        const completedDrafts = draftOrders.filter(d => d.status === 'completed' && d.completed_at);
+        for (const d of completedDrafts) {
+          const h = hoursBetween(d.created_at, d.completed_at);
+          if (h !== null && h >= 0) processingTimes.push(h);
         }
 
         // Compute per-order metrics
-        const processingTimes = []; // draft created → order created
+        const processingTimes = []; // moved above — draft created_at → completed_at
         const fulfillmentTimes = []; // order created → first fulfillment
         const deliveryTimes = [];   // first fulfillment → delivery (if available)
         let totalUnits = 0;
         const flaggedOrders = [];
         const THRESHOLD_HOURS = 10 * 24; // 10 days
+        const EXCLUDED_EMAILS = ['inquiries@lifelines.com', 'care@lifelines.com'];
 
         for (const order of orders) {
           // Units
@@ -133,20 +135,7 @@ app.post("/api/scorecard", async (req, res) => {
               ? `${order.billing_address.first_name || ""} ${order.billing_address.last_name || ""}`.trim()
               : order.email || "—");
 
-          const itemSummary = (order.line_items || [])
-            .map(li => `${li.quantity}× ${li.name}`)
-            .join(", ");
-
-          // Processing time
-          const draft = draftByOrderId[order.id];
           let processingHours = null;
-          if (draft) {
-            const h = hoursBetween(draft.created_at, order.created_at);
-            if (h !== null && h >= 0) {
-              processingTimes.push(h);
-              processingHours = h;
-            }
-          }
 
           // Fulfillment time
           let fulfillmentHours = null;
@@ -215,14 +204,13 @@ app.post("/api/scorecard", async (req, res) => {
             }
           }
 
-          if (issues.length > 0) {
+          if (issues.length > 0 && !EXCLUDED_EMAILS.includes((order.email || '').toLowerCase())) {
             flaggedOrders.push({
               store: label,
               orderNumber: order.order_number,
               orderId: order.id,
               customerName,
               email: order.email || null,
-              itemSummary,
               units,
               createdAt: order.created_at,
               issues,
@@ -326,6 +314,62 @@ function buildFulfillmentTimeSeries(orders, year, month) {
   }
   return counts;
 }
+
+// ── Care@ Scorecard endpoint (filters to care@lifelines.com orders only) ─────
+app.post("/api/care-scorecard", async (req, res) => {
+  const { year, month } = req.body;
+  const { dtcStore, dtcToken } = CREDS;
+
+  if (!dtcStore || !dtcToken) {
+    return res.status(400).json({ error: "Missing DTC credentials." });
+  }
+
+  const start = new Date(year, month - 1, 1).toISOString();
+  const end = new Date(year, month, 1).toISOString();
+
+  try {
+    // Fetch orders for care@lifelines.com only
+    const orders = await shopifyFetchAll(
+      dtcStore, dtcToken,
+      `/orders.json?status=any&created_at_min=${start}&created_at_max=${end}&email=care@lifelines.com&limit=250&fields=id,order_number,created_at,fulfillments,line_items,email`,
+      "orders"
+    );
+
+    const fulfillmentTimes = [];
+    const deliveryTimes = [];
+    let totalUnits = 0;
+
+    for (const order of orders) {
+      totalUnits += (order.line_items || []).reduce((s, li) => s + (li.quantity || 0), 0);
+      if (order.fulfillments && order.fulfillments.length > 0) {
+        const first = [...order.fulfillments].sort((a, b) => new Date(a.created_at) - new Date(b.created_at))[0];
+        const fh = hoursBetween(order.created_at, first.created_at);
+        if (fh !== null && fh >= 0) fulfillmentTimes.push(fh);
+        const delivered = order.fulfillments.find(f => f.shipment_status === "delivered");
+        if (delivered) {
+          const dh = hoursBetween(first.created_at, delivered.updated_at);
+          if (dh !== null && dh >= 0) deliveryTimes.push(dh);
+        }
+      }
+    }
+
+    res.json({
+      totalOrders: orders.length,
+      totalUnits,
+      avgFulfillmentHours: avg(fulfillmentTimes),
+      avgFulfillmentFormatted: formatDuration(avg(fulfillmentTimes)),
+      avgDeliveryHours: avg(deliveryTimes),
+      avgDeliveryFormatted: formatDuration(avg(deliveryTimes)),
+      ordersByDay: buildDailyTimeSeries(orders, year, month),
+      fulfillmentsByDay: buildFulfillmentTimeSeries(orders, year, month),
+      year,
+      month,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ── B2B Draft Orders endpoint ─────────────────────────────────────────────────
 app.post('/api/b2b-drafts', async (req, res) => {
