@@ -98,12 +98,12 @@ app.post("/api/scorecard", async (req, res) => {
     const results = await Promise.all(
       stores.map(async ({ label, store, token }) => {
         // Fetch orders + draft orders in parallel
-        const orderQS = `?status=any&created_at_min=${start}&created_at_max=${end}&limit=250&fields=id,order_number,created_at,tags,fulfillments,closed_at,line_items,email,shipping_address,billing_address`;
-        const draftQS = `?status=any&updated_at_min=${start}&updated_at_max=${end}&limit=250&fields=id,created_at,completed_at,order_id`;
+        const orderQS = `/orders.json?status=any&created_at_min=${start}&created_at_max=${end}&limit=250&fields=id,order_number,created_at,tags,fulfillments,closed_at,line_items,email,shipping_address,billing_address`;
+        const draftQS = `/draft_orders.json?status=any&updated_at_min=${start}&updated_at_max=${end}&limit=250&fields=id,created_at,completed_at,order_id`;
 
         const [orders, draftOrders] = await Promise.all([
           shopifyFetchAll(store, token, orderQS, "orders"),
-          shopifyFetchAll(store, token, `/draft_orders.json${draftQS.replace('?', '?')}`, "draft_orders"),
+          shopifyFetchAll(store, token, draftQS, "draft_orders"),
         ]);
 
         // Build a map of order_id → draft_order for processing time
