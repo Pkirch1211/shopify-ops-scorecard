@@ -174,7 +174,6 @@ query DraftOrders($first: Int!, $after: String, $query: String!) {
         tags
         totalPrice
         subtotalPrice
-        note
         customer { firstName lastName email }
         lineItems(first: 50) {
           edges {
@@ -224,7 +223,7 @@ function processOrders(orders, label, year, month) {
       const fh = hoursBetween(order.createdAt, first.createdAt);
       if (fh !== null && fh >= 0) { fulfillmentTimes.push(fh); fulfillmentHours = fh; }
 
-      const delivered = fulfillments.find(f => f.shipmentStatus === "DELIVERED" || f.shipmentStatus === "delivered");
+      const delivered = fulfillments.find(f => f.displayStatus === "DELIVERED" || f.displayStatus === "Delivered");
       if (delivered) {
         const dh = hoursBetween(first.createdAt, delivered.updatedAt);
         if (dh !== null && dh >= 0) { deliveryTimes.push(dh); deliveryHours = dh; }
@@ -237,7 +236,7 @@ function processOrders(orders, label, year, month) {
           number: t.number,
           company: t.company,
           url: t.url,
-          shipmentStatus: withTracking.shipmentStatus,
+          shipmentStatus: withTracking.displayStatus,
           updatedAt: withTracking.updatedAt,
         };
       }
@@ -248,7 +247,7 @@ function processOrders(orders, label, year, month) {
       issues.push({ type: "fulfillment", hours: fulfillmentHours });
     if (deliveryHours !== null && deliveryHours > THRESHOLD_HOURS)
       issues.push({ type: "delivery", hours: deliveryHours });
-    if (fulfillments.length > 0 && !fulfillments.find(f => f.shipmentStatus === "DELIVERED" || f.shipmentStatus === "delivered")) {
+    if (fulfillments.length > 0 && !fulfillments.find(f => f.displayStatus === "DELIVERED" || f.displayStatus === "Delivered")) {
       const first = [...fulfillments].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))[0];
       const stalled = hoursBetween(first.createdAt, new Date().toISOString());
       if (stalled !== null && stalled > THRESHOLD_HOURS)
@@ -405,7 +404,7 @@ query StaleFulfillments($first: Int!, $after: String, $query: String!) {
         shippingAddress { name address1 address2 city province zip country }
         tags
         fulfillments(first: 10) {
-          id name createdAt updatedAt status displayStatus shipmentStatus
+          id name createdAt updatedAt status displayStatus
           trackingInfo(first: 5) { company number url }
           events(first: 50) {
             edges { node { status happenedAt message } }
@@ -578,7 +577,6 @@ app.post("/api/b2b-drafts", async (req, res) => {
       email: d.customer?.email || d.email || "",
       subtotal: d.subtotalPrice,
       total: d.totalPrice,
-      note: d.note || "",
       lineItems: (d.lineItems.edges || []).map(e => ({
         title: e.node.title,
         variantTitle: e.node.variantTitle || "",
