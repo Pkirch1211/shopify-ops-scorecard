@@ -97,29 +97,32 @@ app.post("/api/scorecard", async (req, res) => {
 
     const results = await Promise.all(
       stores.map(async ({ label, store, token }) => {
-        // Fetch orders + draft orders in parallel
-        const orderQS = `/orders.json?status=any&created_at_min=${start}&created_at_max=${end}&limit=250&fields=id,order_number,created_at,tags,fulfillments,closed_at,line_items,email,shipping_address,billing_address`;
-        const draftQS = `/draft_orders.json?status=any&updated_at_min=${start}&updated_at_max=${end}&limit=250&fields=id,created_at,completed_at,status`;
+        // Slim down fields to only what we need — faster response
+        const orderQS = `/orders.json?status=any&created_at_min=${start}&created_at_max=${end}&limit=250&fields=id,order_number,created_at,fulfillments,line_items,email,shipping_address,billing_address`;
+        // Query drafts completed within the month
+        const draftQS = `/draft_orders.json?status=completed&updated_at_min=${start}&updated_at_max=${end}&limit=250&fields=id,created_at,completed_at,status`;
 
         const [orders, draftOrders] = await Promise.all([
           shopifyFetchAll(store, token, orderQS, "orders"),
           shopifyFetchAll(store, token, draftQS, "draft_orders"),
         ]);
 
-        // Processing time = draft created_at → draft completed_at (when draft was converted to order)
-        const completedDrafts = draftOrders.filter(d => d.status === 'completed' && d.completed_at);
-        for (const d of completedDrafts) {
-          const h = hoursBetween(d.created_at, d.completed_at);
-          if (h !== null && h >= 0) processingTimes.push(h);
+        // Declare metric arrays
+        const processingTimes = []; // draft created_at → draft completed_at
+        const fulfillmentTimes = []; // order created_at → first fulfillment created_at
+        const deliveryTimes = [];   // first fulfillment created_at → delivered updated_at
+
+        // Processing time = how long from draft creation to completion
+        for (const d of draftOrders) {
+          if (d.status === 'completed' && d.completed_at) {
+            const h = hoursBetween(d.created_at, d.completed_at);
+            if (h !== null && h >= 0) processingTimes.push(h);
+          }
         }
 
-        // Compute per-order metrics
-        const processingTimes = []; // moved above — draft created_at → completed_at
-        const fulfillmentTimes = []; // order created → first fulfillment
-        const deliveryTimes = [];   // first fulfillment → delivery (if available)
         let totalUnits = 0;
         const flaggedOrders = [];
-        const THRESHOLD_HOURS = 10 * 24; // 10 days
+        const THRESHOLD_HOURS = 10 * 24;
         const EXCLUDED_EMAILS = ['inquiries@lifelines.com', 'care@lifelines.com'];
 
         for (const order of orders) {
