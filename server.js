@@ -13,34 +13,70 @@ const CREDS = {
   b2bToken: process.env.B2B_TOKEN,
 };
 
+// ── Server-side cache ─────────────────────────────────────────────────────────
+// Stores results in memory so users get instant responses after first load.
+// Background refresh every 5 minutes keeps data current without blocking the UI.
+const CACHE_TTL_MS = 5 * 60 * 1000;
+const cache = {};
+
+function cacheKey(endpoint, params) {
+  return `${endpoint}:${JSON.stringify(params)}`;
+}
+
+function getCached(key) {
+  const entry = cache[key];
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > CACHE_TTL_MS) return null;
+  return entry.data;
+}
+
+function setCache(key, data) {
+  cache[key] = { data, timestamp: Date.now() };
+}
+
+// Fetch fresh data in background without blocking the response
+function refreshInBackground(key, fetchFn) {
+  fetchFn().then(data => setCache(key, data)).catch(err => console.error("Background refresh error:", err));
+}
+
 // ── GraphQL helper ────────────────────────────────────────────────────────────
 async function gql(store, token, query, variables = {}) {
   const url = `https://${store}/admin/api/2024-01/graphql.json`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "X-Shopify-Access-Token": token,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ query, variables }),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Shopify GQL HTTP ${res.status}: ${text.slice(0, 300)}`);
-  }
-  const json = await res.json();
-  if (json.errors) throw new Error(json.errors.map(e => e.message).join("; "));
-  // Check throttle status and wait if needed
-  const cost = json.extensions && json.extensions.cost;
-  if (cost && cost.throttleStatus) {
-    const { currentlyAvailable, restoreRate } = cost.throttleStatus;
-    const needed = (cost.actualQueryCost || 0) * 1.5;
-    if (currentlyAvailable < needed) {
-      const waitMs = Math.ceil((needed - currentlyAvailable) / restoreRate) * 1000;
-      await new Promise(r => setTimeout(r, Math.min(waitMs, 3000)));
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000); // 15s per request
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "X-Shopify-Access-Token": token,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ query, variables }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Shopify GQL HTTP ${res.status}: ${text.slice(0, 300)}`);
     }
+    const json = await res.json();
+    if (json.errors) throw new Error(json.errors.map(e => e.message).join("; "));
+    // Throttle: only wait if genuinely needed, cap at 1s
+    const cost = json.extensions && json.extensions.cost;
+    if (cost && cost.throttleStatus) {
+      const { currentlyAvailable, restoreRate } = cost.throttleStatus;
+      const needed = (cost.actualQueryCost || 0) * 1.2;
+      if (currentlyAvailable < needed && restoreRate > 0) {
+        const waitMs = Math.min(Math.ceil((needed - currentlyAvailable) / restoreRate) * 1000, 1000);
+        await new Promise(r => setTimeout(r, waitMs));
+      }
+    }
+    return json.data;
+  } catch (err) {
+    clearTimeout(timeout);
+    if (err.name === "AbortError") throw new Error("Shopify GQL request timed out after 15s");
+    throw err;
   }
-  return json.data;
 }
 
 // Paginate through all pages of a GQL connection
@@ -48,8 +84,14 @@ async function gqlAll(store, token, query, variables, getEdges, getPageInfo) {
   let results = [];
   let cursor = null;
   let pages = 0;
-  const MAX_PAGES = 40;
+  const MAX_PAGES = 20; // 20 × 250 = 5000 orders max
+  const DEADLINE = Date.now() + 45000; // hard 45s total deadline
+
   while (pages < MAX_PAGES) {
+    if (Date.now() > DEADLINE) {
+      console.warn(`gqlAll hit 45s deadline after ${pages} pages, returning ${results.length} results`);
+      break;
+    }
     const data = await gql(store, token, query, { ...variables, after: cursor });
     const edges = getEdges(data);
     results = results.concat(edges.map(e => e.node));
@@ -289,7 +331,27 @@ app.post("/api/scorecard", async (req, res) => {
     return res.status(400).json({ error: "Missing credentials — set DTC_STORE, DTC_TOKEN, B2B_STORE, B2B_TOKEN in Railway." });
   }
 
-  const start = `${year}-${String(month).padStart(2, "0")}-01`;
+  const key = cacheKey("scorecard", { year, month });
+  const cached = getCached(key);
+  if (cached) {
+    // Serve cached data immediately, refresh in background if >4min old
+    if (Date.now() - cache[key].timestamp > 4 * 60 * 1000) {
+      refreshInBackground(key, () => fetchScorecard(year, month, dtcStore, dtcToken, b2bStore, b2bToken));
+    }
+    return res.json({ ...cached, fromCache: true });
+  }
+
+  try {
+    const data = await fetchScorecard(year, month, dtcStore, dtcToken, b2bStore, b2bToken);
+    setCache(key, data);
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+async function fetchScorecard(year, month, dtcStore, dtcToken, b2bStore, b2bToken) {const start = `${year}-${String(month).padStart(2, "0")}-01`;
   const endDate = new Date(year, month, 1);
   const end = `${endDate.getFullYear()}-${String(endDate.getMonth() + 1).padStart(2, "0")}-01`;
   const orderQuery = `created_at:>=${start} created_at:<${end}`;
@@ -349,19 +411,18 @@ app.post("/api/scorecard", async (req, res) => {
       avgDeliveryFormatted: formatDuration(avg(results.map(r => r.avgDeliveryHours).filter(v => v !== null))),
     };
 
-    res.json({
+    return {
       stores: results,
       combined,
       flaggedOrders: results.flatMap(r => r.flaggedOrders)
         .sort((a, b) => Math.max(...b.issues.map(i => i.hours)) - Math.max(...a.issues.map(i => i.hours))),
       year,
       month,
-    });
+    };
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+    throw err;
   }
-});
+}
 
 // ── Care@ Scorecard endpoint ──────────────────────────────────────────────────
 app.post("/api/care-scorecard", async (req, res) => {
@@ -369,36 +430,51 @@ app.post("/api/care-scorecard", async (req, res) => {
   const { b2bStore, b2bToken } = CREDS;
   if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
 
-  const start = `${year}-${String(month).padStart(2, "0")}-01`;
-  const endDate = new Date(year, month, 1);
-  const end = `${endDate.getFullYear()}-${String(endDate.getMonth() + 1).padStart(2, "0")}-01`;
-  const orderQuery = `email:care@lifelines.com created_at:>=${start} created_at:<${end}`;
+  const key = cacheKey("care-scorecard", { year, month });
+  const cached = getCached(key);
+  if (cached) {
+    if (Date.now() - cache[key].timestamp > 4 * 60 * 1000) {
+      refreshInBackground(key, () => fetchCareScorecard(year, month, b2bStore, b2bToken));
+    }
+    return res.json({ ...cached, fromCache: true });
+  }
 
   try {
-    const orders = await gqlAll(b2bStore, b2bToken, ORDERS_QUERY, { first: 250, query: orderQuery },
-      d => d.orders.edges, d => d.orders.pageInfo);
-
-    const { fulfillmentTimes, deliveryTimes, totalUnits } = processOrders(orders, "B2B", year, month);
-
-    res.json({
-      totalOrders: orders.length,
-      totalUnits,
-      avgFulfillmentHours: avg(fulfillmentTimes),
-      avgFulfillmentFormatted: formatDuration(avg(fulfillmentTimes)),
-      avgDeliveryHours: avg(deliveryTimes),
-      avgDeliveryFormatted: formatDuration(avg(deliveryTimes)),
-      ordersByDay: buildDailyTimeSeries(orders, year, month),
-      fulfillmentsByDay: buildFulfillmentTimeSeries(orders, year, month),
-      year,
-      month,
-    });
+    const data = await fetchCareScorecard(year, month, b2bStore, b2bToken);
+    setCache(key, data);
+    res.json(data);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── DTC Stale Fulfillments (GraphQL) ─────────────────────────────────────────
+async function fetchCareScorecard(year, month, b2bStore, b2bToken) {
+  const start = `${year}-${String(month).padStart(2, "0")}-01`;
+  const endDate = new Date(year, month, 1);
+  const end = `${endDate.getFullYear()}-${String(endDate.getMonth() + 1).padStart(2, "0")}-01`;
+  const orderQuery = `email:care@lifelines.com created_at:>=${start} created_at:<${end}`;
+
+  const orders = await gqlAll(b2bStore, b2bToken, ORDERS_QUERY, { first: 250, query: orderQuery },
+    d => d.orders.edges, d => d.orders.pageInfo);
+
+  const { fulfillmentTimes, deliveryTimes, totalUnits } = processOrders(orders, "B2B", year, month);
+
+  return {
+    totalOrders: orders.length,
+    totalUnits,
+    avgFulfillmentHours: avg(fulfillmentTimes),
+    avgFulfillmentFormatted: formatDuration(avg(fulfillmentTimes)),
+    avgDeliveryHours: avg(deliveryTimes),
+    avgDeliveryFormatted: formatDuration(avg(deliveryTimes)),
+    ordersByDay: buildDailyTimeSeries(orders, year, month),
+    fulfillmentsByDay: buildFulfillmentTimeSeries(orders, year, month),
+    year,
+    month,
+  };
+}
+
+// ── DTC Stale Fulfillments ────────────────────────────────────────────────────
 const DTC_STALE_QUERY = `
 query StaleFulfillments($first: Int!, $after: String, $query: String!) {
   orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT, reverse: true) {
@@ -502,6 +578,26 @@ app.post("/api/b2b-drafts", async (req, res) => {
   const { b2bStore, b2bToken } = CREDS;
   if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
 
+  const key = cacheKey("b2b-drafts", {});
+  const cached = getCached(key);
+  if (cached) {
+    if (Date.now() - cache[key].timestamp > 4 * 60 * 1000) {
+      refreshInBackground(key, () => fetchB2BDrafts(b2bStore, b2bToken));
+    }
+    return res.json({ ...cached, fromCache: true });
+  }
+
+  try {
+    const data = await fetchB2BDrafts(b2bStore, b2bToken);
+    setCache(key, data);
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+async function fetchB2BDrafts(b2bStore, b2bToken) {
   try {
     const drafts = await gqlAll(
       b2bStore, b2bToken, DRAFT_ORDERS_QUERY,
@@ -591,18 +687,17 @@ app.post("/api/b2b-drafts", async (req, res) => {
       })),
     }));
 
-    res.json({
+    return {
       totalDrafts: drafts.length,
       needsReviewCount: needsReview.length,
       needsReviewExport,
       byCustomer,
       oosItems,
-    });
+    };
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+    throw err;
   }
-});
+}
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
