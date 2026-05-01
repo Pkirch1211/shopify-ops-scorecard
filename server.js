@@ -26,17 +26,23 @@ async function shopifyFetch(store, token, endpoint) {
 async function shopifyFetchAll(store, token, endpoint, key) {
   let results = [];
   let url = `https://${store}/admin/api/2024-01${endpoint}`;
+  let pages = 0;
+  const MAX_PAGES = 20; // cap at 20 pages (5000 orders) per request
 
-  while (url) {
+  while (url && pages < MAX_PAGES) {
     const res = await fetch(url, {
       headers: {
         "X-Shopify-Access-Token": token,
         "Content-Type": "application/json",
       },
     });
-    if (!res.ok) throw new Error(`Shopify ${res.status}`);
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Shopify ${res.status}: ${text.slice(0, 200)}`);
+    }
     const data = await res.json();
     results = results.concat(data[key] || []);
+    pages++;
 
     // Parse Link header for next page
     const link = res.headers.get("Link");
@@ -45,6 +51,9 @@ async function shopifyFetchAll(store, token, endpoint, key) {
       const match = link.match(/<([^>]+)>;\s*rel="next"/);
       if (match) url = match[1];
     }
+
+    // Respect Shopify rate limit: 2 req/sec on Basic, 4/sec on Advanced
+    if (url) await new Promise(r => setTimeout(r, 250));
   }
   return results;
 }
@@ -321,19 +330,18 @@ function buildFulfillmentTimeSeries(orders, year, month) {
 // ── Care@ Scorecard endpoint (filters to care@lifelines.com orders only) ─────
 app.post("/api/care-scorecard", async (req, res) => {
   const { year, month } = req.body;
-  const { dtcStore, dtcToken } = CREDS;
+  const { b2bStore, b2bToken } = CREDS;
 
-  if (!dtcStore || !dtcToken) {
-    return res.status(400).json({ error: "Missing DTC credentials." });
+  if (!b2bStore || !b2bToken) {
+    return res.status(400).json({ error: "Missing B2B credentials." });
   }
 
   const start = new Date(year, month - 1, 1).toISOString();
   const end = new Date(year, month, 1).toISOString();
 
   try {
-    // Shopify REST doesn't support email filter on orders — fetch all and filter in Node
     const allOrders = await shopifyFetchAll(
-      dtcStore, dtcToken,
+      b2bStore, b2bToken,
       `/orders.json?status=any&created_at_min=${start}&created_at_max=${end}&limit=250&fields=id,order_number,created_at,fulfillments,line_items,email`,
       "orders"
     );
