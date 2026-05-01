@@ -351,7 +351,8 @@ app.post("/api/scorecard", async (req, res) => {
   }
 });
 
-async function fetchScorecard(year, month, dtcStore, dtcToken, b2bStore, b2bToken) {const start = `${year}-${String(month).padStart(2, "0")}-01`;
+async function fetchScorecard(year, month, dtcStore, dtcToken, b2bStore, b2bToken) {
+  const start = `${year}-${String(month).padStart(2, "0")}-01`;
   const endDate = new Date(year, month, 1);
   const end = `${endDate.getFullYear()}-${String(endDate.getMonth() + 1).padStart(2, "0")}-01`;
   const orderQuery = `created_at:>=${start} created_at:<${end}`;
@@ -363,21 +364,25 @@ async function fetchScorecard(year, month, dtcStore, dtcToken, b2bStore, b2bToke
       { label: "B2B", store: b2bStore, token: b2bToken },
     ];
 
+    // Fetch both stores in parallel (different stores = different rate limit buckets)
+    // but within each store fetch orders first, then drafts sequentially
     const results = await Promise.all(stores.map(async ({ label, store, token }) => {
-      const [orders, draftOrders] = await Promise.all([
-        gqlAll(store, token, ORDERS_QUERY, { first: 250, query: orderQuery },
-          d => d.orders.edges, d => d.orders.pageInfo),
-        gqlAll(store, token, DRAFT_ORDERS_QUERY, { first: 250, query: draftQuery },
-          d => d.draftOrders.edges, d => d.draftOrders.pageInfo),
-      ]);
+      const orders = await gqlAll(store, token, ORDERS_QUERY, { first: 250, query: orderQuery },
+        d => d.orders.edges, d => d.orders.pageInfo);
 
-      const processingTimes = [];
-      for (const d of draftOrders) {
-        if (d.completedAt) {
-          const h = hoursBetween(d.createdAt, d.completedAt);
-          if (h !== null && h >= 0) processingTimes.push(h);
-        }
+      // Drafts are optional — if they fail, just skip processing time
+      let draftOrders = [];
+      try {
+        draftOrders = await gqlAll(store, token, DRAFT_ORDERS_QUERY, { first: 250, query: draftQuery },
+          d => d.draftOrders.edges, d => d.draftOrders.pageInfo);
+      } catch (err) {
+        console.warn(`Draft orders fetch failed for ${label}, skipping processing time:`, err.message);
       }
+
+      const processingTimes = draftOrders
+        .filter(d => d.completedAt)
+        .map(d => hoursBetween(d.createdAt, d.completedAt))
+        .filter(h => h !== null && h >= 0);
 
       const { fulfillmentTimes, deliveryTimes, totalUnits, flaggedOrders } = processOrders(orders, label, year, month);
 
@@ -505,20 +510,41 @@ app.post("/api/dtc-stale", async (req, res) => {
   const { dtcStore, dtcToken } = CREDS;
   if (!dtcStore || !dtcToken) return res.status(400).json({ error: "Missing DTC credentials." });
 
+  const key = cacheKey("dtc-stale", {});
+  const cached = getCached(key);
+  if (cached) {
+    if (Date.now() - cache[key].timestamp > 4 * 60 * 1000) {
+      refreshInBackground(key, () => fetchDTCStale(dtcStore, dtcToken));
+    }
+    return res.json({ ...cached, fromCache: true });
+  }
+
+  try {
+    const data = await fetchDTCStale(dtcStore, dtcToken);
+    setCache(key, data);
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+async function fetchDTCStale(dtcStore, dtcToken) {
   const MIN_DAYS = 10;
   const TARGET = new Set(["IN_TRANSIT", "CONFIRMED"]);
-
   function daysSince(iso) {
     if (!iso) return null;
     return (Date.now() - new Date(iso).getTime()) / 864e5;
   }
 
-  try {
-    const orders = await gqlAll(
-      dtcStore, dtcToken, DTC_STALE_QUERY,
-      { first: 250, query: "fulfillment_status:fulfilled -status:cancelled" },
-      d => d.orders.edges, d => d.orders.pageInfo
-    );
+  // Only scan last 90 days — orders older than that aren't actionable
+  const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+  const orders = await gqlAll(
+    dtcStore, dtcToken, DTC_STALE_QUERY,
+    { first: 250, query: `fulfillment_status:fulfilled -status:cancelled created_at:>=${ninetyDaysAgo}` },
+    d => d.orders.edges, d => d.orders.pageInfo
+  );
 
     const rows = [];
     for (const order of orders) {
@@ -566,12 +592,8 @@ app.post("/api/dtc-stale", async (req, res) => {
     }
 
     rows.sort((a, b) => b.daysSinceFulfilled - a.daysSinceFulfilled);
-    res.json({ rows, total: rows.length });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
+    return { rows, total: rows.length };
+}
 
 // ── B2B Draft Orders endpoint ─────────────────────────────────────────────────
 app.post("/api/b2b-drafts", async (req, res) => {
