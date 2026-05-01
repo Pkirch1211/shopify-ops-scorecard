@@ -6,1153 +6,201 @@
 <title>Ops Scorecard — LifeLines</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
-
-  :root {
-    --bg: #0a0c0f;
-    --surface: #111419;
-    --surface2: #181c22;
-    --border: #1e2530;
-    --border2: #252d3a;
-    --text: #e2e8f0;
-    --muted: #64748b;
-    --dim: #3a4555;
-    --dtc: #3b82f6;
-    --dtc-dim: rgba(59,130,246,0.12);
-    --b2b: #10b981;
-    --b2b-dim: rgba(16,185,129,0.12);
-    --accent: #f59e0b;
-    --accent-dim: rgba(245,158,11,0.1);
-    --danger: #ef4444;
-    --mono: 'IBM Plex Mono', monospace;
-    --sans: 'IBM Plex Sans', sans-serif;
-  }
-
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--sans);
-    font-size: 14px;
-    min-height: 100vh;
-  }
-
-  /* ── Header ── */
-  header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 18px 32px;
-    border-bottom: 1px solid var(--border);
-    background: var(--surface);
-    position: sticky;
-    top: 0;
-    z-index: 100;
-  }
-
-  .logo {
-    font-family: var(--mono);
-    font-size: 13px;
-    font-weight: 600;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--accent);
-  }
-  .logo span { color: var(--muted); font-weight: 400; }
-
-  .header-controls {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  select, input {
-    background: var(--surface2);
-    border: 1px solid var(--border2);
-    color: var(--text);
-    font-family: var(--mono);
-    font-size: 12px;
-    padding: 7px 12px;
-    border-radius: 4px;
-    outline: none;
-    transition: border-color 0.15s;
-  }
-  select:focus, input:focus { border-color: var(--accent); }
-
-  .btn {
-    background: var(--accent);
-    color: #000;
-    border: none;
-    font-family: var(--mono);
-    font-size: 12px;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    padding: 8px 18px;
-    border-radius: 4px;
-    cursor: pointer;
-    transition: opacity 0.15s;
-  }
-  .btn:hover { opacity: 0.85; }
-  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
-  .btn-ghost {
-    background: transparent;
-    border: 1px solid var(--border2);
-    color: var(--muted);
-    padding: 7px 14px;
-  }
-  .btn-ghost:hover { border-color: var(--dim); color: var(--text); }
-
-  /* ── Config drawer ── */
-  .config-drawer {
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
-    padding: 20px 32px;
-    display: none;
-    gap: 12px;
-    flex-wrap: wrap;
-    align-items: flex-end;
-  }
-  .config-drawer.open { display: flex; }
-
-  .config-group {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-  }
-  .config-group label {
-    font-family: var(--mono);
-    font-size: 10px;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--muted);
-  }
-  .config-group input {
-    width: 240px;
-  }
-  .store-tag {
-    display: inline-block;
-    font-family: var(--mono);
-    font-size: 10px;
-    padding: 2px 7px;
-    border-radius: 3px;
-    margin-bottom: 4px;
-  }
-  .store-tag.dtc { background: var(--dtc-dim); color: var(--dtc); border: 1px solid rgba(59,130,246,0.3); }
-  .store-tag.b2b { background: var(--b2b-dim); color: var(--b2b); border: 1px solid rgba(16,185,129,0.3); }
-
-  /* ── Main layout ── */
-  main {
-    padding: 28px 32px;
-    max-width: 1400px;
-    margin: 0 auto;
-  }
-
-  /* ── Section headers ── */
-  .section-header {
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
-    margin-bottom: 16px;
-    margin-top: 32px;
-  }
-  .section-header:first-child { margin-top: 0; }
-  .section-title {
-    font-family: var(--mono);
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--muted);
-  }
-  .section-line {
-    flex: 1;
-    height: 1px;
-    background: var(--border);
-  }
-  .period-badge {
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--accent);
-    background: var(--accent-dim);
-    padding: 2px 8px;
-    border-radius: 3px;
-    border: 1px solid rgba(245,158,11,0.2);
-  }
-
-  /* ── KPI strip ── */
-  .kpi-grid {
-    display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 1px;
-    background: var(--border);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    overflow: hidden;
-  }
-
-  .kpi-card {
-    background: var(--surface);
-    padding: 20px 22px;
-    position: relative;
-  }
-
-  .kpi-label {
-    font-family: var(--mono);
-    font-size: 10px;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--muted);
-    margin-bottom: 10px;
-  }
-
-  .kpi-value {
-    font-family: var(--mono);
-    font-size: 28px;
-    font-weight: 600;
-    color: var(--text);
-    line-height: 1;
-    margin-bottom: 8px;
-  }
-
-  .kpi-sub {
-    display: flex;
-    gap: 12px;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .kpi-store {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-  }
-
-  .kpi-store-label {
-    font-family: var(--mono);
-    font-size: 10px;
-    letter-spacing: 0.06em;
-  }
-  .kpi-store-label.dtc { color: var(--dtc); }
-  .kpi-store-label.b2b { color: var(--b2b); }
-
-  .kpi-store-val {
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--text);
-  }
-
-  /* ── Scorecard table ── */
-  .table-wrap {
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    overflow: hidden;
-  }
-
-  table {
-    width: 100%;
-    border-collapse: collapse;
-  }
-
-  thead tr {
-    background: var(--surface2);
-  }
-
-  th {
-    font-family: var(--mono);
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--muted);
-    padding: 12px 18px;
-    text-align: left;
-    border-bottom: 1px solid var(--border);
-  }
-
-  td {
-    padding: 14px 18px;
-    border-bottom: 1px solid var(--border);
-    font-family: var(--mono);
-    font-size: 13px;
-  }
-
-  tr:last-child td { border-bottom: none; }
-
-  tbody tr { background: var(--surface); }
-  tbody tr:hover { background: var(--surface2); }
-  tbody tr.combined-row { background: var(--surface2); }
-  tbody tr.combined-row td { color: var(--accent); }
-
-  .store-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    font-weight: 500;
-  }
-  .store-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
-  .store-dot.dtc { background: var(--dtc); }
-  .store-dot.b2b { background: var(--b2b); }
-  .store-dot.combined { background: var(--accent); }
-
-  .metric-val { color: var(--text); }
-  .metric-null { color: var(--dim); }
-
-  /* ── Issue tracking ── */
-  .issues-count-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-family: var(--mono);
-    font-size: 11px;
-    background: rgba(239,68,68,0.12);
-    color: #fca5a5;
-    border: 1px solid rgba(239,68,68,0.25);
-    padding: 2px 9px;
-    border-radius: 3px;
-  }
-  .issues-count-badge.zero {
-    background: rgba(16,185,129,0.08);
-    color: var(--b2b);
-    border-color: rgba(16,185,129,0.2);
-  }
-  .issue-row { background: var(--surface); }
-  .issue-row:hover { background: var(--surface2); }
-  .issue-row td { vertical-align: top; padding: 14px 16px; border-bottom: 1px solid var(--border); }
-  .issue-row:last-child td { border-bottom: none; }
-  .issue-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
-  .issue-tag {
-    font-family: var(--mono);
-    font-size: 10px;
-    padding: 2px 7px;
-    border-radius: 3px;
-    white-space: nowrap;
-  }
-  .issue-tag.processing { background: rgba(245,158,11,0.12); color: #fcd34d; border: 1px solid rgba(245,158,11,0.25); }
-  .issue-tag.fulfillment { background: rgba(249,115,22,0.12); color: #fdba74; border: 1px solid rgba(249,115,22,0.25); }
-  .issue-tag.delivery, .issue-tag.delivery_stalled { background: rgba(239,68,68,0.12); color: #fca5a5; border: 1px solid rgba(239,68,68,0.25); }
-  .order-meta { font-family: var(--mono); font-size: 12px; }
-  .order-num { font-weight: 600; color: var(--text); }
-  .order-customer { color: var(--muted); font-size: 11px; margin-top: 2px; }
-  .order-email { color: var(--dim); font-size: 10px; }
-  .items-cell { font-size: 12px; color: var(--muted); max-width: 240px; line-height: 1.5; }
-  .tracking-cell { font-family: var(--mono); font-size: 11px; }
-  .tracking-status {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 3px;
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    margin-bottom: 4px;
-  }
-  .tracking-status.in_transit { background: rgba(59,130,246,0.12); color: #93c5fd; border: 1px solid rgba(59,130,246,0.25); }
-  .tracking-status.out_for_delivery { background: rgba(245,158,11,0.12); color: #fcd34d; border: 1px solid rgba(245,158,11,0.25); }
-  .tracking-status.attempted_delivery { background: rgba(249,115,22,0.12); color: #fdba74; border: 1px solid rgba(249,115,22,0.25); }
-  .tracking-status.delivered { background: rgba(16,185,129,0.12); color: #6ee7b7; border: 1px solid rgba(16,185,129,0.25); }
-  .tracking-status.failure, .tracking-status.error { background: rgba(239,68,68,0.12); color: #fca5a5; border: 1px solid rgba(239,68,68,0.25); }
-  .tracking-status.label_printed, .tracking-status.ready_for_pickup, .tracking-status.confirmed { background: rgba(100,116,139,0.15); color: var(--muted); border: 1px solid var(--border2); }
-  .tracking-num { color: var(--muted); font-size: 10px; margin-top: 3px; }
-  .tracking-link { color: var(--dtc); text-decoration: none; font-size: 10px; }
-  .tracking-link:hover { text-decoration: underline; }
-  .tracking-age { color: var(--dim); font-size: 10px; margin-top: 2px; }
-  .issues-empty {
-    padding: 48px;
-    text-align: center;
-    font-family: var(--mono);
-    font-size: 12px;
-    color: var(--b2b);
-  }
-  .filter-bar { display: flex; gap: 8px; margin-bottom: 14px; align-items: center; }
-  .filter-btn {
-    font-family: var(--mono);
-    font-size: 11px;
-    padding: 5px 12px;
-    border-radius: 3px;
-    border: 1px solid var(--border2);
-    background: transparent;
-    color: var(--muted);
-    cursor: pointer;
-    transition: all 0.12s;
-  }
-  .filter-btn:hover { color: var(--text); border-color: var(--dim); }
-  .filter-btn.active { background: var(--surface2); color: var(--text); border-color: var(--dim); }
-
-  /* ── Charts ── */
-  .charts-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px;
-  }
-
-  .chart-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 20px 22px;
-  }
-  .chart-card.full { grid-column: span 2; }
-
-  .chart-title {
-    font-family: var(--mono);
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--muted);
-    margin-bottom: 18px;
-  }
-
-  .chart-container {
-    position: relative;
-    height: 200px;
-  }
-  .chart-card.full .chart-container { height: 220px; }
-
-  /* ── Empty / loading states ── */
-  .state-panel {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 80px 40px;
-    gap: 12px;
-    text-align: center;
-  }
-
-  .state-icon {
-    font-size: 32px;
-    margin-bottom: 4px;
-  }
-
-  .state-title {
-    font-family: var(--mono);
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text);
-    letter-spacing: 0.05em;
-  }
-
-  .state-sub {
-    font-size: 13px;
-    color: var(--muted);
-    max-width: 340px;
-    line-height: 1.6;
-  }
-
-  .spinner {
-    width: 20px;
-    height: 20px;
-    border: 2px solid var(--border2);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: spin 0.7s linear infinite;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-
-  .error-banner {
-    background: rgba(239,68,68,0.1);
-    border: 1px solid rgba(239,68,68,0.3);
-    color: #fca5a5;
-    font-family: var(--mono);
-    font-size: 12px;
-    padding: 12px 18px;
-    border-radius: 6px;
-    margin-bottom: 20px;
-    display: none;
-  }
-
-  /* ── Nav tabs ── */
-  .tabs {
-    display: flex;
-    gap: 2px;
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    padding: 3px;
-    width: fit-content;
-    margin-bottom: 20px;
-  }
-  .tab {
-    font-family: var(--mono);
-    font-size: 11px;
-    font-weight: 500;
-    letter-spacing: 0.07em;
-    text-transform: uppercase;
-    padding: 6px 16px;
-    border-radius: 3px;
-    cursor: pointer;
-    color: var(--muted);
-    transition: all 0.15s;
-    border: none;
-    background: transparent;
-  }
-  .tab.active {
-    background: var(--surface);
-    color: var(--text);
-    box-shadow: 0 1px 3px rgba(0,0,0,0.4);
-  }
-  .tab:hover:not(.active) { color: var(--text); }
-
-  .view { display: none; }
-  .view.active { display: block; }
-
-  /* ── Responsive ── */
-  @media (max-width: 900px) {
-    .kpi-grid { grid-template-columns: repeat(3, 1fr); }
-    .charts-grid { grid-template-columns: 1fr; }
-    .chart-card.full { grid-column: span 1; }
-    header { padding: 14px 16px; }
-    main { padding: 20px 16px; }
-    .config-drawer { padding: 16px; }
-  }
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
+:root{--bg:#f0f0eb;--surface:#f7f7f3;--surface2:#e8e8e3;--border:#d4d4cc;--border2:#c8c8c0;--text:#2a2a28;--muted:#6b6b64;--dim:#9a9a92;--green:#4a6741;--green-bg:#4a6741;--green-light:#e8ede7;--dtc:#3d5c8a;--dtc-light:#e8edf4;--b2b:#4a6741;--warn:#8a5c2a;--danger:#8a2a2a;--mono:'IBM Plex Mono',monospace;--sans:'IBM Plex Sans',sans-serif;--shadow:0 1px 3px rgba(0,0,0,0.07)}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;min-height:100vh}
+header{display:grid;grid-template-columns:auto 1fr auto;align-items:stretch;border-bottom:2px solid var(--border);background:var(--surface)}
+.header-brand{background:var(--green-bg);color:#fff;padding:14px 22px;display:flex;flex-direction:column;justify-content:center}
+.brand-name{font-family:var(--mono);font-size:15px;font-weight:600;letter-spacing:.12em;text-transform:uppercase}
+.brand-sub{font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;opacity:.65;margin-top:2px}
+.header-title{padding:14px 24px;display:flex;flex-direction:column;justify-content:center;border-right:1px solid var(--border)}
+.header-title h1{font-family:var(--mono);font-size:15px;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+.header-title p{font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:3px;letter-spacing:.05em}
+.header-right{display:flex;align-items:center;gap:20px;padding:0 24px}
+nav{display:flex;gap:3px}
+.nav-link{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;padding:6px 14px;border:1px solid transparent;border-radius:2px;text-decoration:none;color:var(--muted);transition:all .12s}
+.nav-link:hover{color:var(--text);border-color:var(--border2)}
+.nav-link.active{color:var(--green);border-color:var(--green);background:var(--green-light)}
+.refresh-status{font-family:var(--mono);font-size:10px;color:var(--dim);display:flex;align-items:center;gap:7px;white-space:nowrap}
+.refresh-dot{width:6px;height:6px;border-radius:50%;background:var(--dim);flex-shrink:0;transition:background .3s}
+.refresh-dot.live{background:var(--green);animation:pulse 2s infinite}
+.refresh-dot.fetching{background:var(--warn);animation:spin .7s linear infinite;border-radius:0;width:8px;height:8px}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+@keyframes spin{to{transform:rotate(360deg)}}
+.controls-bar{display:flex;align-items:center;gap:10px;padding:14px 28px;background:var(--surface2);border-bottom:1px solid var(--border)}
+.controls-bar label{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+select{background:var(--surface);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:12px;padding:5px 10px;border-radius:2px;outline:none}
+select:focus{border-color:var(--green)}
+.next-refresh{font-family:var(--mono);font-size:10px;color:var(--dim);margin-left:auto}
+main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
+.section-header{display:flex;align-items:center;gap:10px;margin-bottom:12px;margin-top:28px}
+.section-header:first-child{margin-top:0}
+.section-dot{width:6px;height:6px;border-radius:50%;background:var(--green);flex-shrink:0}
+.section-title{font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.section-line{flex:1;height:1px;background:var(--border)}
+.period-badge{font-family:var(--mono);font-size:10px;color:var(--green);border:1px solid var(--green);background:var(--green-light);padding:2px 8px;border-radius:2px}
+.kpi-grid{display:grid;grid-template-columns:repeat(5,1fr);border:1px solid var(--border);border-radius:3px;overflow:hidden;background:var(--border);gap:1px;box-shadow:var(--shadow)}
+.kpi-card{background:var(--surface);padding:18px 20px}
+.kpi-label{font-family:var(--mono);font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+.kpi-value{font-family:var(--mono);font-size:26px;font-weight:600;color:var(--text);line-height:1;margin-bottom:10px}
+.kpi-sub{display:flex;flex-direction:column;gap:4px}
+.kpi-store{display:flex;align-items:center;justify-content:space-between}
+.kpi-store-label{font-family:var(--mono);font-size:9px;letter-spacing:.08em;text-transform:uppercase}
+.kpi-store-label.dtc{color:var(--dtc)}
+.kpi-store-label.b2b{color:var(--b2b)}
+.kpi-store-val{font-family:var(--mono);font-size:11px;color:var(--text)}
+.tab-bar{display:flex;border-bottom:2px solid var(--border);margin-bottom:16px;margin-top:28px}
+.tab{font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;padding:10px 20px;border:none;background:transparent;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;transition:color .12s;display:flex;align-items:center;gap:7px}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--green);border-bottom-color:var(--green)}
+.view{display:none}.view.active{display:block}
+.table-wrap{border:1px solid var(--border);border-radius:3px;overflow:hidden;box-shadow:var(--shadow)}
+table{width:100%;border-collapse:collapse}
+thead tr{background:var(--surface2)}
+th{font-family:var(--mono);font-size:9px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);padding:10px 16px;text-align:left;border-bottom:1px solid var(--border)}
+td{padding:12px 16px;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:12px}
+tr:last-child td{border-bottom:none}
+tbody tr{background:var(--surface)}
+tbody tr:hover{background:var(--bg)}
+tbody tr.combined-row{background:var(--green-light)}
+.store-pill{display:inline-flex;align-items:center;gap:6px}
+.store-dot{width:5px;height:5px;border-radius:50%;flex-shrink:0}
+.store-dot.dtc{background:var(--dtc)}.store-dot.b2b{background:var(--b2b)}.store-dot.combined{background:var(--green)}
+.metric-null{color:var(--dim)}
+.charts-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.chart-card{background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:16px 18px;box-shadow:var(--shadow)}
+.chart-card.full{grid-column:span 2}
+.chart-title{font-family:var(--mono);font-size:9px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:14px}
+.chart-container{position:relative;height:180px}
+.chart-card.full .chart-container{height:200px}
+.issue-tag{font-family:var(--mono);font-size:9px;padding:2px 7px;border-radius:2px;white-space:nowrap;border:1px solid}
+.issue-tags{display:flex;flex-wrap:wrap;gap:4px}
+.issue-tag.processing{background:#f5ede0;color:var(--warn);border-color:#d4b896}
+.issue-tag.fulfillment{background:#f5e8e0;color:#7a4a2a;border-color:#d4a896}
+.issue-tag.delivery,.issue-tag.delivery_stalled{background:#f5e0e0;color:var(--danger);border-color:#d49696}
+.order-num{font-weight:600;color:var(--text)}.order-customer{color:var(--muted);font-size:11px;margin-top:2px}.order-email{color:var(--dim);font-size:10px}
+.items-cell{color:var(--muted);font-size:11px;max-width:220px;line-height:1.5}
+.tracking-status{display:inline-block;padding:2px 7px;border-radius:2px;font-size:9px;text-transform:uppercase;letter-spacing:.07em;border:1px solid;margin-bottom:3px}
+.tracking-status.in_transit{background:var(--dtc-light);color:var(--dtc);border-color:#b0c0d8}
+.tracking-status.out_for_delivery{background:#f5ede0;color:var(--warn);border-color:#d4b896}
+.tracking-status.attempted_delivery{background:#f5e8e0;color:#7a4a2a;border-color:#d4a896}
+.tracking-status.delivered{background:var(--green-light);color:var(--green);border-color:#b0c8a8}
+.tracking-status.failure{background:#f5e0e0;color:var(--danger);border-color:#d49696}
+.tracking-status.label_printed,.tracking-status.confirmed{background:var(--surface2);color:var(--muted);border-color:var(--border2)}
+.tracking-num{color:var(--muted);font-size:10px;margin-top:2px}
+.tracking-link{color:var(--dtc);text-decoration:none;font-size:10px}.tracking-link:hover{text-decoration:underline}
+.tracking-age{color:var(--dim);font-size:10px;margin-top:2px}
+.filter-bar{display:flex;gap:6px;margin-bottom:12px;align-items:center}
+.filter-btn{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;padding:5px 12px;border-radius:2px;border:1px solid var(--border2);background:var(--surface);color:var(--muted);cursor:pointer;transition:all .12s}
+.filter-btn:hover{color:var(--text);border-color:var(--green)}
+.filter-btn.active{background:var(--green-light);color:var(--green);border-color:var(--green)}
+.issues-count-badge{font-family:var(--mono);font-size:9px;padding:1px 6px;border-radius:2px;border:1px solid}
+.issues-count-badge.has-issues{background:#f5e0e0;color:var(--danger);border-color:#d49696}
+.issues-count-badge.zero{background:var(--green-light);color:var(--green);border-color:#b0c8a8}
+.issues-empty{padding:40px;text-align:center;font-family:var(--mono);font-size:11px;color:var(--green)}
+.state-panel{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:80px 40px;gap:12px;text-align:center}
+.state-title{font-family:var(--mono);font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--text)}
+.state-sub{font-size:13px;color:var(--muted);max-width:340px;line-height:1.6}
+.spinner{width:16px;height:16px;border:2px solid var(--border2);border-top-color:var(--green);border-radius:50%;animation:spin .7s linear infinite}
+.error-banner{background:#f5e0e0;border:1px solid #d49696;color:var(--danger);font-family:var(--mono);font-size:11px;padding:10px 16px;border-radius:2px;margin-bottom:16px;display:none}
+@media(max-width:900px){.kpi-grid{grid-template-columns:repeat(3,1fr)}.charts-grid{grid-template-columns:1fr}.chart-card.full{grid-column:span 1}}
 </style>
 </head>
 <body>
-
 <header>
-  <div class="logo">LifeLines <span>/ Ops Scorecard</span></div>
-  <nav style="display:flex;gap:4px;">
-    <a href="/" style="font-family:var(--mono);font-size:11px;letter-spacing:0.07em;text-transform:uppercase;padding:6px 14px;border-radius:4px;text-decoration:none;color:var(--accent);background:var(--accent-dim);">Ops Scorecard</a>
-    <a href="/b2b.html" style="font-family:var(--mono);font-size:11px;letter-spacing:0.07em;text-transform:uppercase;padding:6px 14px;border-radius:4px;text-decoration:none;color:var(--muted);transition:color 0.15s;">B2B Process</a>
-  </nav>
-  <div class="header-controls">
-    <select id="monthSelect"></select>
-    <select id="yearSelect"></select>
-    <button class="btn btn-ghost" onclick="toggleConfig()" id="configBtn">⚙ Config</button>
-    <button class="btn" onclick="runFetch()" id="fetchBtn">Run Report</button>
+  <div class="header-brand"><div class="brand-name">LifeLines</div><div class="brand-sub">Ops Tools</div></div>
+  <div class="header-title"><h1>Ops Scorecard</h1><p>Shopify DTC + B2B &middot; Order Performance</p></div>
+  <div class="header-right">
+    <nav><a href="/" class="nav-link active">Scorecard</a><a href="/b2b.html" class="nav-link">B2B Process</a></nav>
+    <div class="refresh-status"><div class="refresh-dot" id="refreshDot"></div><span id="refreshLabel">Loading...</span></div>
   </div>
 </header>
-
-<!-- Config drawer -->
-<div class="config-drawer" id="configDrawer">
-  <div class="config-group">
-    <span class="store-tag dtc">DTC</span>
-    <label>Store URL (e.g. mystore.myshopify.com)</label>
-    <input type="text" id="dtcStore" placeholder="dtc-store.myshopify.com">
-  </div>
-  <div class="config-group">
-    <span class="store-tag dtc">DTC</span>
-    <label>Admin API Token</label>
-    <input type="password" id="dtcToken" placeholder="shpat_...">
-  </div>
-  <div class="config-group">
-    <span class="store-tag b2b">B2B</span>
-    <label>Store URL</label>
-    <input type="text" id="b2bStore" placeholder="b2b-store.myshopify.com">
-  </div>
-  <div class="config-group">
-    <span class="store-tag b2b">B2B</span>
-    <label>Admin API Token</label>
-    <input type="password" id="b2bToken" placeholder="shpat_...">
-  </div>
-  <div class="config-group" style="justify-content: flex-end;">
-    <label>&nbsp;</label>
-    <button class="btn" onclick="saveConfig()">Save</button>
-  </div>
+<div class="controls-bar">
+  <label>Period</label>
+  <select id="monthSelect"></select>
+  <select id="yearSelect"></select>
+  <span class="next-refresh" id="nextRefresh"></span>
 </div>
-
 <main>
   <div class="error-banner" id="errorBanner"></div>
-
-  <!-- Empty state -->
-  <div id="emptyState" class="state-panel">
-    <div class="state-icon">📊</div>
-    <div class="state-title">No data loaded</div>
-    <div class="state-sub">Open Config, enter your Shopify store credentials, then hit Run Report.</div>
-  </div>
-
-  <!-- Loading state -->
-  <div id="loadingState" class="state-panel" style="display:none">
-    <div class="spinner"></div>
-    <div class="state-title">Fetching from Shopify...</div>
-    <div class="state-sub">Pulling orders and draft orders — this may take a moment for large stores.</div>
-  </div>
-
-  <!-- Dashboard -->
+  <div id="emptyState" class="state-panel"><div class="spinner"></div><div class="state-title">Loading...</div><div class="state-sub">Fetching data from Shopify.</div></div>
+  <div id="loadingState" class="state-panel" style="display:none"><div class="spinner"></div><div class="state-title">Refreshing...</div></div>
   <div id="dashboard" style="display:none">
-
-    <!-- KPI strip -->
-    <div class="section-header">
-      <span class="section-title">Overview</span>
-      <div class="section-line"></div>
-      <span class="period-badge" id="periodBadge"></span>
-    </div>
-
+    <div class="section-header"><span class="section-dot"></span><span class="section-title">Overview</span><div class="section-line"></div><span class="period-badge" id="periodBadge"></span></div>
     <div class="kpi-grid">
-      <div class="kpi-card">
-        <div class="kpi-label">Total Orders</div>
-        <div class="kpi-value" id="kpiOrders">—</div>
-        <div class="kpi-sub" id="kpiOrdersSub"></div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-label">Total Units</div>
-        <div class="kpi-value" id="kpiUnits">—</div>
-        <div class="kpi-sub" id="kpiUnitsSub"></div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-label">Avg Processing</div>
-        <div class="kpi-value" id="kpiProcessing">—</div>
-        <div class="kpi-sub" id="kpiProcessingSub"></div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-label">Avg Fulfillment</div>
-        <div class="kpi-value" id="kpiFulfillment">—</div>
-        <div class="kpi-sub" id="kpiFulfillmentSub"></div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-label">Avg Delivery</div>
-        <div class="kpi-value" id="kpiDelivery">—</div>
-        <div class="kpi-sub" id="kpiDeliverySub"></div>
+      <div class="kpi-card"><div class="kpi-label">Total Orders</div><div class="kpi-value" id="kpiOrders">-</div><div class="kpi-sub" id="kpiOrdersSub"></div></div>
+      <div class="kpi-card"><div class="kpi-label">Total Units</div><div class="kpi-value" id="kpiUnits">-</div><div class="kpi-sub" id="kpiUnitsSub"></div></div>
+      <div class="kpi-card"><div class="kpi-label">Avg Processing</div><div class="kpi-value" id="kpiProcessing">-</div><div class="kpi-sub" id="kpiProcessingSub"></div></div>
+      <div class="kpi-card"><div class="kpi-label">Avg Fulfillment</div><div class="kpi-value" id="kpiFulfillment">-</div><div class="kpi-sub" id="kpiFulfillmentSub"></div></div>
+      <div class="kpi-card"><div class="kpi-label">Avg Delivery</div><div class="kpi-value" id="kpiDelivery">-</div><div class="kpi-sub" id="kpiDeliverySub"></div></div>
+    </div>
+    <div class="tab-bar">
+      <button class="tab active" onclick="switchTab('table',this)">Scorecard</button>
+      <button class="tab" onclick="switchTab('volume',this)">Volume</button>
+      <button class="tab" onclick="switchTab('completion',this)">Completion</button>
+      <button class="tab" onclick="switchTab('issues',this)" id="issuesTab">Issues</button>
+    </div>
+    <div class="view active" id="view-table">
+      <div class="table-wrap"><table><thead><tr><th>Store</th><th>Orders</th><th>Units</th><th>Units/Order</th><th>Avg Processing</th><th>Avg Fulfillment</th><th>Avg Delivery</th></tr></thead><tbody id="scorecardBody"></tbody></table></div>
+    </div>
+    <div class="view" id="view-volume">
+      <div class="charts-grid">
+        <div class="chart-card full"><div class="chart-title">Daily Orders - DTC vs B2B</div><div class="chart-container"><canvas id="chartOrders"></canvas></div></div>
+        <div class="chart-card full"><div class="chart-title">Daily Units</div><div class="chart-container"><canvas id="chartUnits"></canvas></div></div>
       </div>
     </div>
-
-    <!-- Tabs -->
-    <div class="section-header" style="margin-top: 32px; margin-bottom: 0;">
-      <span class="section-title">Detail</span>
-      <div class="section-line"></div>
+    <div class="view" id="view-completion">
+      <div class="charts-grid">
+        <div class="chart-card"><div class="chart-title">Avg Processing Time (hrs)</div><div class="chart-container"><canvas id="chartProcessing"></canvas></div></div>
+        <div class="chart-card"><div class="chart-title">Avg Fulfillment Time (hrs)</div><div class="chart-container"><canvas id="chartFulfillment"></canvas></div></div>
+        <div class="chart-card full"><div class="chart-title">Cumulative Orders Fulfilled</div><div class="chart-container"><canvas id="chartCumulative"></canvas></div></div>
+      </div>
     </div>
-
-    <div style="margin-top: 16px;">
-      <div class="tabs">
-        <button class="tab active" onclick="switchTab('table')">Scorecard</button>
-        <button class="tab" onclick="switchTab('volume')">Volume</button>
-        <button class="tab" onclick="switchTab('completion')">Completion</button>
-        <button class="tab" onclick="switchTab('issues')" id="issuesTab">Issues</button>
+    <div class="view" id="view-issues">
+      <div class="filter-bar">
+        <button class="filter-btn active" onclick="setIssueFilter('all',this)">All</button>
+        <button class="filter-btn" onclick="setIssueFilter('processing',this)">Processing</button>
+        <button class="filter-btn" onclick="setIssueFilter('fulfillment',this)">Fulfillment</button>
+        <button class="filter-btn" onclick="setIssueFilter('delivery',this)">Delivery</button>
+        <button class="filter-btn" onclick="setIssueFilter('delivery_stalled',this)">Stalled</button>
+        <span style="margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--dim)">Threshold: &gt;10 days</span>
       </div>
-
-      <!-- Scorecard table view -->
-      <div class="view active" id="view-table">
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Store</th>
-                <th>Orders</th>
-                <th>Units</th>
-                <th>Units / Order</th>
-                <th>Avg Processing</th>
-                <th>Avg Fulfillment</th>
-                <th>Avg Delivery</th>
-              </tr>
-            </thead>
-            <tbody id="scorecardBody"></tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- Volume charts -->
-      <div class="view" id="view-volume">
-        <div class="charts-grid">
-          <div class="chart-card full">
-            <div class="chart-title">Daily Orders — DTC vs B2B</div>
-            <div class="chart-container"><canvas id="chartOrders"></canvas></div>
-          </div>
-          <div class="chart-card full">
-            <div class="chart-title">Daily Units Shipped</div>
-            <div class="chart-container"><canvas id="chartUnits"></canvas></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Completion charts -->
-      <div class="view" id="view-completion">
-        <div class="charts-grid">
-          <div class="chart-card">
-            <div class="chart-title">Avg Processing Time (hrs) — Daily</div>
-            <div class="chart-container"><canvas id="chartProcessing"></canvas></div>
-          </div>
-          <div class="chart-card">
-            <div class="chart-title">Avg Fulfillment Time (hrs) — Daily</div>
-            <div class="chart-container"><canvas id="chartFulfillment"></canvas></div>
-          </div>
-          <div class="chart-card full">
-            <div class="chart-title">Cumulative Orders Fulfilled Over Month</div>
-            <div class="chart-container"><canvas id="chartCumulative"></canvas></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Issues view -->
-      <div class="view" id="view-issues">
-        <div class="filter-bar">
-          <button class="filter-btn active" onclick="setIssueFilter('all', this)">All</button>
-          <button class="filter-btn" onclick="setIssueFilter('processing', this)">Processing</button>
-          <button class="filter-btn" onclick="setIssueFilter('fulfillment', this)">Fulfillment</button>
-          <button class="filter-btn" onclick="setIssueFilter('delivery', this)">Delivery</button>
-          <button class="filter-btn" onclick="setIssueFilter('delivery_stalled', this)">Stalled</button>
-          <span style="margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--muted);">
-            Threshold: &gt;10 days on any single stage
-          </span>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Order</th>
-                <th>Store</th>
-                <th>Customer</th>
-                <th>Items</th>
-                <th>Issue(s)</th>
-                <th>Processing</th>
-                <th>Fulfillment</th>
-                <th>Last Tracking Event</th>
-              </tr>
-            </thead>
-            <tbody id="issuesBody"></tbody>
-          </table>
-        </div>
-      </div>
+      <div class="table-wrap"><table><thead><tr><th>Order</th><th>Store</th><th>Customer</th><th>Items</th><th>Issue(s)</th><th>Processing</th><th>Fulfillment</th><th>Last Tracking</th></tr></thead><tbody id="issuesBody"></tbody></table></div>
     </div>
   </div>
 </main>
-
 <script>
-// ── State ─────────────────────────────────────────────────────────────────────
-let charts = {};
-let lastData = null;
-
-// ── Month/year selectors ──────────────────────────────────────────────────────
-const MONTHS = ['January','February','March','April','May','June',
-                'July','August','September','October','November','December'];
-
-const monthSel = document.getElementById('monthSelect');
-const yearSel  = document.getElementById('yearSelect');
-
-MONTHS.forEach((m, i) => {
-  const o = document.createElement('option');
-  o.value = i + 1;
-  o.textContent = m;
-  monthSel.appendChild(o);
-});
-
-const now = new Date();
-monthSel.value = now.getMonth() + 1;
-
-for (let y = now.getFullYear(); y >= 2022; y--) {
-  const o = document.createElement('option');
-  o.value = y;
-  o.textContent = y;
-  yearSel.appendChild(o);
-}
-
-// ── Config ────────────────────────────────────────────────────────────────────
-function loadConfig() {
-  ['dtcStore','dtcToken','b2bStore','b2bToken'].forEach(k => {
-    const v = localStorage.getItem('ops_' + k);
-    if (v) document.getElementById(k).value = v;
-  });
-}
-
-function saveConfig() {
-  ['dtcStore','dtcToken','b2bStore','b2bToken'].forEach(k => {
-    localStorage.setItem('ops_' + k, document.getElementById(k).value.trim());
-  });
-  toggleConfig();
-}
-
-function toggleConfig() {
-  const d = document.getElementById('configDrawer');
-  d.classList.toggle('open');
-}
-
-loadConfig();
-
-// ── Fetch ─────────────────────────────────────────────────────────────────────
-async function runFetch() {
-  const payload = {
-    dtcStore: document.getElementById('dtcStore').value.trim(),
-    dtcToken: document.getElementById('dtcToken').value.trim(),
-    b2bStore: document.getElementById('b2bStore').value.trim(),
-    b2bToken: document.getElementById('b2bToken').value.trim(),
-    year:  parseInt(yearSel.value),
-    month: parseInt(monthSel.value),
-  };
-
-  if (!payload.dtcStore || !payload.dtcToken || !payload.b2bStore || !payload.b2bToken) {
-    showError('Missing credentials — open Config and fill in all four fields.');
-    return;
-  }
-
-  setLoading(true);
-  hideError();
-
-  try {
-    const res = await fetch('/api/scorecard', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Server error');
-    lastData = data;
-    render(data);
-  } catch (err) {
-    showError(err.message);
-    setLoading(false);
-    show('emptyState');
-  }
-}
-
-// ── Render ────────────────────────────────────────────────────────────────────
-function render(data) {
-  setLoading(false);
-  show('dashboard');
-
-  const { stores, combined, year, month } = data;
-  const dtc = stores.find(s => s.label === 'DTC');
-  const b2b = stores.find(s => s.label === 'B2B');
-
-  // Period badge
-  document.getElementById('periodBadge').textContent =
-    `${MONTHS[month - 1]} ${year}`;
-
-  // KPI strip
-  setKPI('Orders', combined.totalOrders.toLocaleString(), [
-    { cls: 'dtc', label: 'DTC', val: dtc.totalOrders.toLocaleString() },
-    { cls: 'b2b', label: 'B2B', val: b2b.totalOrders.toLocaleString() },
-  ]);
-  setKPI('Units', combined.totalUnits.toLocaleString(), [
-    { cls: 'dtc', label: 'DTC', val: dtc.totalUnits.toLocaleString() },
-    { cls: 'b2b', label: 'B2B', val: b2b.totalUnits.toLocaleString() },
-  ]);
-  setKPI('Processing', combined.avgProcessingFormatted, [
-    { cls: 'dtc', label: 'DTC', val: dtc.avgProcessingFormatted },
-    { cls: 'b2b', label: 'B2B', val: b2b.avgProcessingFormatted },
-  ]);
-  setKPI('Fulfillment', combined.avgFulfillmentFormatted, [
-    { cls: 'dtc', label: 'DTC', val: dtc.avgFulfillmentFormatted },
-    { cls: 'b2b', label: 'B2B', val: b2b.avgFulfillmentFormatted },
-  ]);
-  setKPI('Delivery', combined.avgDeliveryFormatted, [
-    { cls: 'dtc', label: 'DTC', val: dtc.avgDeliveryFormatted },
-    { cls: 'b2b', label: 'B2B', val: b2b.avgDeliveryFormatted },
-  ]);
-
-  // Table
-  const tbody = document.getElementById('scorecardBody');
-  tbody.innerHTML = '';
-  [...stores, { ...combined, label: 'Combined' }].forEach(row => {
-    const cls = row.label === 'DTC' ? 'dtc' : row.label === 'B2B' ? 'b2b' : 'combined';
-    const upo = row.totalOrders > 0
-      ? (row.totalUnits / row.totalOrders).toFixed(1)
-      : '—';
-    tbody.innerHTML += `
-      <tr class="${cls === 'combined' ? 'combined-row' : ''}">
-        <td><span class="store-pill"><span class="store-dot ${cls}"></span>${row.label}</span></td>
-        <td>${row.totalOrders.toLocaleString()}</td>
-        <td>${row.totalUnits.toLocaleString()}</td>
-        <td>${upo}</td>
-        <td class="${row.avgProcessingFormatted === '—' ? 'metric-null' : 'metric-val'}">${row.avgProcessingFormatted}</td>
-        <td class="${row.avgFulfillmentFormatted === '—' ? 'metric-null' : 'metric-val'}">${row.avgFulfillmentFormatted}</td>
-        <td class="${row.avgDeliveryFormatted === '—' ? 'metric-null' : 'metric-val'}">${row.avgDeliveryFormatted}</td>
-      </tr>`;
-  });
-
-  // Charts
-  buildCharts(dtc, b2b, year, month);
-
-  // Issues
-  renderIssues(data.flaggedOrders || [], 'all');
-
-  // Update Issues tab label
-  const count = (data.flaggedOrders || []).length;
-  const tab = document.getElementById('issuesTab');
-  tab.innerHTML = `Issues <span class="issues-count-badge ${count === 0 ? 'zero' : ''}">${count}</span>`;
-}
-
-// ── Issue rendering ────────────────────────────────────────────────────────────
-let allFlagged = [];
-
-function renderIssues(flagged, filter) {
-  allFlagged = flagged;
-  const tbody = document.getElementById('issuesBody');
-
-  const filtered = filter === 'all'
-    ? flagged
-    : flagged.filter(o => o.issues.some(i => i.type === filter || (filter === 'delivery' && i.type === 'delivery_stalled')));
-
-  if (!filtered.length) {
-    tbody.innerHTML = `<tr><td colspan="8" class="issues-empty">✓ No orders exceeded the 10-day threshold${filter !== 'all' ? ' for this category' : ''}</td></tr>`;
-    return;
-  }
-
-  tbody.innerHTML = filtered.map(o => {
-    const storeCls = o.store === 'DTC' ? 'dtc' : 'b2b';
-    const issueTags = o.issues.map(i => {
-      const label = {
-        processing: `Processing: ${fmtH(i.hours)}`,
-        fulfillment: `Fulfillment: ${fmtH(i.hours)}`,
-        delivery: `Delivery: ${fmtH(i.hours)}`,
-        delivery_stalled: `Stalled in transit: ${fmtH(i.hours)}`,
-      }[i.type] || i.type;
-      return `<span class="issue-tag ${i.type}">${label}</span>`;
-    }).join('');
-
-    const trackingHtml = buildTrackingHtml(o.tracking);
-
-    return `<tr class="issue-row">
-      <td class="order-meta">
-        <div class="order-num">#${o.orderNumber}</div>
-        <div class="order-customer">${esc(o.customerName)}</div>
-        ${o.email ? `<div class="order-email">${esc(o.email)}</div>` : ''}
-      </td>
-      <td><span class="store-pill"><span class="store-dot ${storeCls}"></span>${o.store}</span></td>
-      <td class="order-meta"><div class="order-customer">${esc(o.customerName)}</div></td>
-      <td class="items-cell">${esc(o.itemSummary)} <span style="color:var(--dim)">(${o.units} units)</span></td>
-      <td><div class="issue-tags">${issueTags}</div></td>
-      <td style="font-family:var(--mono);font-size:12px">${o.processingHours !== null ? fmtH(o.processingHours) : '<span style="color:var(--dim)">—</span>'}</td>
-      <td style="font-family:var(--mono);font-size:12px">${o.fulfillmentHours !== null ? fmtH(o.fulfillmentHours) : '<span style="color:var(--dim)">—</span>'}</td>
-      <td class="tracking-cell">${trackingHtml}</td>
-    </tr>`;
-  }).join('');
-}
-
-function buildTrackingHtml(t) {
-  if (!t) return '<span style="color:var(--dim);font-size:11px">No tracking</span>';
-
-  const statusHtml = t.shipmentStatus
-    ? `<div><span class="tracking-status ${t.shipmentStatus}">${t.shipmentStatus.replace(/_/g, ' ')}</span></div>`
-    : '';
-
-  const carrierHtml = t.company
-    ? `<div style="color:var(--muted);font-size:10px">${esc(t.company)}</div>`
-    : '';
-
-  const numHtml = t.number
-    ? (t.url
-        ? `<div class="tracking-num"><a class="tracking-link" href="${esc(t.url)}" target="_blank" rel="noopener">${esc(t.number)} ↗</a></div>`
-        : `<div class="tracking-num">${esc(t.number)}</div>`)
-    : '';
-
-  const ageHtml = t.updatedAt
-    ? `<div class="tracking-age">Last update: ${timeAgo(t.updatedAt)}</div>`
-    : '';
-
-  return statusHtml + carrierHtml + numHtml + ageHtml;
-}
-
-function setIssueFilter(filter, btn) {
-  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  renderIssues(allFlagged, filter);
-}
-
-function fmtH(hours) {
-  if (hours === null || hours === undefined) return '—';
-  if (hours < 24) return `${hours.toFixed(1)}h`;
-  return `${(hours / 24).toFixed(1)}d`;
-}
-
-function esc(str) {
-  if (!str) return '';
-  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-function timeAgo(iso) {
-  const diff = Date.now() - new Date(iso).getTime();
-  const h = diff / 36e5;
-  if (h < 1) return `${Math.round(h * 60)}m ago`;
-  if (h < 24) return `${Math.round(h)}h ago`;
-  return `${Math.round(h / 24)}d ago`;
-}
-
-function setKPI(key, value, subs) {
-  document.getElementById('kpi' + key).textContent = value;
-  const subEl = document.getElementById('kpi' + key + 'Sub');
-  subEl.innerHTML = subs.map(s =>
-    `<div class="kpi-store">
-      <span class="kpi-store-label ${s.cls}">${s.label}</span>
-      <span class="kpi-store-val">${s.val}</span>
-    </div>`
-  ).join('');
-}
-
-// ── Charts ────────────────────────────────────────────────────────────────────
-function buildCharts(dtc, b2b, year, month) {
-  const days = new Date(year, month, 0).getDate();
-  const labels = dtc.ordersByDay.map(d => d.day);
-
-  destroyCharts();
-
-  const gridColor = 'rgba(30,37,48,1)';
-  const tickColor = '#3a4555';
-
-  const baseOpts = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: { legend: { display: false } },
-    scales: {
-      x: {
-        ticks: { color: tickColor, font: { family: 'IBM Plex Mono', size: 10 }, maxTicksLimit: 10 },
-        grid: { color: gridColor },
-        border: { color: 'transparent' },
-      },
-      y: {
-        ticks: { color: tickColor, font: { family: 'IBM Plex Mono', size: 10 } },
-        grid: { color: gridColor },
-        border: { color: 'transparent' },
-        beginAtZero: true,
-      }
-    }
-  };
-
-  // Daily orders
-  charts.orders = new Chart(document.getElementById('chartOrders'), {
-    type: 'bar',
-    data: {
-      labels,
-      datasets: [
-        { label: 'DTC', data: dtc.ordersByDay.map(d => d.orders), backgroundColor: 'rgba(59,130,246,0.7)', borderRadius: 2 },
-        { label: 'B2B', data: b2b.ordersByDay.map(d => d.orders), backgroundColor: 'rgba(16,185,129,0.7)', borderRadius: 2 },
-      ]
-    },
-    options: { ...baseOpts, plugins: { legend: { display: true, labels: { color: '#64748b', font: { family: 'IBM Plex Mono', size: 11 }, boxWidth: 10 } } } }
-  });
-
-  // Daily units
-  charts.units = new Chart(document.getElementById('chartUnits'), {
-    type: 'bar',
-    data: {
-      labels,
-      datasets: [
-        { label: 'DTC', data: dtc.ordersByDay.map(d => d.units), backgroundColor: 'rgba(59,130,246,0.5)', borderRadius: 2 },
-        { label: 'B2B', data: b2b.ordersByDay.map(d => d.units), backgroundColor: 'rgba(16,185,129,0.5)', borderRadius: 2 },
-      ]
-    },
-    options: { ...baseOpts, plugins: { legend: { display: true, labels: { color: '#64748b', font: { family: 'IBM Plex Mono', size: 11 }, boxWidth: 10 } } } }
-  });
-
-  // Processing time (use dummy day-level data since we have order-level)
-  // We aggregate per day from ordersByDay as a proxy
-  const processingData = dtc.ordersByDay.map((d, i) => ({
-    day: d.day,
-    dtc: null, // would need per-order data passed down; show placeholder
-    b2b: null,
-  }));
-
-  charts.processing = new Chart(document.getElementById('chartProcessing'), {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [
-        {
-          label: 'DTC',
-          data: dtc.ordersByDay.map(() => dtc.avgProcessingHours),
-          borderColor: 'rgba(59,130,246,0.8)',
-          backgroundColor: 'rgba(59,130,246,0.08)',
-          tension: 0.3, fill: true, pointRadius: 0, borderWidth: 2,
-        },
-        {
-          label: 'B2B',
-          data: b2b.ordersByDay.map(() => b2b.avgProcessingHours),
-          borderColor: 'rgba(16,185,129,0.8)',
-          backgroundColor: 'rgba(16,185,129,0.08)',
-          tension: 0.3, fill: true, pointRadius: 0, borderWidth: 2,
-        },
-      ]
-    },
-    options: { ...baseOpts, plugins: { legend: { display: true, labels: { color: '#64748b', font: { family: 'IBM Plex Mono', size: 11 }, boxWidth: 10 } } } }
-  });
-
-  // Fulfillment time
-  charts.fulfillment = new Chart(document.getElementById('chartFulfillment'), {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [
-        {
-          label: 'DTC',
-          data: dtc.ordersByDay.map(() => dtc.avgFulfillmentHours),
-          borderColor: 'rgba(59,130,246,0.8)',
-          backgroundColor: 'rgba(59,130,246,0.08)',
-          tension: 0.3, fill: true, pointRadius: 0, borderWidth: 2,
-        },
-        {
-          label: 'B2B',
-          data: b2b.ordersByDay.map(() => b2b.avgFulfillmentHours),
-          borderColor: 'rgba(16,185,129,0.8)',
-          backgroundColor: 'rgba(16,185,129,0.08)',
-          tension: 0.3, fill: true, pointRadius: 0, borderWidth: 2,
-        },
-      ]
-    },
-    options: { ...baseOpts, plugins: { legend: { display: true, labels: { color: '#64748b', font: { family: 'IBM Plex Mono', size: 11 }, boxWidth: 10 } } } }
-  });
-
-  // Cumulative orders fulfilled
-  let dtcCum = 0, b2bCum = 0;
-  const dtcCumData = dtc.fulfillmentsByDay.map(d => (dtcCum += d.fulfilled));
-  const b2bCumData = b2b.fulfillmentsByDay.map(d => (b2bCum += d.fulfilled));
-
-  charts.cumulative = new Chart(document.getElementById('chartCumulative'), {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [
-        {
-          label: 'DTC Fulfilled',
-          data: dtcCumData,
-          borderColor: 'rgba(59,130,246,1)',
-          backgroundColor: 'rgba(59,130,246,0.06)',
-          tension: 0.2, fill: true, pointRadius: 0, borderWidth: 2,
-        },
-        {
-          label: 'B2B Fulfilled',
-          data: b2bCumData,
-          borderColor: 'rgba(16,185,129,1)',
-          backgroundColor: 'rgba(16,185,129,0.06)',
-          tension: 0.2, fill: true, pointRadius: 0, borderWidth: 2,
-        },
-      ]
-    },
-    options: { ...baseOpts, plugins: { legend: { display: true, labels: { color: '#64748b', font: { family: 'IBM Plex Mono', size: 11 }, boxWidth: 10 } } } }
-  });
-}
-
-function destroyCharts() {
-  Object.values(charts).forEach(c => c.destroy());
-  charts = {};
-}
-
-// ── Tabs ──────────────────────────────────────────────────────────────────────
-function switchTab(name) {
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-  // closest('.tab') handles clicks on the badge span inside the Issues tab button
-  event.target.closest('.tab').classList.add('active');
-  document.getElementById('view-' + name).classList.add('active');
-}
-
-// ── UI helpers ────────────────────────────────────────────────────────────────
-function show(id) {
-  ['emptyState','loadingState','dashboard'].forEach(s => {
-    document.getElementById(s).style.display = s === id ? (id === 'dashboard' ? 'block' : 'flex') : 'none';
-  });
-}
-
-function setLoading(on) {
-  document.getElementById('fetchBtn').disabled = on;
-  if (on) show('loadingState');
-}
-
-function showError(msg) {
-  const el = document.getElementById('errorBanner');
-  el.textContent = '⚠ ' + msg;
-  el.style.display = 'block';
-}
-
-function hideError() {
-  document.getElementById('errorBanner').style.display = 'none';
-}
+const MONTHS=['January','February','March','April','May','June','July','August','September','October','November','December'];
+const REFRESH_MS=5*60*1000;
+let charts={},allFlagged=[],refreshTimer=null,countdownTimer=null,nextRefreshAt=null,hasData=false;
+const monthSel=document.getElementById('monthSelect');
+const yearSel=document.getElementById('yearSelect');
+MONTHS.forEach(function(m,i){var o=document.createElement('option');o.value=i+1;o.textContent=m;monthSel.appendChild(o);});
+var now=new Date();monthSel.value=now.getMonth()+1;
+for(var y=now.getFullYear();y>=2022;y--){var o=document.createElement('option');o.value=y;o.textContent=y;yearSel.appendChild(o);}
+monthSel.addEventListener('change',function(){clearTimers();runFetch();});
+yearSel.addEventListener('change',function(){clearTimers();runFetch();});
+function scheduleRefresh(){clearTimers();nextRefreshAt=Date.now()+REFRESH_MS;refreshTimer=setTimeout(function(){runFetch();},REFRESH_MS);countdownTimer=setInterval(updateCountdown,1000);updateCountdown();}
+function clearTimers(){if(refreshTimer)clearTimeout(refreshTimer);if(countdownTimer)clearInterval(countdownTimer);}
+function updateCountdown(){var r=Math.max(0,nextRefreshAt-Date.now());var m=Math.floor(r/60000);var s=Math.floor((r%60000)/1000);document.getElementById('nextRefresh').textContent='Next refresh in '+m+':'+(s<10?'0':'')+s;}
+async function runFetch(){clearTimers();setStatus('fetching');if(!hasData)show('emptyState');hideError();try{var res=await fetch('/api/scorecard',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({year:parseInt(yearSel.value),month:parseInt(monthSel.value)})});var data=await res.json();if(!res.ok)throw new Error(data.error||'Server error');hasData=true;render(data);setStatus('live');scheduleRefresh();}catch(err){showError(err.message);setStatus('error');if(!hasData)show('emptyState');scheduleRefresh();}}
+function render(data){show('dashboard');var stores=data.stores,combined=data.combined,year=data.year,month=data.month;var dtc=stores.find(function(s){return s.label==='DTC';});var b2b=stores.find(function(s){return s.label==='B2B';});document.getElementById('periodBadge').textContent=MONTHS[month-1]+' '+year;document.getElementById('refreshLabel').textContent='Updated '+new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});setKPI('Orders',combined.totalOrders.toLocaleString(),[{cls:'dtc',label:'DTC',val:dtc.totalOrders.toLocaleString()},{cls:'b2b',label:'B2B',val:b2b.totalOrders.toLocaleString()}]);setKPI('Units',combined.totalUnits.toLocaleString(),[{cls:'dtc',label:'DTC',val:dtc.totalUnits.toLocaleString()},{cls:'b2b',label:'B2B',val:b2b.totalUnits.toLocaleString()}]);setKPI('Processing',combined.avgProcessingFormatted,[{cls:'dtc',label:'DTC',val:dtc.avgProcessingFormatted},{cls:'b2b',label:'B2B',val:b2b.avgProcessingFormatted}]);setKPI('Fulfillment',combined.avgFulfillmentFormatted,[{cls:'dtc',label:'DTC',val:dtc.avgFulfillmentFormatted},{cls:'b2b',label:'B2B',val:b2b.avgFulfillmentFormatted}]);setKPI('Delivery',combined.avgDeliveryFormatted,[{cls:'dtc',label:'DTC',val:dtc.avgDeliveryFormatted},{cls:'b2b',label:'B2B',val:b2b.avgDeliveryFormatted}]);var tbody=document.getElementById('scorecardBody');tbody.innerHTML='';stores.concat([Object.assign({},combined,{label:'Combined'})]).forEach(function(row){var cls=row.label==='DTC'?'dtc':row.label==='B2B'?'b2b':'combined';var upo=row.totalOrders>0?(row.totalUnits/row.totalOrders).toFixed(1):'--';tbody.innerHTML+='<tr class="'+(cls==='combined'?'combined-row':'')+'"><td><span class="store-pill"><span class="store-dot '+cls+'"></span>'+row.label+'</span></td><td>'+row.totalOrders.toLocaleString()+'</td><td>'+row.totalUnits.toLocaleString()+'</td><td>'+upo+'</td><td class="'+(row.avgProcessingFormatted==='--'?'metric-null':'')+'">'+row.avgProcessingFormatted+'</td><td class="'+(row.avgFulfillmentFormatted==='--'?'metric-null':'')+'">'+row.avgFulfillmentFormatted+'</td><td class="'+(row.avgDeliveryFormatted==='--'?'metric-null':'')+'">'+row.avgDeliveryFormatted+'</td></tr>';});buildCharts(dtc,b2b,year,month);allFlagged=data.flaggedOrders||[];renderIssues(allFlagged,'all');var count=allFlagged.length;document.getElementById('issuesTab').innerHTML='Issues <span class="issues-count-badge '+(count>0?'has-issues':'zero')+'">'+count+'</span>';}
+function setKPI(key,value,subs){document.getElementById('kpi'+key).textContent=value;document.getElementById('kpi'+key+'Sub').innerHTML=subs.map(function(s){return'<div class="kpi-store"><span class="kpi-store-label '+s.cls+'">'+s.label+'</span><span class="kpi-store-val">'+s.val+'</span></div>';}).join('');}
+function buildCharts(dtc,b2b,year,month){destroyCharts();var labels=dtc.ordersByDay.map(function(d){return d.day;});var grid='#d4d4cc',tick='#9a9a92';var base={responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{color:tick,font:{family:'IBM Plex Mono',size:10},maxTicksLimit:10},grid:{color:grid},border:{color:'transparent'}},y:{ticks:{color:tick,font:{family:'IBM Plex Mono',size:10}},grid:{color:grid},border:{color:'transparent'},beginAtZero:true}}};var leg={display:true,labels:{color:tick,font:{family:'IBM Plex Mono',size:11},boxWidth:10}};charts.orders=new Chart(document.getElementById('chartOrders'),{type:'bar',data:{labels:labels,datasets:[{label:'DTC',data:dtc.ordersByDay.map(function(d){return d.orders;}),backgroundColor:'rgba(61,92,138,0.6)',borderRadius:2},{label:'B2B',data:b2b.ordersByDay.map(function(d){return d.orders;}),backgroundColor:'rgba(74,103,65,0.6)',borderRadius:2}]},options:Object.assign({},base,{plugins:{legend:leg}})});charts.units=new Chart(document.getElementById('chartUnits'),{type:'bar',data:{labels:labels,datasets:[{label:'DTC',data:dtc.ordersByDay.map(function(d){return d.units;}),backgroundColor:'rgba(61,92,138,0.45)',borderRadius:2},{label:'B2B',data:b2b.ordersByDay.map(function(d){return d.units;}),backgroundColor:'rgba(74,103,65,0.45)',borderRadius:2}]},options:Object.assign({},base,{plugins:{legend:leg}})});charts.processing=new Chart(document.getElementById('chartProcessing'),{type:'line',data:{labels:labels,datasets:[{label:'DTC',data:dtc.ordersByDay.map(function(){return dtc.avgProcessingHours;}),borderColor:'rgba(61,92,138,0.8)',backgroundColor:'rgba(61,92,138,0.06)',tension:0.3,fill:true,pointRadius:0,borderWidth:2},{label:'B2B',data:b2b.ordersByDay.map(function(){return b2b.avgProcessingHours;}),borderColor:'rgba(74,103,65,0.8)',backgroundColor:'rgba(74,103,65,0.06)',tension:0.3,fill:true,pointRadius:0,borderWidth:2}]},options:Object.assign({},base,{plugins:{legend:leg}})});charts.fulfillment=new Chart(document.getElementById('chartFulfillment'),{type:'line',data:{labels:labels,datasets:[{label:'DTC',data:dtc.ordersByDay.map(function(){return dtc.avgFulfillmentHours;}),borderColor:'rgba(61,92,138,0.8)',backgroundColor:'rgba(61,92,138,0.06)',tension:0.3,fill:true,pointRadius:0,borderWidth:2},{label:'B2B',data:b2b.ordersByDay.map(function(){return b2b.avgFulfillmentHours;}),borderColor:'rgba(74,103,65,0.8)',backgroundColor:'rgba(74,103,65,0.06)',tension:0.3,fill:true,pointRadius:0,borderWidth:2}]},options:Object.assign({},base,{plugins:{legend:leg}})});var dc=0,bc=0;charts.cumulative=new Chart(document.getElementById('chartCumulative'),{type:'line',data:{labels:labels,datasets:[{label:'DTC Fulfilled',data:dtc.fulfillmentsByDay.map(function(d){return(dc+=d.fulfilled);}),borderColor:'rgba(61,92,138,1)',backgroundColor:'rgba(61,92,138,0.05)',tension:0.2,fill:true,pointRadius:0,borderWidth:2},{label:'B2B Fulfilled',data:b2b.fulfillmentsByDay.map(function(d){return(bc+=d.fulfilled);}),borderColor:'rgba(74,103,65,1)',backgroundColor:'rgba(74,103,65,0.05)',tension:0.2,fill:true,pointRadius:0,borderWidth:2}]},options:Object.assign({},base,{plugins:{legend:leg}})});}
+function destroyCharts(){Object.values(charts).forEach(function(c){c.destroy();});charts={};}
+function renderIssues(flagged,filter){var tbody=document.getElementById('issuesBody');var filtered=filter==='all'?flagged:flagged.filter(function(o){return o.issues.some(function(i){return i.type===filter||(filter==='delivery'&&i.type==='delivery_stalled');});});if(!filtered.length){tbody.innerHTML='<tr><td colspan="8" class="issues-empty">No orders exceeded the 10-day threshold'+(filter!=='all'?' for this category':'')+'</td></tr>';return;}tbody.innerHTML=filtered.map(function(o){var cls=o.store==='DTC'?'dtc':'b2b';var tags=o.issues.map(function(i){var lbl={processing:'Processing: '+fmtH(i.hours),fulfillment:'Fulfillment: '+fmtH(i.hours),delivery:'Delivery: '+fmtH(i.hours),delivery_stalled:'Stalled: '+fmtH(i.hours)}[i.type]||i.type;return'<span class="issue-tag '+i.type+'">'+lbl+'</span>';}).join('');return'<tr><td><div class="order-num">#'+o.orderNumber+'</div></td><td><span class="store-pill"><span class="store-dot '+cls+'"></span>'+o.store+'</span></td><td><div class="order-customer">'+esc(o.customerName)+'</div>'+(o.email?'<div class="order-email">'+esc(o.email)+'</div>':'')+'</td><td class="items-cell">'+esc(o.itemSummary)+' <span style="color:var(--dim)">('+o.units+'u)</span></td><td><div class="issue-tags">'+tags+'</div></td><td>'+(o.processingHours!==null?fmtH(o.processingHours):'<span class="metric-null">-</span>')+'</td><td>'+(o.fulfillmentHours!==null?fmtH(o.fulfillmentHours):'<span class="metric-null">-</span>')+'</td><td>'+buildTracking(o.tracking)+'</td></tr>';}).join('');}
+function buildTracking(t){if(!t)return'<span style="color:var(--dim);font-size:10px">No tracking</span>';var s=t.shipmentStatus?'<div><span class="tracking-status '+t.shipmentStatus+'">'+t.shipmentStatus.replace(/_/g,' ')+'</span></div>':'';var c=t.company?'<div style="color:var(--muted);font-size:10px">'+esc(t.company)+'</div>':'';var n=t.number?(t.url?'<div class="tracking-num"><a class="tracking-link" href="'+esc(t.url)+'" target="_blank">'+esc(t.number)+' &nearr;</a></div>':'<div class="tracking-num">'+esc(t.number)+'</div>'):'';var a=t.updatedAt?'<div class="tracking-age">'+timeAgo(t.updatedAt)+'</div>':'';return s+c+n+a;}
+function setIssueFilter(filter,btn){document.querySelectorAll('.filter-btn').forEach(function(b){b.classList.remove('active');});btn.classList.add('active');renderIssues(allFlagged,filter);}
+function switchTab(name,btn){document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active');});document.querySelectorAll('.view').forEach(function(v){v.classList.remove('active');});btn.closest('.tab').classList.add('active');document.getElementById('view-'+name).classList.add('active');}
+function setStatus(state){var dot=document.getElementById('refreshDot');dot.className='refresh-dot';if(state==='live')dot.classList.add('live');if(state==='fetching')dot.classList.add('fetching');}
+function show(id){['emptyState','loadingState','dashboard'].forEach(function(s){document.getElementById(s).style.display=s===id?(s==='dashboard'?'block':'flex'):'none';});}
+function showError(msg){var el=document.getElementById('errorBanner');el.textContent='Error: '+msg;el.style.display='block';}
+function hideError(){document.getElementById('errorBanner').style.display='none';}
+function fmtH(h){if(h===null||h===undefined)return'-';if(h<24)return h.toFixed(1)+'h';return(h/24).toFixed(1)+'d';}
+function esc(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function timeAgo(iso){var h=(Date.now()-new Date(iso).getTime())/36e5;if(h<1)return Math.round(h*60)+'m ago';if(h<24)return Math.round(h)+'h ago';return Math.round(h/24)+'d ago';}
+runFetch();
 </script>
 </body>
 </html>
