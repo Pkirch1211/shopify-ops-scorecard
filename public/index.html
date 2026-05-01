@@ -173,7 +173,7 @@ tbody tr.combined-row{background:var(--green-light)}
 <script>
 const MONTHS=['January','February','March','April','May','June','July','August','September','October','November','December'];
 const REFRESH_MS=5*60*1000;
-let charts={},allFlagged=[],refreshTimer=null,countdownTimer=null,nextRefreshAt=null,hasData=false;
+let charts={},allFlagged=[],refreshTimer=null,hasData=false;
 const monthSel=document.getElementById('monthSelect');
 const yearSel=document.getElementById('yearSelect');
 MONTHS.forEach(function(m,i){var o=document.createElement('option');o.value=i+1;o.textContent=m;monthSel.appendChild(o);});
@@ -181,9 +181,9 @@ var now=new Date();monthSel.value=now.getMonth()+1;
 for(var y=now.getFullYear();y>=2022;y--){var o=document.createElement('option');o.value=y;o.textContent=y;yearSel.appendChild(o);}
 monthSel.addEventListener('change',function(){clearTimers();clearDashboard();runFetch();});
 yearSel.addEventListener('change',function(){clearTimers();clearDashboard();runFetch();});
-function scheduleRefresh(){clearTimers();nextRefreshAt=Date.now()+REFRESH_MS;refreshTimer=setTimeout(function(){runFetch();},REFRESH_MS);countdownTimer=setInterval(updateCountdown,1000);updateCountdown();}
+function scheduleRefresh(){if(refreshTimer)clearTimeout(refreshTimer);refreshTimer=setTimeout(function(){runFetch();},REFRESH_MS);}
 function clearTimers(){if(refreshTimer)clearTimeout(refreshTimer);if(countdownTimer)clearInterval(countdownTimer);}
-function updateCountdown(){var r=Math.max(0,nextRefreshAt-Date.now());var m=Math.floor(r/60000);var s=Math.floor((r%60000)/1000);document.getElementById('nextRefresh').textContent='Next refresh in '+m+':'+(s<10?'0':'')+s;}
+function updateCountdown(){}
 function clearDashboard(){
   if(!hasData)return;
   ['kpiOrders','kpiUnits','kpiProcessing','kpiFulfillment','kpiDelivery'].forEach(function(id){var el=document.getElementById(id);if(el)el.textContent='-';});
