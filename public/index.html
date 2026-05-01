@@ -186,10 +186,10 @@ function clearTimers(){if(refreshTimer)clearTimeout(refreshTimer);if(countdownTi
 function updateCountdown(){var r=Math.max(0,nextRefreshAt-Date.now());var m=Math.floor(r/60000);var s=Math.floor((r%60000)/1000);document.getElementById('nextRefresh').textContent='Next refresh in '+m+':'+(s<10?'0':'')+s;}
 function clearDashboard(){
   if(!hasData)return;
-  ['kpiOrders','kpiUnits','kpiProcessing','kpiFulfillment','kpiDelivery'].forEach(function(id){document.getElementById(id).textContent='-';});
-  ['kpiOrdersSub','kpiUnitsSub','kpiProcessingSub','kpiFulfillmentSub','kpiDeliverySub'].forEach(function(id){document.getElementById(id).innerHTML='';});
-  document.getElementById('scorecardBody').innerHTML='';
-  document.getElementById('issuesBody').innerHTML='';
+  ['kpiOrders','kpiUnits','kpiProcessing','kpiFulfillment','kpiDelivery'].forEach(function(id){var el=document.getElementById(id);if(el)el.textContent='-';});
+  ['kpiOrdersSub','kpiUnitsSub','kpiProcessingSub','kpiFulfillmentSub','kpiDeliverySub'].forEach(function(id){var el=document.getElementById(id);if(el)el.innerHTML='';});
+  var sb=document.getElementById('scorecardBody');if(sb)sb.innerHTML='';
+  var ib=document.getElementById('issuesBody');if(ib)ib.innerHTML='';
   destroyCharts();
   show('loadingState');
 }
