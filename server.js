@@ -83,7 +83,7 @@ async function gql(store, token, query, variables = {}) {
 async function gqlAll(store, token, query, variables, getEdges, getPageInfo, deadlineMs = 120000) {
   let results = [], cursor = null, pages = 0;
   const DEADLINE = Date.now() + deadlineMs;
-  while (pages < 50) {
+  while (pages < 100) {
     if (Date.now() > DEADLINE) { console.warn(`gqlAll deadline at ${pages} pages, ${results.length} results`); break; }
     const data = await gql(store, token, query, { ...variables, after: cursor });
     results = results.concat(getEdges(data).map(e => e.node));
@@ -259,6 +259,7 @@ function processOrderNode(node, store, draftCompletedAt) {
 }
 
 // ── Sync logic ────────────────────────────────────────────────────────────────
+let syncInProgress = false;
 async function syncStore(store, token, label, since, draftsMap = {}) {
   const query = since
     ? `updated_at:>=${since}`
@@ -328,8 +329,10 @@ async function buildDraftsMap(store, token, since) {
 }
 
 async function runSync(isFullBackfill = false) {
+  if (syncInProgress) { console.log('[sync] Skipping — sync already in progress'); return; }
   const { dtcStore, dtcToken, b2bStore, b2bToken } = CREDS;
   if (!dtcStore || !b2bStore) return;
+  syncInProgress = true;
 
   try {
     // Get last sync time
@@ -362,6 +365,8 @@ async function runSync(isFullBackfill = false) {
     console.log(`[sync] Done — DTC: ${dtcCount}, B2B: ${b2bCount} orders upserted`);
   } catch (err) {
     console.error("[sync] Error:", err.message);
+  } finally {
+    syncInProgress = false;
   }
 }
 
