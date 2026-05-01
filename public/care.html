@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Care@ Scorecard — LifeLines</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+@import url('https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=swap');
+:root{--bg:#f0f0eb;--surface:#f7f7f3;--surface2:#e8e8e3;--border:#d4d4cc;--border2:#c8c8c0;--text:#2a2a28;--muted:#6b6b64;--dim:#9a9a92;--green:#4a6741;--green-bg:#4a6741;--green-light:#e8ede7;--care:#6b4a8a;--care-light:#f0ecf5;--sans:'Satoshi',sans-serif;--shadow:0 1px 3px rgba(0,0,0,0.07)}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;min-height:100vh}
+header{display:grid;grid-template-columns:auto 1fr auto;align-items:stretch;border-bottom:2px solid var(--border);background:var(--surface)}
+.header-brand{background:var(--green-bg);color:#fff;padding:14px 22px;display:flex;flex-direction:column;justify-content:center}
+.brand-name{font-size:15px;font-weight:700;letter-spacing:.1em;text-transform:uppercase}
+.brand-sub{font-size:9px;letter-spacing:.14em;text-transform:uppercase;opacity:.65;margin-top:2px}
+.header-title{padding:14px 24px;display:flex;flex-direction:column;justify-content:center;border-right:1px solid var(--border)}
+.header-title h1{font-size:15px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+.header-title p{font-size:10px;color:var(--muted);margin-top:3px;letter-spacing:.05em}
+.header-right{display:flex;align-items:center;gap:20px;padding:0 24px}
+nav{display:flex;gap:3px}
+.nav-link{font-size:10px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;padding:6px 14px;border:1px solid transparent;border-radius:2px;text-decoration:none;color:var(--muted);transition:all .12s}
+.nav-link:hover{color:var(--text);border-color:var(--border2)}
+.nav-link.active{color:var(--care);border-color:var(--care);background:var(--care-light)}
+.refresh-status{font-size:10px;color:var(--dim);display:flex;align-items:center;gap:7px;white-space:nowrap}
+.refresh-dot{width:6px;height:6px;border-radius:50%;background:var(--dim);flex-shrink:0}
+.refresh-dot.live{background:var(--green);animation:pulse 2s infinite}
+.refresh-dot.fetching{background:#8a5c2a;animation:spin .7s linear infinite;border-radius:0;width:8px;height:8px}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+@keyframes spin{to{transform:rotate(360deg)}}
+.controls-bar{display:flex;align-items:center;gap:10px;padding:14px 28px;background:var(--surface2);border-bottom:1px solid var(--border)}
+.controls-bar label{font-size:10px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+select{background:var(--surface);border:1px solid var(--border2);color:var(--text);font-family:var(--sans);font-size:12px;padding:5px 10px;border-radius:2px;outline:none}
+select:focus{border-color:var(--care)}
+main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
+.section-header{display:flex;align-items:center;gap:10px;margin-bottom:12px;margin-top:28px}
+.section-header:first-child{margin-top:0}
+.section-dot{width:6px;height:6px;border-radius:50%;background:var(--care);flex-shrink:0}
+.section-title{font-size:10px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.section-line{flex:1;height:1px;background:var(--border)}
+.period-badge{font-size:10px;font-weight:500;color:var(--care);border:1px solid var(--care);background:var(--care-light);padding:2px 8px;border-radius:2px}
+.kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--border);border-radius:3px;overflow:hidden;background:var(--border);gap:1px;box-shadow:var(--shadow)}
+.kpi-card{background:var(--surface);padding:18px 20px}
+.kpi-label{font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+.kpi-value{font-size:26px;font-weight:700;color:var(--text);line-height:1}
+.charts-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.chart-card{background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:16px 18px;box-shadow:var(--shadow)}
+.chart-card.full{grid-column:span 2}
+.chart-title{font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:14px}
+.chart-container{position:relative;height:180px}
+.chart-card.full .chart-container{height:200px}
+.table-wrap{border:1px solid var(--border);border-radius:3px;overflow:hidden;box-shadow:var(--shadow)}
+table{width:100%;border-collapse:collapse}
+thead tr{background:var(--surface2)}
+th{font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);padding:10px 16px;text-align:left;border-bottom:1px solid var(--border)}
+td{padding:12px 16px;border-bottom:1px solid var(--border);font-size:12px}
+tr:last-child td{border-bottom:none}
+tbody tr{background:var(--surface)}
+tbody tr:hover{background:var(--bg)}
+.metric-null{color:var(--dim)}
+.state-panel{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:80px 40px;gap:12px;text-align:center}
+.state-title{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text)}
+.state-sub{font-size:13px;color:var(--muted);max-width:340px;line-height:1.6}
+.spinner{width:16px;height:16px;border:2px solid var(--border2);border-top-color:var(--care);border-radius:50%;animation:spin .7s linear infinite}
+.error-banner{background:#f5e0e0;border:1px solid #d49696;color:#8a2a2a;font-size:11px;padding:10px 16px;border-radius:2px;margin-bottom:16px;display:none}
+.care-tag{display:inline-block;font-size:10px;font-weight:600;padding:2px 10px;border-radius:2px;background:var(--care-light);color:var(--care);border:1px solid #c4aad8;margin-left:8px;letter-spacing:.05em}
+@media(max-width:900px){.kpi-grid{grid-template-columns:repeat(2,1fr)}.charts-grid{grid-template-columns:1fr}.chart-card.full{grid-column:span 1}}
+</style>
+</head>
+<body>
+<header>
+  <div class="header-brand"><div class="brand-name">LifeLines</div><div class="brand-sub">Ops Tools</div></div>
+  <div class="header-title">
+    <h1>Care@ Scorecard <span class="care-tag">care@lifelines.com</span></h1>
+    <p>Order performance filtered to care@ orders only</p>
+  </div>
+  <div class="header-right">
+    <nav>
+      <a href="/" class="nav-link">Scorecard</a>
+      <a href="/dtc.html" class="nav-link">DTC</a>
+      <a href="/b2b.html" class="nav-link">B2B Process</a>
+      <a href="/care.html" class="nav-link active">Care@</a>
+    </nav>
+    <div class="refresh-status"><div class="refresh-dot" id="refreshDot"></div><span id="refreshLabel">Loading...</span></div>
+  </div>
+</header>
+<div class="controls-bar">
+  <label>Period</label>
+  <select id="monthSelect"></select>
+  <select id="yearSelect"></select>
+</div>
+<main>
+  <div class="error-banner" id="errorBanner"></div>
+  <div id="emptyState" class="state-panel"><div class="spinner"></div><div class="state-title">Loading...</div><div class="state-sub">Fetching care@ orders from Shopify.</div></div>
+  <div id="loadingState" class="state-panel" style="display:none"><div class="spinner"></div><div class="state-title">Loading data...</div><div class="state-sub">Fetching orders from Shopify.</div></div>
+  <div id="dashboard" style="display:none">
+    <div class="section-header"><span class="section-dot"></span><span class="section-title">Overview</span><div class="section-line"></div><span class="period-badge" id="periodBadge"></span></div>
+    <div class="kpi-grid">
+      <div class="kpi-card"><div class="kpi-label">Total Orders</div><div class="kpi-value" id="kpiOrders">-</div></div>
+      <div class="kpi-card"><div class="kpi-label">Total Units</div><div class="kpi-value" id="kpiUnits">-</div></div>
+      <div class="kpi-card"><div class="kpi-label">Avg Fulfillment</div><div class="kpi-value" id="kpiFulfillment">-</div></div>
+      <div class="kpi-card"><div class="kpi-label">Avg Delivery</div><div class="kpi-value" id="kpiDelivery">-</div></div>
+    </div>
+    <div class="section-header" style="margin-top:28px"><span class="section-dot"></span><span class="section-title">Volume</span><div class="section-line"></div></div>
+    <div class="charts-grid">
+      <div class="chart-card full"><div class="chart-title">Daily Orders</div><div class="chart-container"><canvas id="chartOrders"></canvas></div></div>
+      <div class="chart-card full"><div class="chart-title">Daily Units</div><div class="chart-container"><canvas id="chartUnits"></canvas></div></div>
+    </div>
+    <div class="section-header" style="margin-top:28px"><span class="section-dot"></span><span class="section-title">Fulfillment</span><div class="section-line"></div></div>
+    <div class="charts-grid">
+      <div class="chart-card full"><div class="chart-title">Cumulative Orders Fulfilled</div><div class="chart-container"><canvas id="chartCumulative"></canvas></div></div>
+    </div>
+  </div>
+</main>
+<script>
+var MONTHS=['January','February','March','April','May','June','July','August','September','October','November','December'];
+var REFRESH_MS=5*60*1000;
+var charts={},refreshTimer=null,hasData=false;
+var monthSel=document.getElementById('monthSelect');
+var yearSel=document.getElementById('yearSelect');
+MONTHS.forEach(function(m,i){var o=document.createElement('option');o.value=i+1;o.textContent=m;monthSel.appendChild(o);});
+var now=new Date();monthSel.value=now.getMonth()+1;
+for(var y=now.getFullYear();y>=2022;y--){var o=document.createElement('option');o.value=y;o.textContent=y;yearSel.appendChild(o);}
+monthSel.addEventListener('change',function(){clearTimeout(refreshTimer);clearDashboard();runFetch();});
+yearSel.addEventListener('change',function(){clearTimeout(refreshTimer);clearDashboard();runFetch();});
+
+function clearDashboard(){if(!hasData)return;['kpiOrders','kpiUnits','kpiFulfillment','kpiDelivery'].forEach(function(id){document.getElementById(id).textContent='-';});destroyCharts();show('loadingState');}
+
+async function runFetch(){
+  setStatus('fetching');if(!hasData)show('emptyState');hideError();
+  try{
+    var res=await fetch('/api/care-scorecard',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({year:parseInt(yearSel.value),month:parseInt(monthSel.value)})});
+    var data=await res.json();
+    if(!res.ok)throw new Error(data.error||'Server error');
+    hasData=true;render(data);setStatus('live');
+    refreshTimer=setTimeout(function(){runFetch();},REFRESH_MS);
+  }catch(err){showError(err.message);setStatus('error');if(!hasData)show('emptyState');}
+}
+
+function render(data){
+  show('dashboard');
+  document.getElementById('periodBadge').textContent=MONTHS[data.month-1]+' '+data.year;
+  document.getElementById('refreshLabel').textContent='Updated '+new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+  document.getElementById('kpiOrders').textContent=data.totalOrders.toLocaleString();
+  document.getElementById('kpiUnits').textContent=data.totalUnits.toLocaleString();
+  document.getElementById('kpiFulfillment').textContent=data.avgFulfillmentFormatted||'-';
+  document.getElementById('kpiDelivery').textContent=data.avgDeliveryFormatted||'-';
+  buildCharts(data);
+}
+
+function buildCharts(data){
+  destroyCharts();
+  var labels=data.ordersByDay.map(function(d){return d.day;});
+  var grid='#d4d4cc',tick='#9a9a92';
+  var careColor='rgba(107,74,138,';
+  var base={responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{color:tick,font:{family:'Satoshi',size:10},maxTicksLimit:10},grid:{color:grid},border:{color:'transparent'}},y:{ticks:{color:tick,font:{family:'Satoshi',size:10}},grid:{color:grid},border:{color:'transparent'},beginAtZero:true}}};
+  charts.orders=new Chart(document.getElementById('chartOrders'),{type:'bar',data:{labels:labels,datasets:[{label:'Orders',data:data.ordersByDay.map(function(d){return d.orders;}),backgroundColor:careColor+'0.6)',borderRadius:2}]},options:base});
+  charts.units=new Chart(document.getElementById('chartUnits'),{type:'bar',data:{labels:labels,datasets:[{label:'Units',data:data.ordersByDay.map(function(d){return d.units;}),backgroundColor:careColor+'0.45)',borderRadius:2}]},options:base});
+  var cum=0;
+  charts.cumulative=new Chart(document.getElementById('chartCumulative'),{type:'line',data:{labels:labels,datasets:[{label:'Fulfilled',data:data.fulfillmentsByDay.map(function(d){return(cum+=d.fulfilled);}),borderColor:careColor+'1)',backgroundColor:careColor+'0.05)',tension:0.2,fill:true,pointRadius:0,borderWidth:2}]},options:base});
+}
+
+function destroyCharts(){Object.values(charts).forEach(function(c){c.destroy();});charts={};}
+function setStatus(state){var dot=document.getElementById('refreshDot');dot.className='refresh-dot';if(state==='live')dot.classList.add('live');if(state==='fetching')dot.classList.add('fetching');}
+function show(id){['emptyState','loadingState','dashboard'].forEach(function(s){var el=document.getElementById(s);if(!el)return;el.style.display=s===id?(s==='dashboard'?'block':'flex'):'none';});}
+function showError(msg){var el=document.getElementById('errorBanner');el.textContent='Error: '+msg;el.style.display='block';}
+function hideError(){document.getElementById('errorBanner').style.display='none';}
+runFetch();
+</script>
+</body>
+</html>
