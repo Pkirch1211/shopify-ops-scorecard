@@ -331,11 +331,15 @@ app.post("/api/care-scorecard", async (req, res) => {
   const end = new Date(year, month, 1).toISOString();
 
   try {
-    // Fetch orders for care@lifelines.com only
-    const orders = await shopifyFetchAll(
+    // Shopify REST doesn't support email filter on orders — fetch all and filter in Node
+    const allOrders = await shopifyFetchAll(
       dtcStore, dtcToken,
-      `/orders.json?status=any&created_at_min=${start}&created_at_max=${end}&email=care@lifelines.com&limit=250&fields=id,order_number,created_at,fulfillments,line_items,email`,
+      `/orders.json?status=any&created_at_min=${start}&created_at_max=${end}&limit=250&fields=id,order_number,created_at,fulfillments,line_items,email`,
       "orders"
+    );
+
+    const orders = allOrders.filter(o =>
+      (o.email || '').toLowerCase() === 'care@lifelines.com'
     );
 
     const fulfillmentTimes = [];
