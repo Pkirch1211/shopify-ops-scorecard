@@ -185,18 +185,16 @@ query Orders($first: Int!, $after: String, $query: String!) {
         name
         createdAt
         email
-        displayFulfillmentStatus
         shippingAddress { firstName lastName }
         billingAddress { firstName lastName }
-        lineItems(first: 50) {
+        lineItems(first: 20) {
           edges { node { quantity } }
         }
-        fulfillments(first: 10) {
+        fulfillments(first: 5) {
           createdAt
           updatedAt
-          status
           displayStatus
-          trackingInfo(first: 5) { company number url }
+          trackingInfo(first: 1) { company number url }
         }
       }
     }
