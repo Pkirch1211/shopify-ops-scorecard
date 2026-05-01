@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DTC Fulfillment — LifeLines</title>
+<style>
+@import url('https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=swap');
+:root{--bg:#f0f0eb;--surface:#f7f7f3;--surface2:#e8e8e3;--border:#d4d4cc;--border2:#c8c8c0;--text:#2a2a28;--muted:#6b6b64;--dim:#9a9a92;--green:#4a6741;--green-bg:#4a6741;--green-light:#e8ede7;--dtc:#3d5c8a;--dtc-light:#e8edf4;--warn:#8a5c2a;--danger:#8a2a2a;--sans:'Satoshi',sans-serif;--shadow:0 1px 3px rgba(0,0,0,0.07)}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;min-height:100vh}
+header{display:grid;grid-template-columns:auto 1fr auto;align-items:stretch;border-bottom:2px solid var(--border);background:var(--surface)}
+.header-brand{background:var(--green-bg);color:#fff;padding:14px 22px;display:flex;flex-direction:column;justify-content:center}
+.brand-name{font-size:15px;font-weight:700;letter-spacing:.1em;text-transform:uppercase}
+.brand-sub{font-size:9px;letter-spacing:.14em;text-transform:uppercase;opacity:.65;margin-top:2px}
+.header-title{padding:14px 24px;display:flex;flex-direction:column;justify-content:center;border-right:1px solid var(--border)}
+.header-title h1{font-size:15px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+.header-title p{font-size:10px;color:var(--muted);margin-top:3px;letter-spacing:.05em}
+.header-right{display:flex;align-items:center;gap:20px;padding:0 24px}
+nav{display:flex;gap:3px}
+.nav-link{font-size:10px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;padding:6px 14px;border:1px solid transparent;border-radius:2px;text-decoration:none;color:var(--muted);transition:all .12s}
+.nav-link:hover{color:var(--text);border-color:var(--border2)}
+.nav-link.active{color:var(--green);border-color:var(--green);background:var(--green-light)}
+.refresh-status{font-size:10px;color:var(--dim);display:flex;align-items:center;gap:7px;white-space:nowrap}
+.refresh-dot{width:6px;height:6px;border-radius:50%;background:var(--dim);flex-shrink:0}
+.refresh-dot.live{background:var(--green);animation:pulse 2s infinite}
+.refresh-dot.fetching{background:var(--warn);animation:spin .7s linear infinite;border-radius:0;width:8px;height:8px}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+@keyframes spin{to{transform:rotate(360deg)}}
+.controls-bar{display:flex;align-items:center;gap:10px;padding:14px 28px;background:var(--surface2);border-bottom:1px solid var(--border)}
+.controls-bar label{font-size:10px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.next-refresh{font-size:10px;color:var(--dim);margin-left:auto}
+main{padding:24px 28px 48px;max-width:1500px;margin:0 auto}
+.section-header{display:flex;align-items:center;gap:10px;margin-bottom:12px;margin-top:28px}
+.section-header:first-child{margin-top:0}
+.section-dot{width:6px;height:6px;border-radius:50%;background:var(--dtc);flex-shrink:0}
+.section-title{font-size:10px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.section-line{flex:1;height:1px;background:var(--border)}
+.kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--border);border-radius:3px;overflow:hidden;background:var(--border);gap:1px;box-shadow:var(--shadow)}
+.kpi-card{background:var(--surface);padding:18px 20px}
+.kpi-label{font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+.kpi-value{font-size:32px;font-weight:700;color:var(--text);line-height:1}
+.kpi-value.warn{color:var(--warn)}
+.kpi-value.danger{color:var(--danger)}
+.kpi-hint{font-size:10px;color:var(--dim);margin-top:8px}
+.filter-bar{display:flex;gap:6px;margin-bottom:12px;align-items:center;flex-wrap:wrap}
+.filter-btn{font-size:10px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;padding:5px 12px;border-radius:2px;border:1px solid var(--border2);background:var(--surface);color:var(--muted);cursor:pointer;transition:all .12s}
+.filter-btn:hover{color:var(--text);border-color:var(--dtc)}
+.filter-btn.active{background:var(--dtc-light);color:var(--dtc);border-color:var(--dtc)}
+.search-input{background:var(--surface);border:1px solid var(--border2);color:var(--text);font-family:var(--sans);font-size:12px;padding:5px 10px;border-radius:2px;outline:none;width:220px}
+.search-input:focus{border-color:var(--dtc)}
+.table-wrap{border:1px solid var(--border);border-radius:3px;overflow:hidden;box-shadow:var(--shadow);overflow-x:auto}
+table{width:100%;border-collapse:collapse;min-width:900px}
+thead tr{background:var(--surface2)}
+th{font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);padding:10px 14px;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap}
+th.sortable{cursor:pointer;user-select:none}
+th.sortable:hover{color:var(--text)}
+th .si{margin-left:4px;opacity:.4;font-size:10px}
+th.sorted .si{opacity:1;color:var(--dtc)}
+td{padding:0;border-bottom:1px solid var(--border);font-size:12px;vertical-align:top}
+.td-inner{padding:12px 14px}
+tr:last-child td{border-bottom:none}
+tbody tr{background:var(--surface);cursor:pointer;transition:background .1s}
+tbody tr:hover{background:var(--bg)}
+tbody tr.expanded{background:var(--dtc-light)}
+tbody tr.expanded:hover{background:var(--dtc-light)}
+.expand-row td{padding:0;border-bottom:1px solid var(--border);background:#edf1f8}
+.expand-content{padding:16px 20px;display:none}
+.expand-row.open .expand-content{display:block}
+.days-badge{display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:2px;border:1px solid}
+.days-badge.critical{background:#f5e0e0;color:var(--danger);border-color:#d49696}
+.days-badge.warn{background:#f5ede0;color:var(--warn);border-color:#d4b896}
+.days-badge.ok{background:var(--dtc-light);color:var(--dtc);border-color:#b0c0d8}
+.status-badge{display:inline-block;font-size:9px;font-weight:600;padding:2px 8px;border-radius:2px;border:1px solid;text-transform:uppercase;letter-spacing:.06em}
+.status-badge.IN_TRANSIT{background:var(--dtc-light);color:var(--dtc);border-color:#b0c0d8}
+.status-badge.CONFIRMED{background:#f0ede8;color:var(--warn);border-color:#d4b896}
+.event-list{display:flex;flex-direction:column;gap:6px}
+.event-item{display:flex;gap:10px;align-items:flex-start;font-size:11px}
+.event-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;margin-top:3px}
+.event-dot.latest{background:var(--dtc)}
+.event-dot.old{background:var(--border2)}
+.event-time{color:var(--muted);white-space:nowrap;min-width:140px;font-size:10px}
+.event-status{font-weight:600;color:var(--text);min-width:120px}
+.event-msg{color:var(--muted)}
+.tracking-block{display:flex;flex-direction:column;gap:3px}
+.tracking-num{font-size:11px;color:var(--dtc);font-weight:500}
+.tracking-carrier{font-size:10px;color:var(--muted)}
+.tracking-link{color:var(--dtc);text-decoration:none;font-size:10px}
+.tracking-link:hover{text-decoration:underline}
+.expand-grid{display:grid;grid-template-columns:1fr 1fr 2fr;gap:20px}
+.expand-section-title{font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+.detail-row{display:flex;gap:8px;margin-bottom:5px;font-size:11px}
+.detail-label{color:var(--muted);min-width:80px;flex-shrink:0}
+.detail-val{color:var(--text)}
+.sku-list{display:flex;flex-direction:column;gap:3px}
+.sku-item{font-size:11px;color:var(--muted)}
+.no-tracking{font-size:11px;color:var(--dim);font-style:italic}
+.empty-state{padding:60px;text-align:center}
+.empty-title{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--green);margin-bottom:8px}
+.empty-sub{font-size:13px;color:var(--muted)}
+.state-panel{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:80px 40px;gap:12px;text-align:center}
+.state-title{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text)}
+.state-sub{font-size:13px;color:var(--muted);max-width:340px;line-height:1.6}
+.spinner{width:16px;height:16px;border:2px solid var(--border2);border-top-color:var(--dtc);border-radius:50%;animation:spin .7s linear infinite}
+.error-banner{background:#f5e0e0;border:1px solid #d49696;color:var(--danger);font-size:11px;padding:10px 16px;border-radius:2px;margin-bottom:16px;display:none}
+.toolbar{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.result-count{font-size:10px;color:var(--muted);margin-left:auto}
+@media(max-width:900px){.expand-grid{grid-template-columns:1fr}.kpi-grid{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<header>
+  <div class="header-brand"><div class="brand-name">LifeLines</div><div class="brand-sub">Ops Tools</div></div>
+  <div class="header-title"><h1>DTC Fulfillment</h1><p>Stale Fulfillments &middot; In Transit &amp; Confirmed &middot; 10+ Days</p></div>
+  <div class="header-right">
+    <nav>
+      <a href="/" class="nav-link">Scorecard</a>
+      <a href="/dtc.html" class="nav-link active">DTC</a>
+      <a href="/b2b.html" class="nav-link">B2B Process</a>
+    </nav>
+    <div class="refresh-status"><div class="refresh-dot" id="refreshDot"></div><span id="refreshLabel">Loading...</span></div>
+  </div>
+</header>
+<div class="controls-bar">
+  <span class="fetch-time" id="fetchTime"></span>
+  <span class="next-refresh" id="nextRefresh"></span>
+</div>
+<main>
+  <div class="error-banner" id="errorBanner"></div>
+  <div id="emptyState" class="state-panel"><div class="spinner"></div><div class="state-title">Loading...</div><div class="state-sub">Scanning DTC fulfilled orders via Shopify GraphQL.</div></div>
+  <div id="dashboard" style="display:none">
+    <div class="section-header"><span class="section-dot"></span><span class="section-title">Overview</span><div class="section-line"></div></div>
+    <div class="kpi-grid">
+      <div class="kpi-card"><div class="kpi-label">Stale Fulfillments</div><div class="kpi-value danger" id="kpiTotal">-</div><div class="kpi-hint">IN_TRANSIT or CONFIRMED &gt;10 days</div></div>
+      <div class="kpi-card"><div class="kpi-label">No Tracking</div><div class="kpi-value warn" id="kpiNoTracking">-</div><div class="kpi-hint">Fulfillments without tracking #</div></div>
+      <div class="kpi-card"><div class="kpi-label">Avg Days Stale</div><div class="kpi-value" id="kpiAvgDays">-</div><div class="kpi-hint">Across all stale fulfillments</div></div>
+      <div class="kpi-card"><div class="kpi-label">Oldest</div><div class="kpi-value warn" id="kpiOldest">-</div><div class="kpi-hint">Days since oldest fulfillment</div></div>
+    </div>
+    <div class="section-header" style="margin-top:28px"><span class="section-dot"></span><span class="section-title">Stale Fulfillments</span><div class="section-line"></div></div>
+    <div class="toolbar">
+      <button class="filter-btn active" onclick="setFilter('all',this)">All</button>
+      <button class="filter-btn" onclick="setFilter('IN_TRANSIT',this)">In Transit</button>
+      <button class="filter-btn" onclick="setFilter('CONFIRMED',this)">Confirmed</button>
+      <button class="filter-btn" onclick="setFilter('no_tracking',this)">No Tracking</button>
+      <input class="search-input" type="text" placeholder="Search order, customer, SKU..." oninput="applyFilters()">
+      <span class="result-count" id="resultCount"></span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th></th>
+          <th class="sortable sorted" onclick="sortTable('daysSinceFulfilled',this)" data-col="daysSinceFulfilled">Days Stale <span class="si">&#8595;</span></th>
+          <th>Order</th>
+          <th>Customer</th>
+          <th>Status</th>
+          <th>Fulfilled</th>
+          <th>Last Event</th>
+          <th>Tracking</th>
+          <th>SKUs</th>
+        </tr></thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+<script>
+var allRows=[], filteredRows=[], activeFilter='all', sortCol='daysSinceFulfilled', sortDir=-1;
+var REFRESH_MS=5*60*1000, refreshTimer=null, countdownTimer=null, nextRefreshAt=null, hasData=false;
+
+function scheduleRefresh(){clearTimers();nextRefreshAt=Date.now()+REFRESH_MS;refreshTimer=setTimeout(function(){runFetch();},REFRESH_MS);countdownTimer=setInterval(updateCountdown,1000);updateCountdown();}
+function clearTimers(){if(refreshTimer)clearTimeout(refreshTimer);if(countdownTimer)clearInterval(countdownTimer);}
+function updateCountdown(){var r=Math.max(0,nextRefreshAt-Date.now());var m=Math.floor(r/60000);var s=Math.floor((r%60000)/1000);document.getElementById('nextRefresh').textContent='Next refresh in '+m+':'+(s<10?'0':'')+s;}
+function setStatus(state){var dot=document.getElementById('refreshDot');dot.className='refresh-dot';if(state==='live')dot.classList.add('live');if(state==='fetching')dot.classList.add('fetching');}
+function showError(msg){var el=document.getElementById('errorBanner');el.textContent='Error: '+msg;el.style.display='block';}
+function hideError(){document.getElementById('errorBanner').style.display='none';}
+function esc(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function fmt(iso){if(!iso)return'-';var d=new Date(iso);return d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})+' '+d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});}
+function fmtShort(iso){if(!iso)return'-';return new Date(iso).toLocaleDateString('en-US',{month:'short',day:'numeric'});}
+
+async function runFetch(){
+  clearTimers();setStatus('fetching');if(!hasData)show('emptyState');hideError();
+  try{
+    var res=await fetch('/api/dtc-stale',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});
+    var data=await res.json();
+    if(!res.ok)throw new Error(data.error||'Server error');
+    hasData=true;render(data);setStatus('live');scheduleRefresh();
+  }catch(err){showError(err.message);setStatus('error');if(!hasData)show('emptyState');scheduleRefresh();}
+}
+
+function render(data){
+  show('dashboard');
+  allRows=data.rows||[];
+  document.getElementById('fetchTime').textContent='Updated '+new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+  document.getElementById('refreshLabel').textContent='Updated '+new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+  var noTracking=allRows.filter(function(r){return!r.hasTracking;}).length;
+  var avgDays=allRows.length?Math.round(allRows.reduce(function(s,r){return s+r.daysSinceFulfilled;},0)/allRows.length):0;
+  var oldest=allRows.length?allRows[0].daysSinceFulfilled:0;
+  document.getElementById('kpiTotal').textContent=allRows.length.toLocaleString();
+  document.getElementById('kpiNoTracking').textContent=noTracking.toLocaleString();
+  document.getElementById('kpiAvgDays').textContent=avgDays+'d';
+  document.getElementById('kpiOldest').textContent=oldest+'d';
+  applyFilters();
+}
+
+function setFilter(f,btn){
+  activeFilter=f;
+  document.querySelectorAll('.filter-btn').forEach(function(b){b.classList.remove('active');});
+  btn.classList.add('active');
+  applyFilters();
+}
+
+function applyFilters(){
+  var q=(document.querySelector('.search-input')||{value:''}).value.toLowerCase();
+  filteredRows=allRows.filter(function(r){
+    if(activeFilter==='IN_TRANSIT'&&r.displayStatus!=='IN_TRANSIT')return false;
+    if(activeFilter==='CONFIRMED'&&r.displayStatus!=='CONFIRMED')return false;
+    if(activeFilter==='no_tracking'&&r.hasTracking)return false;
+    if(q){
+      var hay=[r.orderName,r.customerName,r.email,r.skus.join(' '),r.shippingAddress].join(' ').toLowerCase();
+      if(!hay.includes(q))return false;
+    }
+    return true;
+  });
+  filteredRows.sort(function(a,b){
+    var av=a[sortCol],bv=b[sortCol];
+    if(typeof av==='string')return sortDir*(av.localeCompare(bv));
+    return sortDir*(bv-av);
+  });
+  document.getElementById('resultCount').textContent=filteredRows.length+' of '+allRows.length+' fulfillments';
+  renderTable(filteredRows);
+}
+
+function sortTable(col,th){
+  if(sortCol===col)sortDir*=-1;else{sortCol=col;sortDir=-1;}
+  document.querySelectorAll('th[data-col]').forEach(function(t){t.classList.remove('sorted');t.querySelector('.si').innerHTML='&#8597;';});
+  th.classList.add('sorted');th.querySelector('.si').innerHTML=sortDir===-1?'&#8595;':'&#8593;';
+  applyFilters();
+}
+
+function renderTable(rows){
+  var tbody=document.getElementById('tableBody');
+  if(!rows.length){
+    tbody.innerHTML='<tr><td colspan="9"><div class="empty-state"><div class="empty-title">No stale fulfillments</div><div class="empty-sub">No fulfillments matched the current filter.</div></div></td></tr>';
+    return;
+  }
+  tbody.innerHTML=rows.map(function(r,i){
+    var dc=r.daysSinceFulfilled>=30?'critical':r.daysSinceFulfilled>=14?'warn':'ok';
+    var latest=r.latestEvent;
+    var latestStr=latest?('<span style="color:var(--text);font-weight:500">'+esc(latest.status)+'</span> <span style="color:var(--muted);font-size:10px">'+fmtShort(latest.happenedAt)+'</span>'):'<span style="color:var(--dim)">None</span>';
+    var trackingStr=r.tracking.length?r.tracking.map(function(t){return esc(t.company||'')+' '+esc(t.number||'');}).join('<br>'):'<span style="color:var(--dim)">No tracking</span>';
+    var skuStr=r.skus.slice(0,2).map(function(s){return esc(s);}).join('<br>')+(r.skus.length>2?' <span style="color:var(--dim)">+'+( r.skus.length-2)+' more</span>':'');
+    return '<tr onclick="toggleExpand('+i+')" id="row-'+i+'">'+
+      '<td class="td-inner" style="width:28px;color:var(--dim);font-size:11px" id="chevron-'+i+'">&#9654;</td>'+
+      '<td class="td-inner"><span class="days-badge '+dc+'">'+r.daysSinceFulfilled+'d</span></td>'+
+      '<td class="td-inner"><div style="font-weight:600;color:var(--text)">'+esc(r.orderName)+'</div><div style="color:var(--muted);font-size:10px">'+esc(r.fulfillmentName)+'</div></td>'+
+      '<td class="td-inner"><div>'+esc(r.customerName)+'</div><div style="color:var(--muted);font-size:10px">'+esc(r.email)+'</div></td>'+
+      '<td class="td-inner"><span class="status-badge '+r.displayStatus+'">'+esc(r.displayStatus.replace(/_/g,' '))+'</span></td>'+
+      '<td class="td-inner" style="color:var(--muted);font-size:11px">'+fmtShort(r.fulfilledAt)+'</td>'+
+      '<td class="td-inner">'+latestStr+'</td>'+
+      '<td class="td-inner">'+trackingStr+'</td>'+
+      '<td class="td-inner" style="color:var(--muted)">'+skuStr+'</td>'+
+      '</tr>'+
+      '<tr class="expand-row" id="expand-'+i+'"><td colspan="9"><div class="expand-content" id="content-'+i+'">'+buildDetail(r)+'</div></td></tr>';
+  }).join('');
+}
+
+function buildDetail(r){
+  var trackingHtml='';
+  if(r.tracking.length){
+    trackingHtml=r.tracking.map(function(t){
+      return '<div class="tracking-block">'+
+        (t.company?'<div class="tracking-carrier">'+esc(t.company)+'</div>':'')+
+        '<div class="tracking-num">'+esc(t.number||'')+'</div>'+
+        (t.url?'<a class="tracking-link" href="'+esc(t.url)+'" target="_blank">Track package &#8599;</a>':'')+
+        '</div>';
+    }).join('<br>');
+  } else {
+    trackingHtml='<div class="no-tracking">No tracking information</div>';
+  }
+
+  var eventsHtml='';
+  if(r.allEvents&&r.allEvents.length){
+    eventsHtml='<div class="event-list">'+r.allEvents.map(function(e,i){
+      return '<div class="event-item">'+
+        '<div class="event-dot '+(i===0?'latest':'old')+'"></div>'+
+        '<div class="event-time">'+fmt(e.happenedAt)+'</div>'+
+        '<div class="event-status">'+esc(e.status||'')+'</div>'+
+        '<div class="event-msg">'+esc(e.message||'')+'</div>'+
+        '</div>';
+    }).join('')+'</div>';
+  } else {
+    eventsHtml='<div class="no-tracking">No tracking events recorded</div>';
+  }
+
+  var skusHtml='<div class="sku-list">'+r.skus.map(function(s){return'<div class="sku-item">'+esc(s)+'</div>';}).join('')+'</div>';
+  if(!r.skus.length)skusHtml='<div class="no-tracking">No SKU data</div>';
+
+  return '<div class="expand-grid">'+
+    '<div>'+
+      '<div class="expand-section-title">Order Details</div>'+
+      '<div class="detail-row"><span class="detail-label">Order</span><span class="detail-val">'+esc(r.orderName)+'</span></div>'+
+      '<div class="detail-row"><span class="detail-label">Customer</span><span class="detail-val">'+esc(r.customerName)+'</span></div>'+
+      '<div class="detail-row"><span class="detail-label">Email</span><span class="detail-val">'+esc(r.email)+'</span></div>'+
+      '<div class="detail-row"><span class="detail-label">Ship to</span><span class="detail-val">'+esc(r.shippingAddress)+'</span></div>'+
+      '<div class="detail-row"><span class="detail-label">Total</span><span class="detail-val">'+esc(r.orderTotal)+'</span></div>'+
+      '<div class="detail-row"><span class="detail-label">Tags</span><span class="detail-val" style="color:var(--muted)">'+esc(r.tags||'-')+'</span></div>'+
+      '<div style="margin-top:12px"><div class="expand-section-title">Items</div>'+skusHtml+'</div>'+
+      '<div style="margin-top:12px"><div class="expand-section-title">Tracking</div>'+trackingHtml+'</div>'+
+    '</div>'+
+    '<div style="grid-column:span 2">'+
+      '<div class="expand-section-title">Full Tracking Event History (newest first)</div>'+
+      eventsHtml+
+    '</div>'+
+  '</div>';
+}
+
+function toggleExpand(i){
+  var row=document.getElementById('row-'+i);
+  var exp=document.getElementById('expand-'+i);
+  var content=document.getElementById('content-'+i);
+  var chevron=document.getElementById('chevron-'+i);
+  var isOpen=exp.classList.contains('open');
+  if(isOpen){
+    exp.classList.remove('open');content.style.display='none';
+    row.classList.remove('expanded');chevron.innerHTML='&#9654;';
+  } else {
+    exp.classList.add('open');content.style.display='block';
+    row.classList.add('expanded');chevron.innerHTML='&#9660;';
+  }
+}
+
+function show(id){['emptyState','dashboard'].forEach(function(s){document.getElementById(s).style.display=s===id?(s==='dashboard'?'block':'flex'):'none';});}
+
+runFetch();
+</script>
+</body>
+</html>
