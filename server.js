@@ -156,7 +156,6 @@ query DraftOrders($first: Int!, $after: String, $query: String!) {
       node {
         id name createdAt completedAt status email tags
         totalPrice subtotalPrice
-        customer { firstName lastName email }
         lineItems(first: 50) {
           edges {
             node {
@@ -178,7 +177,6 @@ query StaleFulfillments($first: Int!, $after: String, $query: String!) {
       node {
         id name createdAt cancelledAt email displayFulfillmentStatus
         totalPriceSet { shopMoney { amount currencyCode } }
-        customer { displayName }
         shippingAddress { name address1 address2 city province zip country }
         tags
         fulfillments(first: 10) {
@@ -589,7 +587,7 @@ app.post("/api/dtc-stale", async (req, res) => {
         rows.push({
           orderName: order.name, orderId: order.id, orderCreatedAt: order.createdAt,
           email: order.email,
-          customerName: order.customer?.displayName || addr.name || "",
+          customerName: addr.name || order.email || "",
           shippingAddress: [addr.address1, addr.address2, addr.city, addr.province, addr.zip, addr.country].filter(Boolean).join(", "),
           orderTotal: total.amount ? `${total.currencyCode} ${parseFloat(total.amount).toFixed(2)}` : "",
           fulfillmentId: f.id, fulfillmentName: f.name, fulfilledAt: f.createdAt,
@@ -625,9 +623,8 @@ app.post("/api/b2b-drafts", async (req, res) => {
 
     const customerMap = {};
     for (const d of drafts) {
-      const name = d.customer ? `${d.customer.firstName || ""} ${d.customer.lastName || ""}`.trim() : null;
-      const email = d.customer?.email || d.email || null;
-      const key = (name && name !== "") ? name : (email || "Unknown");
+      const email = d.email || null;
+      const key = email || "Unknown";
       if (!customerMap[key]) customerMap[key] = { customer: key, email: email || "—", draftCount: 0, totalValue: 0 };
       customerMap[key].draftCount++;
       customerMap[key].totalValue += parseFloat(d.totalPrice || 0);
@@ -674,8 +671,8 @@ app.post("/api/b2b-drafts", async (req, res) => {
 
     const needsReviewExport = needsReview.map(d => ({
       name: d.name, createdAt: d.createdAt, tags: (d.tags || []).join(", "),
-      customerName: d.customer ? `${d.customer.firstName || ""} ${d.customer.lastName || ""}`.trim() : (d.email || "—"),
-      email: d.customer?.email || d.email || "",
+      customerName: d.email || "—",
+      email: d.email || "",
       subtotal: d.subtotalPrice, total: d.totalPrice,
       lineItems: (d.lineItems.edges || []).map(e => ({
         title: e.node.title, variantTitle: e.node.variantTitle || "",
