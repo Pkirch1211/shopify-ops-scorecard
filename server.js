@@ -460,6 +460,150 @@ app.post('/api/b2b-drafts', async (req, res) => {
   }
 });
 
+// ── DTC Stale Fulfillments (GraphQL) ─────────────────────────────────────────
+const DTC_GQL_QUERY = `
+query FulfilledOrders($first: Int!, $after: String, $query: String!) {
+  orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT, reverse: true) {
+    pageInfo { hasNextPage endCursor }
+    edges {
+      node {
+        id name createdAt cancelledAt displayFulfillmentStatus email
+        totalPriceSet { shopMoney { amount currencyCode } }
+        customer { displayName }
+        shippingAddress { name address1 address2 city province zip country }
+        fulfillments(first: 10) {
+          id name createdAt updatedAt status displayStatus
+          trackingInfo(first: 10) { company number url }
+          events(first: 50) {
+            edges { node { status happenedAt message } }
+          }
+          fulfillmentLineItems(first: 50) {
+            edges { node { quantity lineItem { sku title } } }
+          }
+        }
+        tags
+      }
+    }
+  }
+}`;
+
+async function shopifyGQL(store, token, query, variables) {
+  const url = `https://${store}/admin/api/2024-01/graphql.json`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, variables }),
+  });
+  if (!res.ok) throw new Error(`Shopify GQL HTTP ${res.status}`);
+  const payload = await res.json();
+  if (payload.errors) throw new Error(payload.errors.map(e => e.message).join('; '));
+  return payload.data;
+}
+
+app.post('/api/dtc-stale', async (req, res) => {
+  const { dtcStore, dtcToken } = CREDS;
+  if (!dtcStore || !dtcToken) {
+    return res.status(400).json({ error: 'Missing DTC credentials — set DTC_STORE and DTC_TOKEN in Railway.' });
+  }
+
+  const MIN_DAYS = 10;
+  const TARGET_STATUSES = new Set(['IN_TRANSIT', 'CONFIRMED']);
+
+  function daysSince(isoStr) {
+    if (!isoStr) return null;
+    return (Date.now() - new Date(isoStr).getTime()) / 864e5;
+  }
+
+  function latestEvent(fulfillment) {
+    const events = (fulfillment.events?.edges || [])
+      .map(e => e.node)
+      .filter(e => e.happenedAt)
+      .sort((a, b) => new Date(b.happenedAt) - new Date(a.happenedAt));
+    return events[0] || null;
+  }
+
+  function allEvents(fulfillment) {
+    return (fulfillment.events?.edges || [])
+      .map(e => e.node)
+      .filter(e => e.happenedAt)
+      .sort((a, b) => new Date(b.happenedAt) - new Date(a.happenedAt));
+  }
+
+  try {
+    const rows = [];
+    let after = null;
+    let pages = 0;
+    const MAX_PAGES = 50; // safety cap
+
+    while (pages < MAX_PAGES) {
+      const data = await shopifyGQL(dtcStore, dtcToken, DTC_GQL_QUERY, {
+        first: 100,
+        after,
+        query: 'fulfillment_status:fulfilled -status:cancelled',
+      });
+
+      const conn = data.orders;
+      for (const edge of conn.edges) {
+        const order = edge.node;
+        if (order.cancelledAt) continue;
+
+        for (const f of order.fulfillments || []) {
+          const status = (f.displayStatus || '').toUpperCase().replace(/ /g, '_');
+          if (!TARGET_STATUSES.has(status)) continue;
+          const days = daysSince(f.createdAt);
+          if (days === null || days < MIN_DAYS) continue;
+
+          const latest = latestEvent(f);
+          const events = allEvents(f);
+          const tracking = (f.trackingInfo || []);
+          const skus = (f.fulfillmentLineItems?.edges || []).map(e => {
+            const li = e.node.lineItem;
+            return `${li.sku || li.title} x${e.node.quantity}`;
+          });
+
+          const addr = order.shippingAddress || {};
+          const total = order.totalPriceSet?.shopMoney || {};
+
+          rows.push({
+            orderName: order.name,
+            orderId: order.id,
+            orderCreatedAt: order.createdAt,
+            email: order.email,
+            customerName: order.customer?.displayName || addr.name || '',
+            shippingAddress: [addr.address1, addr.address2, addr.city, addr.province, addr.zip, addr.country].filter(Boolean).join(', '),
+            orderTotal: total.amount ? `${total.currencyCode} ${parseFloat(total.amount).toFixed(2)}` : '',
+            fulfillmentId: f.id,
+            fulfillmentName: f.name,
+            fulfilledAt: f.createdAt,
+            daysSinceFulfilled: Math.floor(days),
+            fulfillmentStatus: f.status,
+            displayStatus: f.displayStatus,
+            hasTracking: tracking.length > 0,
+            tracking: tracking.map(t => ({ company: t.company, number: t.number, url: t.url })),
+            skus,
+            tags: (order.tags || []).join(', '),
+            latestEvent: latest ? { status: latest.status, happenedAt: latest.happenedAt, message: latest.message } : null,
+            allEvents: events.map(e => ({ status: e.status, happenedAt: e.happenedAt, message: e.message })),
+          });
+        }
+      }
+
+      pages++;
+      if (!conn.pageInfo.hasNextPage) break;
+      after = conn.pageInfo.endCursor;
+      // small delay to avoid rate limits
+      await new Promise(r => setTimeout(r, 200));
+    }
+
+    // Sort worst first
+    rows.sort((a, b) => b.daysSinceFulfilled - a.daysSinceFulfilled);
+    res.json({ rows, scannedPages: pages, total: rows.length });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log('Ops Scorecard running on :' + PORT));
