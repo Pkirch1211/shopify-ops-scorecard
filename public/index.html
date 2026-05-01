@@ -1,604 +1,215 @@
-const express = require("express");
-const path = require("path");
-
-const app = express();
-app.use(express.json());
-app.use(express.static(path.join(__dirname, "public")));
-
-// ── Credentials ───────────────────────────────────────────────────────────────
-const CREDS = {
-  dtcStore: process.env.DTC_STORE,
-  dtcToken: process.env.DTC_TOKEN,
-  b2bStore: process.env.B2B_STORE,
-  b2bToken: process.env.B2B_TOKEN,
-};
-
-// ── GraphQL helper ────────────────────────────────────────────────────────────
-async function gql(store, token, query, variables = {}) {
-  const url = `https://${store}/admin/api/2024-01/graphql.json`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "X-Shopify-Access-Token": token,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ query, variables }),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Shopify GQL HTTP ${res.status}: ${text.slice(0, 300)}`);
-  }
-  const json = await res.json();
-  if (json.errors) throw new Error(json.errors.map(e => e.message).join("; "));
-  // Check throttle status and wait if needed
-  const cost = json.extensions && json.extensions.cost;
-  if (cost && cost.throttleStatus) {
-    const { currentlyAvailable, restoreRate } = cost.throttleStatus;
-    const needed = (cost.actualQueryCost || 0) * 1.5;
-    if (currentlyAvailable < needed) {
-      const waitMs = Math.ceil((needed - currentlyAvailable) / restoreRate) * 1000;
-      await new Promise(r => setTimeout(r, Math.min(waitMs, 3000)));
-    }
-  }
-  return json.data;
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ops Scorecard — LifeLines</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+@import url('https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=swap');
+:root{--bg:#f0f0eb;--surface:#f7f7f3;--surface2:#e8e8e3;--border:#d4d4cc;--border2:#c8c8c0;--text:#2a2a28;--muted:#6b6b64;--dim:#9a9a92;--green:#4a6741;--green-bg:#4a6741;--green-light:#e8ede7;--dtc:#3d5c8a;--dtc-light:#e8edf4;--b2b:#4a6741;--warn:#8a5c2a;--danger:#8a2a2a;--mono:'IBM Plex Mono',monospace;--sans:'IBM Plex Sans',sans-serif;--shadow:0 1px 3px rgba(0,0,0,0.07)}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;min-height:100vh}
+header{display:grid;grid-template-columns:auto 1fr auto;align-items:stretch;border-bottom:2px solid var(--border);background:var(--surface)}
+.header-brand{background:var(--green-bg);color:#fff;padding:14px 22px;display:flex;flex-direction:column;justify-content:center}
+.brand-name{font-family:var(--mono);font-size:15px;font-weight:600;letter-spacing:.12em;text-transform:uppercase}
+.brand-sub{font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;opacity:.65;margin-top:2px}
+.header-title{padding:14px 24px;display:flex;flex-direction:column;justify-content:center;border-right:1px solid var(--border)}
+.header-title h1{font-family:var(--mono);font-size:15px;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+.header-title p{font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:3px;letter-spacing:.05em}
+.header-right{display:flex;align-items:center;gap:20px;padding:0 24px}
+nav{display:flex;gap:3px}
+.nav-link{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;padding:6px 14px;border:1px solid transparent;border-radius:2px;text-decoration:none;color:var(--muted);transition:all .12s}
+.nav-link:hover{color:var(--text);border-color:var(--border2)}
+.nav-link.active{color:var(--green);border-color:var(--green);background:var(--green-light)}
+.refresh-status{font-family:var(--mono);font-size:10px;color:var(--dim);display:flex;align-items:center;gap:7px;white-space:nowrap}
+.refresh-dot{width:6px;height:6px;border-radius:50%;background:var(--dim);flex-shrink:0;transition:background .3s}
+.refresh-dot.live{background:var(--green);animation:pulse 2s infinite}
+.refresh-dot.fetching{background:var(--warn);animation:spin .7s linear infinite;border-radius:0;width:8px;height:8px}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+@keyframes spin{to{transform:rotate(360deg)}}
+.controls-bar{display:flex;align-items:center;gap:10px;padding:14px 28px;background:var(--surface2);border-bottom:1px solid var(--border)}
+.controls-bar label{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+select{background:var(--surface);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:12px;padding:5px 10px;border-radius:2px;outline:none}
+select:focus{border-color:var(--green)}
+.next-refresh{font-family:var(--mono);font-size:10px;color:var(--dim);margin-left:auto}
+main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
+.section-header{display:flex;align-items:center;gap:10px;margin-bottom:12px;margin-top:28px}
+.section-header:first-child{margin-top:0}
+.section-dot{width:6px;height:6px;border-radius:50%;background:var(--green);flex-shrink:0}
+.section-title{font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.section-line{flex:1;height:1px;background:var(--border)}
+.period-badge{font-family:var(--mono);font-size:10px;color:var(--green);border:1px solid var(--green);background:var(--green-light);padding:2px 8px;border-radius:2px}
+.kpi-grid{display:grid;grid-template-columns:repeat(5,1fr);border:1px solid var(--border);border-radius:3px;overflow:hidden;background:var(--border);gap:1px;box-shadow:var(--shadow)}
+.kpi-card{background:var(--surface);padding:18px 20px}
+.kpi-label{font-family:var(--mono);font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+.kpi-value{font-family:var(--mono);font-size:26px;font-weight:600;color:var(--text);line-height:1;margin-bottom:10px}
+.kpi-sub{display:flex;flex-direction:column;gap:4px}
+.kpi-store{display:flex;align-items:center;justify-content:space-between}
+.kpi-store-label{font-family:var(--mono);font-size:9px;letter-spacing:.08em;text-transform:uppercase}
+.kpi-store-label.dtc{color:var(--dtc)}
+.kpi-store-label.b2b{color:var(--b2b)}
+.kpi-store-val{font-family:var(--mono);font-size:11px;color:var(--text)}
+.tab-bar{display:flex;border-bottom:2px solid var(--border);margin-bottom:16px;margin-top:28px}
+.tab{font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;padding:10px 20px;border:none;background:transparent;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;transition:color .12s;display:flex;align-items:center;gap:7px}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--green);border-bottom-color:var(--green)}
+.view{display:none}.view.active{display:block}
+.table-wrap{border:1px solid var(--border);border-radius:3px;overflow:hidden;box-shadow:var(--shadow)}
+table{width:100%;border-collapse:collapse}
+thead tr{background:var(--surface2)}
+th{font-family:var(--mono);font-size:9px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);padding:10px 16px;text-align:left;border-bottom:1px solid var(--border)}
+td{padding:12px 16px;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:12px}
+tr:last-child td{border-bottom:none}
+tbody tr{background:var(--surface)}
+tbody tr:hover{background:var(--bg)}
+tbody tr.combined-row{background:var(--green-light)}
+.store-pill{display:inline-flex;align-items:center;gap:6px}
+.store-dot{width:5px;height:5px;border-radius:50%;flex-shrink:0}
+.store-dot.dtc{background:var(--dtc)}.store-dot.b2b{background:var(--b2b)}.store-dot.combined{background:var(--green)}
+.metric-null{color:var(--dim)}
+.charts-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.chart-card{background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:16px 18px;box-shadow:var(--shadow)}
+.chart-card.full{grid-column:span 2}
+.chart-title{font-family:var(--mono);font-size:9px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:14px}
+.chart-container{position:relative;height:180px}
+.chart-card.full .chart-container{height:200px}
+.issue-tag{font-family:var(--mono);font-size:9px;padding:2px 7px;border-radius:2px;white-space:nowrap;border:1px solid}
+.issue-tags{display:flex;flex-wrap:wrap;gap:4px}
+.issue-tag.processing{background:#f5ede0;color:var(--warn);border-color:#d4b896}
+.issue-tag.fulfillment{background:#f5e8e0;color:#7a4a2a;border-color:#d4a896}
+.issue-tag.delivery,.issue-tag.delivery_stalled{background:#f5e0e0;color:var(--danger);border-color:#d49696}
+.order-num{font-weight:600;color:var(--text)}.order-customer{color:var(--muted);font-size:11px;margin-top:2px}.order-email{color:var(--dim);font-size:10px}
+.items-cell{color:var(--muted);font-size:11px;max-width:220px;line-height:1.5}
+.tracking-status{display:inline-block;padding:2px 7px;border-radius:2px;font-size:9px;text-transform:uppercase;letter-spacing:.07em;border:1px solid;margin-bottom:3px}
+.tracking-status.in_transit,.tracking-status.IN_TRANSIT{background:var(--dtc-light);color:var(--dtc);border-color:#b0c0d8}
+.tracking-status.out_for_delivery,.tracking-status.OUT_FOR_DELIVERY{background:#f5ede0;color:var(--warn);border-color:#d4b896}
+.tracking-status.attempted_delivery,.tracking-status.ATTEMPTED_DELIVERY{background:#f5e8e0;color:#7a4a2a;border-color:#d4a896}
+.tracking-status.delivered,.tracking-status.DELIVERED{background:var(--green-light);color:var(--green);border-color:#b0c8a8}
+.tracking-status.failure,.tracking-status.FAILURE{background:#f5e0e0;color:var(--danger);border-color:#d49696}
+.tracking-status.label_printed,.tracking-status.confirmed,.tracking-status.LABEL_PRINTED,.tracking-status.CONFIRMED{background:var(--surface2);color:var(--muted);border-color:var(--border2)}
+.tracking-num{color:var(--muted);font-size:10px;margin-top:2px}
+.tracking-link{color:var(--dtc);text-decoration:none;font-size:10px}.tracking-link:hover{text-decoration:underline}
+.tracking-age{color:var(--dim);font-size:10px;margin-top:2px}
+.filter-bar{display:flex;gap:6px;margin-bottom:12px;align-items:center}
+.filter-btn{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;padding:5px 12px;border-radius:2px;border:1px solid var(--border2);background:var(--surface);color:var(--muted);cursor:pointer;transition:all .12s}
+.filter-btn:hover{color:var(--text);border-color:var(--green)}
+.filter-btn.active{background:var(--green-light);color:var(--green);border-color:var(--green)}
+.issues-count-badge{font-family:var(--mono);font-size:9px;padding:1px 6px;border-radius:2px;border:1px solid}
+.issues-count-badge.has-issues{background:#f5e0e0;color:var(--danger);border-color:#d49696}
+.issues-count-badge.zero{background:var(--green-light);color:var(--green);border-color:#b0c8a8}
+.issues-empty{padding:40px;text-align:center;font-family:var(--mono);font-size:11px;color:var(--green)}
+.state-panel{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:80px 40px;gap:12px;text-align:center}
+.state-title{font-family:var(--mono);font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--text)}
+.state-sub{font-size:13px;color:var(--muted);max-width:340px;line-height:1.6}
+.spinner{width:16px;height:16px;border:2px solid var(--border2);border-top-color:var(--green);border-radius:50%;animation:spin .7s linear infinite}
+.error-banner{background:#f5e0e0;border:1px solid #d49696;color:var(--danger);font-family:var(--mono);font-size:11px;padding:10px 16px;border-radius:2px;margin-bottom:16px;display:none}
+@media(max-width:900px){.kpi-grid{grid-template-columns:repeat(3,1fr)}.charts-grid{grid-template-columns:1fr}.chart-card.full{grid-column:span 1}}
+</style>
+</head>
+<body>
+<header>
+  <div class="header-brand"><div class="brand-name">LifeLines</div><div class="brand-sub">Ops Tools</div></div>
+  <div class="header-title"><h1>Ops Scorecard</h1><p>Shopify DTC + B2B &middot; Order Performance</p></div>
+  <div class="header-right">
+    <nav><a href="/" class="nav-link active">Scorecard</a><a href="/dtc.html" class="nav-link">DTC</a><a href="/b2b.html" class="nav-link">B2B</a><a href="/care.html" class="nav-link">Care@</a></nav>
+    <div class="refresh-status"><div class="refresh-dot" id="refreshDot"></div><span id="refreshLabel">Loading...</span></div>
+  </div>
+</header>
+<div class="controls-bar">
+  <label>Period</label>
+  <select id="monthSelect"></select>
+  <select id="yearSelect"></select>
+  
+</div>
+<main>
+  <div class="error-banner" id="errorBanner"></div>
+  <div id="emptyState" class="state-panel"><div class="spinner"></div><div class="state-title">Loading...</div><div class="state-sub">Fetching data from Shopify.</div></div>
+  <div id="loadingState" class="state-panel" style="display:none"><div class="spinner"></div><div class="state-title">Loading data...</div><div class="state-sub">Fetching orders from Shopify.</div></div>
+  <div id="dashboard" style="display:none">
+    <div class="section-header"><span class="section-dot"></span><span class="section-title">Overview</span><div class="section-line"></div><span class="period-badge" id="periodBadge"></span></div>
+    <div class="kpi-grid">
+      <div class="kpi-card"><div class="kpi-label">Total Orders</div><div class="kpi-value" id="kpiOrders">-</div><div class="kpi-sub" id="kpiOrdersSub"></div></div>
+      <div class="kpi-card"><div class="kpi-label">Total Units</div><div class="kpi-value" id="kpiUnits">-</div><div class="kpi-sub" id="kpiUnitsSub"></div></div>
+      <div class="kpi-card"><div class="kpi-label">Avg Processing</div><div class="kpi-value" id="kpiProcessing">-</div><div class="kpi-sub" id="kpiProcessingSub"></div></div>
+      <div class="kpi-card"><div class="kpi-label">Avg Fulfillment</div><div class="kpi-value" id="kpiFulfillment">-</div><div class="kpi-sub" id="kpiFulfillmentSub"></div></div>
+      <div class="kpi-card"><div class="kpi-label">Avg Delivery</div><div class="kpi-value" id="kpiDelivery">-</div><div class="kpi-sub" id="kpiDeliverySub"></div></div>
+    </div>
+    <div class="tab-bar">
+      <button class="tab active" onclick="switchTab('table',this)">Scorecard</button>
+      <button class="tab" onclick="switchTab('volume',this)">Volume</button>
+      <button class="tab" onclick="switchTab('completion',this)">Completion</button>
+      <button class="tab" onclick="switchTab('issues',this)" id="issuesTab">Issues</button>
+    </div>
+    <div class="view active" id="view-table">
+      <div class="table-wrap"><table><thead><tr><th>Store</th><th>Orders</th><th>Units</th><th>Units/Order</th><th>Avg Processing</th><th>Avg Fulfillment</th><th>Avg Delivery</th></tr></thead><tbody id="scorecardBody"></tbody></table></div>
+    </div>
+    <div class="view" id="view-volume">
+      <div class="charts-grid">
+        <div class="chart-card full"><div class="chart-title">Daily Orders - DTC vs B2B</div><div class="chart-container"><canvas id="chartOrders"></canvas></div></div>
+        <div class="chart-card full"><div class="chart-title">Daily Units</div><div class="chart-container"><canvas id="chartUnits"></canvas></div></div>
+      </div>
+    </div>
+    <div class="view" id="view-completion">
+      <div class="charts-grid">
+        <div class="chart-card"><div class="chart-title">Avg Processing Time (hrs)</div><div class="chart-container"><canvas id="chartProcessing"></canvas></div></div>
+        <div class="chart-card"><div class="chart-title">Avg Fulfillment Time (hrs)</div><div class="chart-container"><canvas id="chartFulfillment"></canvas></div></div>
+        <div class="chart-card full"><div class="chart-title">Cumulative Orders Fulfilled</div><div class="chart-container"><canvas id="chartCumulative"></canvas></div></div>
+      </div>
+    </div>
+    <div class="view" id="view-issues">
+      <div class="filter-bar">
+        <button class="filter-btn active" onclick="setIssueFilter('all',this)">All</button>
+        <button class="filter-btn" onclick="setIssueFilter('processing',this)">Processing</button>
+        <button class="filter-btn" onclick="setIssueFilter('fulfillment',this)">Fulfillment</button>
+        <button class="filter-btn" onclick="setIssueFilter('delivery',this)">Delivery</button>
+        <button class="filter-btn" onclick="setIssueFilter('delivery_stalled',this)">Stalled</button>
+        <span style="margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--dim)">Threshold: &gt;10 days</span>
+      </div>
+      <div class="table-wrap"><table><thead><tr><th>Order</th><th>Store</th><th>Customer</th><th>Units</th><th>Issue(s)</th><th>Processing</th><th>Fulfillment</th><th>Last Tracking</th></tr></thead><tbody id="issuesBody"></tbody></table></div>
+    </div>
+  </div>
+</main>
+<script>
+const MONTHS=['January','February','March','April','May','June','July','August','September','October','November','December'];
+const REFRESH_MS=5*60*1000;
+let charts={},allFlagged=[],refreshTimer=null,hasData=false;
+const monthSel=document.getElementById('monthSelect');
+const yearSel=document.getElementById('yearSelect');
+MONTHS.forEach(function(m,i){var o=document.createElement('option');o.value=i+1;o.textContent=m;monthSel.appendChild(o);});
+var now=new Date();monthSel.value=now.getMonth()+1;
+for(var y=now.getFullYear();y>=2022;y--){var o=document.createElement('option');o.value=y;o.textContent=y;yearSel.appendChild(o);}
+monthSel.addEventListener('change',function(){clearTimers();clearDashboard();runFetch();});
+yearSel.addEventListener('change',function(){clearTimers();clearDashboard();runFetch();});
+function scheduleRefresh(){if(refreshTimer)clearTimeout(refreshTimer);refreshTimer=setTimeout(function(){runFetch();},REFRESH_MS);}
+function clearTimers(){if(refreshTimer)clearTimeout(refreshTimer);if(countdownTimer)clearInterval(countdownTimer);}
+function updateCountdown(){}
+function clearDashboard(){
+  if(!hasData)return;
+  ['kpiOrders','kpiUnits','kpiProcessing','kpiFulfillment','kpiDelivery'].forEach(function(id){var el=document.getElementById(id);if(el)el.textContent='-';});
+  ['kpiOrdersSub','kpiUnitsSub','kpiProcessingSub','kpiFulfillmentSub','kpiDeliverySub'].forEach(function(id){var el=document.getElementById(id);if(el)el.innerHTML='';});
+  var sb=document.getElementById('scorecardBody');if(sb)sb.innerHTML='';
+  var ib=document.getElementById('issuesBody');if(ib)ib.innerHTML='';
+  destroyCharts();
+  show('loadingState');
 }
-
-// Paginate through all pages of a GQL connection
-async function gqlAll(store, token, query, variables, getEdges, getPageInfo) {
-  let results = [];
-  let cursor = null;
-  let pages = 0;
-  const MAX_PAGES = 40;
-  while (pages < MAX_PAGES) {
-    const data = await gql(store, token, query, { ...variables, after: cursor });
-    const edges = getEdges(data);
-    results = results.concat(edges.map(e => e.node));
-    const pageInfo = getPageInfo(data);
-    pages++;
-    if (!pageInfo.hasNextPage) break;
-    cursor = pageInfo.endCursor;
-  }
-  return results;
-}
-
-// ── REST helper (for inventory levels only — no GQL equivalent) ──────────────
-async function restFetchAll(store, token, endpoint, key) {
-  let results = [];
-  let url = `https://${store}/admin/api/2024-01${endpoint}`;
-  let pages = 0;
-  while (url && pages < 20) {
-    const res = await fetch(url, {
-      headers: { "X-Shopify-Access-Token": token, "Content-Type": "application/json" },
-    });
-    if (!res.ok) throw new Error(`Shopify REST ${res.status}`);
-    const data = await res.json();
-    results = results.concat(data[key] || []);
-    pages++;
-    const link = res.headers.get("Link");
-    url = null;
-    if (link) {
-      const match = link.match(/<([^>]+)>;\s*rel="next"/);
-      if (match) url = match[1];
-    }
-    if (url) await new Promise(r => setTimeout(r, 250));
-  }
-  return results;
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-function hoursBetween(a, b) {
-  if (!a || !b) return null;
-  return (new Date(b) - new Date(a)) / 36e5;
-}
-
-function avg(arr) {
-  const valid = arr.filter(v => v !== null && v !== undefined && !isNaN(v));
-  if (!valid.length) return null;
-  return valid.reduce((a, b) => a + b, 0) / valid.length;
-}
-
-function formatDuration(hours) {
-  if (hours === null || hours === undefined) return "—";
-  if (hours < 1) return `${Math.round(hours * 60)}m`;
-  if (hours < 24) return `${hours.toFixed(1)}h`;
-  return `${(hours / 24).toFixed(1)}d`;
-}
-
-function buildDailyTimeSeries(orders, year, month) {
-  const days = new Date(year, month, 0).getDate();
-  const counts = Array.from({ length: days }, (_, i) => ({ day: i + 1, orders: 0, units: 0 }));
-  for (const order of orders) {
-    const d = new Date(order.createdAt).getDate();
-    if (counts[d - 1]) {
-      counts[d - 1].orders++;
-      counts[d - 1].units += order._units || 0;
-    }
-  }
-  return counts;
-}
-
-function buildFulfillmentTimeSeries(orders, year, month) {
-  const days = new Date(year, month, 0).getDate();
-  const counts = Array.from({ length: days }, (_, i) => ({ day: i + 1, fulfilled: 0 }));
-  for (const order of orders) {
-    for (const f of order._fulfillments || []) {
-      const d = new Date(f.createdAt).getDate();
-      if (counts[d - 1]) counts[d - 1].fulfilled++;
-    }
-  }
-  return counts;
-}
-
-// ── GQL Queries ───────────────────────────────────────────────────────────────
-const ORDERS_QUERY = `
-query Orders($first: Int!, $after: String, $query: String!) {
-  orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT) {
-    pageInfo { hasNextPage endCursor }
-    edges {
-      node {
-        id
-        name
-        createdAt
-        email
-        displayFulfillmentStatus
-        shippingAddress { firstName lastName }
-        billingAddress { firstName lastName }
-        lineItems(first: 50) {
-          edges { node { quantity } }
-        }
-        fulfillments(first: 10) {
-          createdAt
-          updatedAt
-          status
-          displayStatus
-          trackingInfo(first: 5) { company number url }
-          shipmentStatus
-        }
-      }
-    }
-  }
-}`;
-
-const DRAFT_ORDERS_QUERY = `
-query DraftOrders($first: Int!, $after: String, $query: String!) {
-  draftOrders(first: $first, after: $after, query: $query, sortKey: UPDATED_AT) {
-    pageInfo { hasNextPage endCursor }
-    edges {
-      node {
-        id
-        name
-        createdAt
-        completedAt
-        status
-        email
-        tags
-        totalPrice
-        subtotalPrice
-        customer { firstName lastName email }
-        lineItems(first: 50) {
-          edges {
-            node {
-              title
-              variantTitle
-              sku
-              quantity
-              originalUnitPrice
-              variant { id inventoryItem { id } }
-            }
-          }
-        }
-      }
-    }
-  }
-}`;
-
-// ── Process orders into metrics ───────────────────────────────────────────────
-function processOrders(orders, label, year, month) {
-  const THRESHOLD_HOURS = 10 * 24;
-  const EXCLUDED_EMAILS = ["inquiries@lifelines.com", "care@lifelines.com"];
-
-  const fulfillmentTimes = [];
-  const deliveryTimes = [];
-  let totalUnits = 0;
-  const flaggedOrders = [];
-
-  for (const order of orders) {
-    const units = (order.lineItems.edges || []).reduce((s, e) => s + (e.node.quantity || 0), 0);
-    order._units = units;
-    totalUnits += units;
-
-    const addr = order.shippingAddress || order.billingAddress || {};
-    const customerName = [addr.firstName, addr.lastName].filter(Boolean).join(" ") || order.email || "—";
-
-    const fulfillments = order.fulfillments || [];
-    order._fulfillments = fulfillments;
-
-    let fulfillmentHours = null;
-    let deliveryHours = null;
-    let trackingInfo = null;
-
-    if (fulfillments.length > 0) {
-      const sorted = [...fulfillments].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-      const first = sorted[0];
-      const fh = hoursBetween(order.createdAt, first.createdAt);
-      if (fh !== null && fh >= 0) { fulfillmentTimes.push(fh); fulfillmentHours = fh; }
-
-      const delivered = fulfillments.find(f => f.displayStatus === "DELIVERED" || f.displayStatus === "Delivered");
-      if (delivered) {
-        const dh = hoursBetween(first.createdAt, delivered.updatedAt);
-        if (dh !== null && dh >= 0) { deliveryTimes.push(dh); deliveryHours = dh; }
-      }
-
-      const withTracking = [...fulfillments].reverse().find(f => f.trackingInfo && f.trackingInfo.length > 0);
-      if (withTracking && withTracking.trackingInfo.length > 0) {
-        const t = withTracking.trackingInfo[0];
-        trackingInfo = {
-          number: t.number,
-          company: t.company,
-          url: t.url,
-          shipmentStatus: withTracking.displayStatus,
-          updatedAt: withTracking.updatedAt,
-        };
-      }
-    }
-
-    const issues = [];
-    if (fulfillmentHours !== null && fulfillmentHours > THRESHOLD_HOURS)
-      issues.push({ type: "fulfillment", hours: fulfillmentHours });
-    if (deliveryHours !== null && deliveryHours > THRESHOLD_HOURS)
-      issues.push({ type: "delivery", hours: deliveryHours });
-    if (fulfillments.length > 0 && !fulfillments.find(f => f.displayStatus === "DELIVERED" || f.displayStatus === "Delivered")) {
-      const first = [...fulfillments].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))[0];
-      const stalled = hoursBetween(first.createdAt, new Date().toISOString());
-      if (stalled !== null && stalled > THRESHOLD_HOURS)
-        issues.push({ type: "delivery_stalled", hours: stalled });
-    }
-
-    if (issues.length > 0 && !EXCLUDED_EMAILS.includes((order.email || "").toLowerCase())) {
-      flaggedOrders.push({
-        store: label,
-        orderNumber: order.name,
-        customerName,
-        email: order.email || null,
-        units,
-        createdAt: order.createdAt,
-        issues,
-        processingHours: null,
-        fulfillmentHours,
-        deliveryHours,
-        tracking: trackingInfo,
-      });
-    }
-  }
-
-  return { fulfillmentTimes, deliveryTimes, totalUnits, flaggedOrders };
-}
-
-// ── Scorecard endpoint ────────────────────────────────────────────────────────
-app.post("/api/scorecard", async (req, res) => {
-  const { year, month } = req.body;
-  const { dtcStore, dtcToken, b2bStore, b2bToken } = CREDS;
-  if (!dtcStore || !dtcToken || !b2bStore || !b2bToken) {
-    return res.status(400).json({ error: "Missing credentials — set DTC_STORE, DTC_TOKEN, B2B_STORE, B2B_TOKEN in Railway." });
-  }
-
-  const start = `${year}-${String(month).padStart(2, "0")}-01`;
-  const endDate = new Date(year, month, 1);
-  const end = `${endDate.getFullYear()}-${String(endDate.getMonth() + 1).padStart(2, "0")}-01`;
-  const orderQuery = `created_at:>=${start} created_at:<${end}`;
-  const draftQuery = `status:completed updated_at:>=${start} updated_at:<${end}`;
-
-  try {
-    const stores = [
-      { label: "DTC", store: dtcStore, token: dtcToken },
-      { label: "B2B", store: b2bStore, token: b2bToken },
-    ];
-
-    const results = await Promise.all(stores.map(async ({ label, store, token }) => {
-      const [orders, draftOrders] = await Promise.all([
-        gqlAll(store, token, ORDERS_QUERY, { first: 250, query: orderQuery },
-          d => d.orders.edges, d => d.orders.pageInfo),
-        gqlAll(store, token, DRAFT_ORDERS_QUERY, { first: 250, query: draftQuery },
-          d => d.draftOrders.edges, d => d.draftOrders.pageInfo),
-      ]);
-
-      const processingTimes = [];
-      for (const d of draftOrders) {
-        if (d.completedAt) {
-          const h = hoursBetween(d.createdAt, d.completedAt);
-          if (h !== null && h >= 0) processingTimes.push(h);
-        }
-      }
-
-      const { fulfillmentTimes, deliveryTimes, totalUnits, flaggedOrders } = processOrders(orders, label, year, month);
-
-      return {
-        label,
-        totalOrders: orders.length,
-        totalUnits,
-        avgProcessingHours: avg(processingTimes),
-        avgProcessingFormatted: formatDuration(avg(processingTimes)),
-        avgFulfillmentHours: avg(fulfillmentTimes),
-        avgFulfillmentFormatted: formatDuration(avg(fulfillmentTimes)),
-        avgDeliveryHours: avg(deliveryTimes),
-        avgDeliveryFormatted: formatDuration(avg(deliveryTimes)),
-        ordersByDay: buildDailyTimeSeries(orders, year, month),
-        fulfillmentsByDay: buildFulfillmentTimeSeries(orders, year, month),
-        rawProcessingTimes: processingTimes,
-        rawFulfillmentTimes: fulfillmentTimes,
-        flaggedOrders,
-      };
-    }));
-
-    const combined = {
-      label: "Combined",
-      totalOrders: results.reduce((s, r) => s + r.totalOrders, 0),
-      totalUnits: results.reduce((s, r) => s + r.totalUnits, 0),
-      avgProcessingHours: avg(results.flatMap(r => r.rawProcessingTimes)),
-      avgProcessingFormatted: formatDuration(avg(results.flatMap(r => r.rawProcessingTimes))),
-      avgFulfillmentHours: avg(results.flatMap(r => r.rawFulfillmentTimes)),
-      avgFulfillmentFormatted: formatDuration(avg(results.flatMap(r => r.rawFulfillmentTimes))),
-      avgDeliveryHours: avg(results.map(r => r.avgDeliveryHours).filter(v => v !== null)),
-      avgDeliveryFormatted: formatDuration(avg(results.map(r => r.avgDeliveryHours).filter(v => v !== null))),
-    };
-
-    res.json({
-      stores: results,
-      combined,
-      flaggedOrders: results.flatMap(r => r.flaggedOrders)
-        .sort((a, b) => Math.max(...b.issues.map(i => i.hours)) - Math.max(...a.issues.map(i => i.hours))),
-      year,
-      month,
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Care@ Scorecard endpoint ──────────────────────────────────────────────────
-app.post("/api/care-scorecard", async (req, res) => {
-  const { year, month } = req.body;
-  const { b2bStore, b2bToken } = CREDS;
-  if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
-
-  const start = `${year}-${String(month).padStart(2, "0")}-01`;
-  const endDate = new Date(year, month, 1);
-  const end = `${endDate.getFullYear()}-${String(endDate.getMonth() + 1).padStart(2, "0")}-01`;
-  const orderQuery = `email:care@lifelines.com created_at:>=${start} created_at:<${end}`;
-
-  try {
-    const orders = await gqlAll(b2bStore, b2bToken, ORDERS_QUERY, { first: 250, query: orderQuery },
-      d => d.orders.edges, d => d.orders.pageInfo);
-
-    const { fulfillmentTimes, deliveryTimes, totalUnits } = processOrders(orders, "B2B", year, month);
-
-    res.json({
-      totalOrders: orders.length,
-      totalUnits,
-      avgFulfillmentHours: avg(fulfillmentTimes),
-      avgFulfillmentFormatted: formatDuration(avg(fulfillmentTimes)),
-      avgDeliveryHours: avg(deliveryTimes),
-      avgDeliveryFormatted: formatDuration(avg(deliveryTimes)),
-      ordersByDay: buildDailyTimeSeries(orders, year, month),
-      fulfillmentsByDay: buildFulfillmentTimeSeries(orders, year, month),
-      year,
-      month,
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── DTC Stale Fulfillments (GraphQL) ─────────────────────────────────────────
-const DTC_STALE_QUERY = `
-query StaleFulfillments($first: Int!, $after: String, $query: String!) {
-  orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT, reverse: true) {
-    pageInfo { hasNextPage endCursor }
-    edges {
-      node {
-        id name createdAt cancelledAt email displayFulfillmentStatus
-        totalPriceSet { shopMoney { amount currencyCode } }
-        customer { displayName }
-        shippingAddress { name address1 address2 city province zip country }
-        tags
-        fulfillments(first: 10) {
-          id name createdAt updatedAt status displayStatus
-          trackingInfo(first: 5) { company number url }
-          events(first: 50) {
-            edges { node { status happenedAt message } }
-          }
-          fulfillmentLineItems(first: 50) {
-            edges { node { quantity lineItem { sku title } } }
-          }
-        }
-      }
-    }
-  }
-}`;
-
-app.post("/api/dtc-stale", async (req, res) => {
-  const { dtcStore, dtcToken } = CREDS;
-  if (!dtcStore || !dtcToken) return res.status(400).json({ error: "Missing DTC credentials." });
-
-  const MIN_DAYS = 10;
-  const TARGET = new Set(["IN_TRANSIT", "CONFIRMED"]);
-
-  function daysSince(iso) {
-    if (!iso) return null;
-    return (Date.now() - new Date(iso).getTime()) / 864e5;
-  }
-
-  try {
-    const orders = await gqlAll(
-      dtcStore, dtcToken, DTC_STALE_QUERY,
-      { first: 250, query: "fulfillment_status:fulfilled -status:cancelled" },
-      d => d.orders.edges, d => d.orders.pageInfo
-    );
-
-    const rows = [];
-    for (const order of orders) {
-      if (order.cancelledAt) continue;
-      for (const f of order.fulfillments || []) {
-        const status = (f.displayStatus || "").toUpperCase().replace(/ /g, "_");
-        if (!TARGET.has(status)) continue;
-        const days = daysSince(f.createdAt);
-        if (!days || days < MIN_DAYS) continue;
-
-        const events = (f.events.edges || [])
-          .map(e => e.node)
-          .filter(e => e.happenedAt)
-          .sort((a, b) => new Date(b.happenedAt) - new Date(a.happenedAt));
-
-        const skus = (f.fulfillmentLineItems.edges || []).map(e =>
-          `${e.node.lineItem.sku || e.node.lineItem.title} x${e.node.quantity}`
-        );
-
-        const addr = order.shippingAddress || {};
-        const total = order.totalPriceSet?.shopMoney || {};
-
-        rows.push({
-          orderName: order.name,
-          orderId: order.id,
-          orderCreatedAt: order.createdAt,
-          email: order.email,
-          customerName: order.customer?.displayName || addr.name || "",
-          shippingAddress: [addr.address1, addr.address2, addr.city, addr.province, addr.zip, addr.country].filter(Boolean).join(", "),
-          orderTotal: total.amount ? `${total.currencyCode} ${parseFloat(total.amount).toFixed(2)}` : "",
-          fulfillmentId: f.id,
-          fulfillmentName: f.name,
-          fulfilledAt: f.createdAt,
-          daysSinceFulfilled: Math.floor(days),
-          fulfillmentStatus: f.status,
-          displayStatus: f.displayStatus,
-          hasTracking: (f.trackingInfo || []).length > 0,
-          tracking: (f.trackingInfo || []).map(t => ({ company: t.company, number: t.number, url: t.url })),
-          skus,
-          tags: (order.tags || []).join(", "),
-          latestEvent: events[0] || null,
-          allEvents: events,
-        });
-      }
-    }
-
-    rows.sort((a, b) => b.daysSinceFulfilled - a.daysSinceFulfilled);
-    res.json({ rows, total: rows.length });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── B2B Draft Orders endpoint ─────────────────────────────────────────────────
-app.post("/api/b2b-drafts", async (req, res) => {
-  const { b2bStore, b2bToken } = CREDS;
-  if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
-
-  try {
-    const drafts = await gqlAll(
-      b2bStore, b2bToken, DRAFT_ORDERS_QUERY,
-      { first: 250, query: "status:open" },
-      d => d.draftOrders.edges, d => d.draftOrders.pageInfo
-    );
-
-    const needsReview = drafts.filter(d =>
-      (d.tags || []).map(t => t.toLowerCase()).includes("needs-review")
-    );
-
-    // By customer
-    const customerMap = {};
-    for (const d of drafts) {
-      const name = d.customer ? `${d.customer.firstName || ""} ${d.customer.lastName || ""}`.trim() : null;
-      const email = d.customer?.email || d.email || null;
-      const key = (name && name !== "") ? name : (email || "Unknown");
-      if (!customerMap[key]) customerMap[key] = { customer: key, email: email || "—", draftCount: 0, totalValue: 0 };
-      customerMap[key].draftCount++;
-      customerMap[key].totalValue += parseFloat(d.totalPrice || 0);
-    }
-    const byCustomer = Object.values(customerMap).sort((a, b) => b.draftCount - a.draftCount);
-
-    // Collect variant IDs for OOS check
-    const variantIds = [...new Set(
-      drafts.flatMap(d => (d.lineItems.edges || []).map(e => e.node.variant?.id).filter(Boolean))
-    )];
-    const invItemIds = [...new Set(
-      drafts.flatMap(d => (d.lineItems.edges || []).map(e => e.node.variant?.inventoryItem?.id).filter(Boolean))
-    )];
-
-    // Fetch inventory levels via REST (no GQL equivalent for multi-location totals)
-    const inventoryMap = {};
-    if (invItemIds.length > 0) {
-      const numericIds = invItemIds.map(id => id.replace("gid://shopify/InventoryItem/", ""));
-      for (let i = 0; i < numericIds.length; i += 50) {
-        const batch = numericIds.slice(i, i + 50).join(",");
-        const levels = await restFetchAll(b2bStore, b2bToken,
-          `/inventory_levels.json?inventory_item_ids=${batch}&limit=250`, "inventory_levels");
-        for (const lvl of levels) {
-          inventoryMap[`gid://shopify/InventoryItem/${lvl.inventory_item_id}`] =
-            (inventoryMap[`gid://shopify/InventoryItem/${lvl.inventory_item_id}`] || 0) + (lvl.available || 0);
-        }
-      }
-    }
-
-    // Build OOS table
-    const oosMap = {};
-    for (const draft of drafts) {
-      for (const edge of draft.lineItems.edges || []) {
-        const li = edge.node;
-        if (!li.variant?.inventoryItem?.id) continue;
-        const available = inventoryMap[li.variant.inventoryItem.id] ?? null;
-        if (available === null || available > 0) continue;
-        const vid = li.variant.id;
-        if (!oosMap[vid]) {
-          oosMap[vid] = {
-            sku: li.sku || "—",
-            productTitle: li.title || "Unknown",
-            variantTitle: li.variantTitle || "",
-            available,
-            draftCount: 0,
-            totalUnitsRequested: 0,
-            affectedDrafts: [],
-          };
-        }
-        oosMap[vid].draftCount++;
-        oosMap[vid].totalUnitsRequested += li.quantity || 0;
-        oosMap[vid].affectedDrafts.push(draft.name);
-      }
-    }
-    const oosItems = Object.values(oosMap).sort((a, b) => b.draftCount - a.draftCount);
-
-    // Needs-review export
-    const needsReviewExport = needsReview.map(d => ({
-      name: d.name,
-      createdAt: d.createdAt,
-      tags: (d.tags || []).join(", "),
-      customerName: d.customer ? `${d.customer.firstName || ""} ${d.customer.lastName || ""}`.trim() : (d.email || "—"),
-      email: d.customer?.email || d.email || "",
-      subtotal: d.subtotalPrice,
-      total: d.totalPrice,
-      lineItems: (d.lineItems.edges || []).map(e => ({
-        title: e.node.title,
-        variantTitle: e.node.variantTitle || "",
-        sku: e.node.sku || "",
-        quantity: e.node.quantity,
-        price: e.node.originalUnitPrice,
-      })),
-    }));
-
-    res.json({
-      totalDrafts: drafts.length,
-      needsReviewCount: needsReview.length,
-      needsReviewExport,
-      byCustomer,
-      oosItems,
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Start ─────────────────────────────────────────────────────────────────────
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Ops Scorecard running on :${PORT}`));
+async function runFetch(){clearTimers();setStatus('fetching');if(!hasData)show('emptyState');hideError();try{var res=await fetch('/api/scorecard',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({year:parseInt(yearSel.value),month:parseInt(monthSel.value)})});var data=await res.json();if(!res.ok)throw new Error(data.error||'Server error');hasData=true;render(data);setStatus('live');scheduleRefresh();}catch(err){showError(err.message);setStatus('error');if(!hasData)show('emptyState');scheduleRefresh();}}
+function render(data){show('dashboard');var stores=data.stores,combined=data.combined,year=data.year,month=data.month;var dtc=stores.find(function(s){return s.label==='DTC';});var b2b=stores.find(function(s){return s.label==='B2B';});document.getElementById('periodBadge').textContent=MONTHS[month-1]+' '+year;document.getElementById('refreshLabel').textContent='Updated '+new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});setKPI('Orders',combined.totalOrders.toLocaleString(),[{cls:'dtc',label:'DTC',val:dtc.totalOrders.toLocaleString()},{cls:'b2b',label:'B2B',val:b2b.totalOrders.toLocaleString()}]);setKPI('Units',combined.totalUnits.toLocaleString(),[{cls:'dtc',label:'DTC',val:dtc.totalUnits.toLocaleString()},{cls:'b2b',label:'B2B',val:b2b.totalUnits.toLocaleString()}]);setKPI('Processing',combined.avgProcessingFormatted,[{cls:'dtc',label:'DTC',val:dtc.avgProcessingFormatted},{cls:'b2b',label:'B2B',val:b2b.avgProcessingFormatted}]);setKPI('Fulfillment',combined.avgFulfillmentFormatted,[{cls:'dtc',label:'DTC',val:dtc.avgFulfillmentFormatted},{cls:'b2b',label:'B2B',val:b2b.avgFulfillmentFormatted}]);setKPI('Delivery',combined.avgDeliveryFormatted,[{cls:'dtc',label:'DTC',val:dtc.avgDeliveryFormatted},{cls:'b2b',label:'B2B',val:b2b.avgDeliveryFormatted}]);var tbody=document.getElementById('scorecardBody');tbody.innerHTML='';stores.concat([Object.assign({},combined,{label:'Combined'})]).forEach(function(row){var cls=row.label==='DTC'?'dtc':row.label==='B2B'?'b2b':'combined';var upo=row.totalOrders>0?(row.totalUnits/row.totalOrders).toFixed(1):'--';tbody.innerHTML+='<tr class="'+(cls==='combined'?'combined-row':'')+'"><td><span class="store-pill"><span class="store-dot '+cls+'"></span>'+row.label+'</span></td><td>'+row.totalOrders.toLocaleString()+'</td><td>'+row.totalUnits.toLocaleString()+'</td><td>'+upo+'</td><td class="'+(row.avgProcessingFormatted==='--'?'metric-null':'')+'">'+row.avgProcessingFormatted+'</td><td class="'+(row.avgFulfillmentFormatted==='--'?'metric-null':'')+'">'+row.avgFulfillmentFormatted+'</td><td class="'+(row.avgDeliveryFormatted==='--'?'metric-null':'')+'">'+row.avgDeliveryFormatted+'</td></tr>';});buildCharts(dtc,b2b,year,month);allFlagged=data.flaggedOrders||[];renderIssues(allFlagged,'all');var count=allFlagged.length;document.getElementById('issuesTab').innerHTML='Issues <span class="issues-count-badge '+(count>0?'has-issues':'zero')+'">'+count+'</span>';}
+function setKPI(key,value,subs){document.getElementById('kpi'+key).textContent=value;document.getElementById('kpi'+key+'Sub').innerHTML=subs.map(function(s){return'<div class="kpi-store"><span class="kpi-store-label '+s.cls+'">'+s.label+'</span><span class="kpi-store-val">'+s.val+'</span></div>';}).join('');}
+function buildCharts(dtc,b2b,year,month){destroyCharts();var labels=dtc.ordersByDay.map(function(d){return d.day;});var grid='#d4d4cc',tick='#9a9a92';var base={responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{color:tick,font:{family:'Satoshi',size:10},maxTicksLimit:10},grid:{color:grid},border:{color:'transparent'}},y:{ticks:{color:tick,font:{family:'Satoshi',size:10}},grid:{color:grid},border:{color:'transparent'},beginAtZero:true}}};var leg={display:true,labels:{color:tick,font:{family:'Satoshi',size:11},boxWidth:10}};charts.orders=new Chart(document.getElementById('chartOrders'),{type:'bar',data:{labels:labels,datasets:[{label:'DTC',data:dtc.ordersByDay.map(function(d){return d.orders;}),backgroundColor:'rgba(61,92,138,0.6)',borderRadius:2},{label:'B2B',data:b2b.ordersByDay.map(function(d){return d.orders;}),backgroundColor:'rgba(74,103,65,0.6)',borderRadius:2}]},options:Object.assign({},base,{plugins:{legend:leg}})});charts.units=new Chart(document.getElementById('chartUnits'),{type:'bar',data:{labels:labels,datasets:[{label:'DTC',data:dtc.ordersByDay.map(function(d){return d.units;}),backgroundColor:'rgba(61,92,138,0.45)',borderRadius:2},{label:'B2B',data:b2b.ordersByDay.map(function(d){return d.units;}),backgroundColor:'rgba(74,103,65,0.45)',borderRadius:2}]},options:Object.assign({},base,{plugins:{legend:leg}})});charts.processing=new Chart(document.getElementById('chartProcessing'),{type:'bar',data:{labels:labels,datasets:[{label:'DTC Orders Fulfilled',data:dtc.fulfillmentsByDay.map(function(d){return d.fulfilled;}),backgroundColor:'rgba(61,92,138,0.6)',borderRadius:2},{label:'B2B Orders Fulfilled',data:b2b.fulfillmentsByDay.map(function(d){return d.fulfilled;}),backgroundColor:'rgba(74,103,65,0.6)',borderRadius:2}]},options:Object.assign({},base,{plugins:{legend:leg}})});charts.fulfillment=new Chart(document.getElementById('chartFulfillment'),{type:'bar',data:{labels:labels,datasets:[{label:'DTC Units',data:dtc.ordersByDay.map(function(d){return d.units;}),backgroundColor:'rgba(61,92,138,0.45)',borderRadius:2},{label:'B2B Units',data:b2b.ordersByDay.map(function(d){return d.units;}),backgroundColor:'rgba(74,103,65,0.45)',borderRadius:2}]},options:Object.assign({},base,{plugins:{legend:leg}})});var dc=0,bc=0;charts.cumulative=new Chart(document.getElementById('chartCumulative'),{type:'line',data:{labels:labels,datasets:[{label:'DTC Fulfilled',data:dtc.fulfillmentsByDay.map(function(d){return(dc+=d.fulfilled);}),borderColor:'rgba(61,92,138,1)',backgroundColor:'rgba(61,92,138,0.05)',tension:0.2,fill:true,pointRadius:0,borderWidth:2},{label:'B2B Fulfilled',data:b2b.fulfillmentsByDay.map(function(d){return(bc+=d.fulfilled);}),borderColor:'rgba(74,103,65,1)',backgroundColor:'rgba(74,103,65,0.05)',tension:0.2,fill:true,pointRadius:0,borderWidth:2}]},options:Object.assign({},base,{plugins:{legend:leg}})});}
+function destroyCharts(){Object.values(charts).forEach(function(c){c.destroy();});charts={};}
+function renderIssues(flagged,filter){var tbody=document.getElementById('issuesBody');var filtered=filter==='all'?flagged:flagged.filter(function(o){return o.issues.some(function(i){return i.type===filter||(filter==='delivery'&&i.type==='delivery_stalled');});});if(!filtered.length){tbody.innerHTML='<tr><td colspan="8" class="issues-empty">No orders exceeded the 10-day threshold'+(filter!=='all'?' for this category':'')+'</td></tr>';return;}tbody.innerHTML=filtered.map(function(o){var cls=o.store==='DTC'?'dtc':'b2b';var tags=o.issues.map(function(i){var lbl={processing:'Processing: '+fmtH(i.hours),fulfillment:'Fulfillment: '+fmtH(i.hours),delivery:'Delivery: '+fmtH(i.hours),delivery_stalled:'Stalled: '+fmtH(i.hours)}[i.type]||i.type;return'<span class="issue-tag '+i.type+'">'+lbl+'</span>';}).join('');return'<tr><td><div class="order-num">#'+o.orderNumber+'</div></td><td><span class="store-pill"><span class="store-dot '+cls+'"></span>'+o.store+'</span></td><td><div class="order-customer">'+esc(o.customerName)+'</div>'+(o.email?'<div class="order-email">'+esc(o.email)+'</div>':'')+'</td><td class="items-cell">'+esc(o.itemSummary)+' <span style="color:var(--dim)">('+o.units+'u)</span></td><td><div class="issue-tags">'+tags+'</div></td><td>'+(o.processingHours!==null?fmtH(o.processingHours):'<span class="metric-null">-</span>')+'</td><td>'+(o.fulfillmentHours!==null?fmtH(o.fulfillmentHours):'<span class="metric-null">-</span>')+'</td><td>'+buildTracking(o.tracking)+'</td></tr>';}).join('');}
+function buildTracking(t){if(!t)return'<span style="color:var(--dim);font-size:10px">No tracking</span>';var s=t.shipmentStatus?'<div><span class="tracking-status '+t.shipmentStatus+'">'+t.shipmentStatus.replace(/_/g,' ')+'</span></div>':'';var c=t.company?'<div style="color:var(--muted);font-size:10px">'+esc(t.company)+'</div>':'';var n=t.number?(t.url?'<div class="tracking-num"><a class="tracking-link" href="'+esc(t.url)+'" target="_blank">'+esc(t.number)+' &nearr;</a></div>':'<div class="tracking-num">'+esc(t.number)+'</div>'):'';var a=t.updatedAt?'<div class="tracking-age">'+timeAgo(t.updatedAt)+'</div>':'';return s+c+n+a;}
+function setIssueFilter(filter,btn){document.querySelectorAll('.filter-btn').forEach(function(b){b.classList.remove('active');});btn.classList.add('active');renderIssues(allFlagged,filter);}
+function switchTab(name,btn){document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active');});document.querySelectorAll('.view').forEach(function(v){v.classList.remove('active');});btn.closest('.tab').classList.add('active');document.getElementById('view-'+name).classList.add('active');}
+function setStatus(state){var dot=document.getElementById('refreshDot');dot.className='refresh-dot';if(state==='live')dot.classList.add('live');if(state==='fetching')dot.classList.add('fetching');}
+function show(id){['emptyState','loadingState','dashboard'].forEach(function(s){var el=document.getElementById(s);if(!el)return;el.style.display=s===id?(s==='dashboard'?'block':'flex'):'none';});}
+function showError(msg){var el=document.getElementById('errorBanner');el.textContent='Error: '+msg;el.style.display='block';}
+function hideError(){document.getElementById('errorBanner').style.display='none';}
+function fmtH(h){if(h===null||h===undefined)return'-';if(h<24)return h.toFixed(1)+'h';return(h/24).toFixed(1)+'d';}
+function esc(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function timeAgo(iso){var h=(Date.now()-new Date(iso).getTime())/36e5;if(h<1)return Math.round(h*60)+'m ago';if(h<24)return Math.round(h)+'h ago';return Math.round(h/24)+'d ago';}
+runFetch();
+</script>
+</body>
+</html>
