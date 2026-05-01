@@ -80,11 +80,11 @@ async function gql(store, token, query, variables = {}) {
   }
 }
 
-async function gqlAll(store, token, query, variables, getEdges, getPageInfo) {
+async function gqlAll(store, token, query, variables, getEdges, getPageInfo, deadlineMs = 120000) {
   let results = [], cursor = null, pages = 0;
-  const DEADLINE = Date.now() + 120000; // 2min for sync operations
+  const DEADLINE = Date.now() + deadlineMs;
   while (pages < 50) {
-    if (Date.now() > DEADLINE) { console.warn(`gqlAll deadline at ${pages} pages`); break; }
+    if (Date.now() > DEADLINE) { console.warn(`gqlAll deadline at ${pages} pages, ${results.length} results`); break; }
     const data = await gql(store, token, query, { ...variables, after: cursor });
     results = results.concat(getEdges(data).map(e => e.node));
     const pi = getPageInfo(data);
@@ -266,7 +266,7 @@ async function syncStore(store, token, label, since, draftsMap = {}) {
 
   console.log(`[sync] ${label}: fetching orders since ${since || "12mo ago"}`);
   const orders = await gqlAll(store, token, ORDERS_QUERY, { first: 250, query },
-    d => d.orders.edges, d => d.orders.pageInfo);
+    d => d.orders.edges, d => d.orders.pageInfo, 600000); // 10min for sync
   console.log(`[sync] ${label}: got ${orders.length} orders`);
 
   if (!orders.length) return 0;
@@ -313,7 +313,7 @@ async function buildDraftsMap(store, token, since) {
     : `status:completed updated_at:>=${new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)}`;
 
   const drafts = await gqlAll(store, token, DRAFT_ORDERS_QUERY, { first: 250, query },
-    d => d.draftOrders.edges, d => d.draftOrders.pageInfo);
+    d => d.draftOrders.edges, d => d.draftOrders.pageInfo, 600000); // 10min for sync
 
   // Map: shopify order GID isn't on draft, use completedAt as proxy — store by draft name
   // Actually we store processing_hours on the draft itself: created_at → completed_at
@@ -335,7 +335,8 @@ async function runSync(isFullBackfill = false) {
     // Get last sync time
     const stateRes = await db.query("SELECT value FROM sync_state WHERE key = 'last_sync'");
     const lastSync = stateRes.rows[0]?.value || null;
-    const since = isFullBackfill ? null : (lastSync || null);
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const since = isFullBackfill ? null : (lastSync ? (new Date(lastSync) < new Date(thirtyDaysAgo) ? thirtyDaysAgo : lastSync) : thirtyDaysAgo);
     const syncStart = new Date().toISOString();
 
     console.log(`[sync] Starting ${isFullBackfill ? "BACKFILL" : "incremental"} sync`);
@@ -685,6 +686,14 @@ app.post("/api/b2b-drafts", async (req, res) => {
     console.error(err);
     res.status(500).json({ error: err.message });
   }
+});
+
+// ── Manual backfill trigger ───────────────────────────────────────────────────
+app.post("/api/trigger-backfill", async (req, res) => {
+  // Reset last_sync so next runSync treats it as a fresh backfill
+  await db.query("DELETE FROM sync_state WHERE key = 'last_sync'");
+  res.json({ ok: true, message: "Backfill will start within 5 seconds" });
+  setTimeout(() => runSync(true), 2000);
 });
 
 // ── Sync status endpoint ──────────────────────────────────────────────────────
