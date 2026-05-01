@@ -152,7 +152,6 @@ query Orders($first: Int!, $after: String, $query: String!) {
           status
           displayStatus
           trackingInfo(first: 5) { company number url }
-          shipmentStatus
         }
       }
     }
@@ -174,7 +173,6 @@ query DraftOrders($first: Int!, $after: String, $query: String!) {
         tags
         totalPrice
         subtotalPrice
-        customer { firstName lastName email }
         lineItems(first: 50) {
           edges {
             node {
@@ -223,7 +221,16 @@ function processOrders(orders, label, year, month) {
       const fh = hoursBetween(order.createdAt, first.createdAt);
       if (fh !== null && fh >= 0) { fulfillmentTimes.push(fh); fulfillmentHours = fh; }
 
-      const delivered = fulfillments.find(f => f.displayStatus === "DELIVERED" || f.displayStatus === "Delivered");
+      // Use latest event status OR displayStatus to detect delivery
+    const delivered = fulfillments.find(f => {
+      const ds = (f.displayStatus || "").toUpperCase();
+      // Also check latest event
+      const latestEvent = f.events && f.events.edges && f.events.edges.length > 0
+        ? f.events.edges.map(e => e.node).sort((a,b) => new Date(b.happenedAt)-new Date(a.happenedAt))[0]
+        : null;
+      const latestStatus = (latestEvent && latestEvent.status || "").toUpperCase();
+      return ds === "DELIVERED" || ds === "FULFILLED" || latestStatus === "DELIVERED";
+    });
       if (delivered) {
         const dh = hoursBetween(first.createdAt, delivered.updatedAt);
         if (dh !== null && dh >= 0) { deliveryTimes.push(dh); deliveryHours = dh; }
@@ -509,10 +516,8 @@ app.post("/api/b2b-drafts", async (req, res) => {
     // By customer
     const customerMap = {};
     for (const d of drafts) {
-      const name = d.customer ? `${d.customer.firstName || ""} ${d.customer.lastName || ""}`.trim() : null;
-      const email = d.customer?.email || d.email || null;
-      const key = (name && name !== "") ? name : (email || "Unknown");
-      if (!customerMap[key]) customerMap[key] = { customer: key, email: email || "—", draftCount: 0, totalValue: 0 };
+      const key = d.email || "Unknown";
+      if (!customerMap[key]) customerMap[key] = { customer: key, email: key, draftCount: 0, totalValue: 0 };
       customerMap[key].draftCount++;
       customerMap[key].totalValue += parseFloat(d.totalPrice || 0);
     }
