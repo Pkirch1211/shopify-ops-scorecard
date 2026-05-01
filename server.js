@@ -68,12 +68,21 @@ function formatDuration(hours) {
   return `${(hours / 24).toFixed(1)}d`;
 }
 
+// ── Credentials from environment ─────────────────────────────────────────────
+const CREDS = {
+  dtcStore: process.env.DTC_STORE,
+  dtcToken: process.env.DTC_TOKEN,
+  b2bStore: process.env.B2B_STORE,
+  b2bToken: process.env.B2B_TOKEN,
+};
+
 // ── Main data endpoint ────────────────────────────────────────────────────────
 app.post("/api/scorecard", async (req, res) => {
-  const { dtcStore, dtcToken, b2bStore, b2bToken, year, month } = req.body;
+  const { year, month } = req.body;
+  const { dtcStore, dtcToken, b2bStore, b2bToken } = CREDS;
 
   if (!dtcStore || !dtcToken || !b2bStore || !b2bToken) {
-    return res.status(400).json({ error: "Missing store credentials" });
+    return res.status(400).json({ error: "Missing store credentials — set DTC_STORE, DTC_TOKEN, B2B_STORE, B2B_TOKEN in Railway environment variables." });
   }
 
   // Build date range for the selected month
@@ -320,9 +329,9 @@ function buildFulfillmentTimeSeries(orders, year, month) {
 
 // ── B2B Draft Orders endpoint ─────────────────────────────────────────────────
 app.post('/api/b2b-drafts', async (req, res) => {
-  const { b2bStore, b2bToken } = req.body;
+  const { b2bStore, b2bToken } = CREDS;
   if (!b2bStore || !b2bToken) {
-    return res.status(400).json({ error: 'Missing B2B credentials' });
+    return res.status(400).json({ error: 'Missing B2B credentials — set B2B_STORE and B2B_TOKEN in Railway environment variables.' });
   }
   try {
     // 1. All open draft orders
