@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" rx="4" fill="#f0f0eb"/>
+  <rect width="32" height="32" rx="4" fill="none" stroke="#4a6741" stroke-width="2"/>
+  <text x="16" y="14" font-family="system-ui,sans-serif" font-size="9" font-weight="700" fill="#4a6741" text-anchor="middle" letter-spacing="0.5">LL</text>
+  <line x1="5" y1="17" x2="27" y2="17" stroke="#4a6741" stroke-width="0.75" opacity="0.4"/>
+  <text x="16" y="26" font-family="system-ui,sans-serif" font-size="7" font-weight="600" fill="#4a6741" text-anchor="middle" letter-spacing="2">OPS</text>
+</svg>
