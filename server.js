@@ -84,22 +84,25 @@ async function gqlAll(store, token, query, variables, getEdges, getPageInfo) {
   let results = [];
   let cursor = null;
   let pages = 0;
-  const MAX_PAGES = 20; // 20 × 250 = 5000 orders max
-  const DEADLINE = Date.now() + 45000; // hard 45s total deadline
+  const MAX_PAGES = 10; // 10 × 250 = 2500 orders max — enough for a month
+  const DEADLINE = Date.now() + 30000; // hard 30s deadline
 
   while (pages < MAX_PAGES) {
     if (Date.now() > DEADLINE) {
-      console.warn(`gqlAll hit 45s deadline after ${pages} pages, returning ${results.length} results`);
+      console.warn(`[gqlAll] ${store} hit 30s deadline after ${pages} pages (${results.length} results)`);
       break;
     }
+    const t0 = Date.now();
     const data = await gql(store, token, query, { ...variables, after: cursor });
     const edges = getEdges(data);
     results = results.concat(edges.map(e => e.node));
     const pageInfo = getPageInfo(data);
     pages++;
+    console.log(`[gqlAll] ${store} page ${pages}: ${edges.length} items (${Date.now()-t0}ms), hasNextPage=${pageInfo.hasNextPage}`);
     if (!pageInfo.hasNextPage) break;
     cursor = pageInfo.endCursor;
   }
+  console.log(`[gqlAll] ${store} done: ${pages} pages, ${results.length} total results`);
   return results;
 }
 
