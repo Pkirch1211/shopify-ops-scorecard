@@ -114,7 +114,7 @@ tbody tr.combined-row{background:var(--green-light)}
   <div class="header-brand"><div class="brand-name">LifeLines</div><div class="brand-sub">Ops Tools</div></div>
   <div class="header-title"><h1>Ops Scorecard</h1><p>Shopify DTC + B2B &middot; Order Performance</p></div>
   <div class="header-right">
-    <nav><a href="/" class="nav-link active">Scorecard</a><a href="/dtc.html" class="nav-link">DTC</a><a href="/b2b.html" class="nav-link">B2B</a><a href="/care.html" class="nav-link">Care@</a></nav>
+    <nav><a href="/" class="nav-link active">Scorecard</a><a href="/dtc.html" class="nav-link">DTC</a><a href="/b2b.html" class="nav-link">B2B</a><a href="/npi.html" class="nav-link">NPI</a><a href="/care.html" class="nav-link">Care@</a></nav>
     <div class="refresh-status"><div class="refresh-dot" id="refreshDot"></div><span id="refreshLabel">Loading...</span></div>
   </div>
 </header>
@@ -186,7 +186,75 @@ yearSel.addEventListener('change',function(){clearTimers();clearDashboard();runF
 function scheduleRefresh(){if(refreshTimer)clearTimeout(refreshTimer);refreshTimer=setTimeout(function(){runFetch();},REFRESH_MS);}
 function clearTimers(){if(refreshTimer)clearTimeout(refreshTimer);}
 function updateCountdown(){}
-function clearDashboard(){
+
+var trendLoaded = false;
+async function loadTrend(year, month) {
+  if (trendLoaded) return;
+  try {
+    var r1 = await fetch('/api/delivery-trend', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+    var r2 = await fetch('/api/fulfillment-sla', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({year:year,month:month})});
+    var trend = await r1.json();
+    var sla = await r2.json();
+    renderTrend(trend, sla, month);
+    trendLoaded = true;
+  } catch(e) { console.warn('Trend load failed:', e); }
+}
+
+function renderTrend(trend, sla, currentMonth) {
+  var dtc = trend.byStore && trend.byStore.DTC || [];
+  var b2b = trend.byStore && trend.byStore.B2B || [];
+
+  // Get all months present
+  var allMonths = [...new Set([...dtc.map(d=>d.month), ...b2b.map(d=>d.month)])].sort();
+  var monthLabels = allMonths.map(function(m) {
+    var parts = m.split('-');
+    return ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(parts[1])-1] + ' ' + parts[0].slice(2);
+  });
+
+  function getVal(store, month, field) {
+    var row = store.find(function(r){return r.month===month;});
+    return row ? (row[field] !== null ? parseFloat((row[field]/24).toFixed(1)) : null) : null;
+  }
+
+  var grid = '#d4d4cc', tick = '#9a9a92';
+  var baseOpts = {responsive:true, maintainAspectRatio:false, plugins:{legend:{display:true, labels:{color:tick, font:{family:'Satoshi',size:11}, boxWidth:10}}},
+    scales:{x:{ticks:{color:tick, font:{family:'Satoshi',size:10}}, grid:{color:grid}, border:{color:'transparent'}},
+            y:{ticks:{color:tick, font:{family:'Satoshi',size:10}}, grid:{color:grid}, border:{color:'transparent'}, beginAtZero:true}}};
+
+  if (charts.trendFulfillment) charts.trendFulfillment.destroy();
+  charts.trendFulfillment = new Chart(document.getElementById('chartTrendFulfillment'), {
+    type:'line', data:{labels:monthLabels, datasets:[
+      {label:'DTC', data:allMonths.map(function(m){return getVal(dtc,m,'avgFulfillmentHours');}), borderColor:'rgba(61,92,138,0.9)', backgroundColor:'rgba(61,92,138,0.06)', tension:0.3, fill:true, pointRadius:3, borderWidth:2},
+      {label:'B2B', data:allMonths.map(function(m){return getVal(b2b,m,'avgFulfillmentHours');}), borderColor:'rgba(74,103,65,0.9)', backgroundColor:'rgba(74,103,65,0.06)', tension:0.3, fill:true, pointRadius:3, borderWidth:2},
+    ]}, options:Object.assign({},baseOpts,{scales:{x:baseOpts.scales.x, y:Object.assign({},baseOpts.scales.y,{title:{display:true,text:'Days',color:tick}})}})
+  });
+
+  if (charts.trendDelivery) charts.trendDelivery.destroy();
+  charts.trendDelivery = new Chart(document.getElementById('chartTrendDelivery'), {
+    type:'line', data:{labels:monthLabels, datasets:[
+      {label:'DTC', data:allMonths.map(function(m){return getVal(dtc,m,'avgDeliveryHours');}), borderColor:'rgba(61,92,138,0.9)', backgroundColor:'rgba(61,92,138,0.06)', tension:0.3, fill:true, pointRadius:3, borderWidth:2},
+      {label:'B2B', data:allMonths.map(function(m){return getVal(b2b,m,'avgDeliveryHours');}), borderColor:'rgba(74,103,65,0.9)', backgroundColor:'rgba(74,103,65,0.06)', tension:0.3, fill:true, pointRadius:3, borderWidth:2},
+    ]}, options:baseOpts
+  });
+
+  // SLA chart
+  var slaData = sla.sla || {};
+  var stores = Object.keys(slaData);
+  if (charts.sla) charts.sla.destroy();
+  charts.sla = new Chart(document.getElementById('chartSLA'), {
+    type:'bar', data:{
+      labels: stores,
+      datasets:[
+        {label:'Within 24h', data:stores.map(function(s){return slaData[s]?slaData[s].pct24h:0;}), backgroundColor:'rgba(74,103,65,0.8)', borderRadius:2},
+        {label:'Within 48h', data:stores.map(function(s){return slaData[s]?slaData[s].pct48h:0;}), backgroundColor:'rgba(74,103,65,0.45)', borderRadius:2},
+        {label:'Within 72h', data:stores.map(function(s){return slaData[s]?slaData[s].pct72h:0;}), backgroundColor:'rgba(74,103,65,0.2)', borderRadius:2},
+      ]
+    },
+    options:Object.assign({},baseOpts,{scales:{x:baseOpts.scales.x, y:Object.assign({},baseOpts.scales.y,{max:100,ticks:Object.assign({},baseOpts.scales.y.ticks,{callback:function(v){return v+'%'}})})}})
+  });
+}
+
+function clearDashboard(){trendLoaded=false;
   if(!hasData)return;
   ['kpiOrders','kpiUnits','kpiProcessing','kpiFulfillment','kpiDelivery'].forEach(function(id){var el=document.getElementById(id);if(el)el.textContent='-';});
   ['kpiOrdersSub','kpiUnitsSub','kpiProcessingSub','kpiFulfillmentSub','kpiDeliverySub'].forEach(function(id){var el=document.getElementById(id);if(el)el.innerHTML='';});
@@ -197,7 +265,7 @@ function clearDashboard(){
 }
 async function runFetch(){clearTimers();setStatus('fetching');if(!hasData)show('emptyState');hideError();try{var res=await fetch('/api/scorecard',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({year:parseInt(yearSel.value),month:parseInt(monthSel.value)})});var data=await res.json();if(!res.ok)throw new Error(data.error||'Server error');hasData=true;render(data);setStatus('live');scheduleRefresh();}catch(err){showError(err.message);setStatus('error');if(!hasData)show('emptyState');scheduleRefresh();}}
 function render(data){show('dashboard');var stores=data.stores,combined=data.combined,year=data.year,month=data.month;var dtc=stores.find(function(s){return s.label==='DTC';});var b2b=stores.find(function(s){return s.label==='B2B';});document.getElementById('periodBadge').textContent=MONTHS[month-1]+' '+year;document.getElementById('refreshLabel').textContent='Updated '+new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-  var lsEl=document.getElementById('lastSync');if(lsEl&&data.lastSync){lsEl.textContent='Shopify sync: '+new Date(data.lastSync).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});}setKPI('Orders',combined.totalOrders.toLocaleString(),[{cls:'dtc',label:'DTC',val:dtc.totalOrders.toLocaleString()},{cls:'b2b',label:'B2B',val:b2b.totalOrders.toLocaleString()}]);setKPI('Units',combined.totalUnits.toLocaleString(),[{cls:'dtc',label:'DTC',val:dtc.totalUnits.toLocaleString()},{cls:'b2b',label:'B2B',val:b2b.totalUnits.toLocaleString()}]);setKPI('Processing',combined.avgProcessingFormatted,[{cls:'dtc',label:'DTC',val:dtc.avgProcessingFormatted},{cls:'b2b',label:'B2B',val:b2b.avgProcessingFormatted}]);setKPI('Fulfillment',combined.avgFulfillmentFormatted,[{cls:'dtc',label:'DTC',val:dtc.avgFulfillmentFormatted},{cls:'b2b',label:'B2B',val:b2b.avgFulfillmentFormatted}]);setKPI('Delivery',combined.avgDeliveryFormatted,[{cls:'dtc',label:'DTC',val:dtc.avgDeliveryFormatted},{cls:'b2b',label:'B2B',val:b2b.avgDeliveryFormatted}]);var tbody=document.getElementById('scorecardBody');tbody.innerHTML='';stores.concat([Object.assign({},combined,{label:'Combined'})]).forEach(function(row){var cls=row.label==='DTC'?'dtc':row.label==='B2B'?'b2b':'combined';var upo=row.totalOrders>0?(row.totalUnits/row.totalOrders).toFixed(1):'--';tbody.innerHTML+='<tr class="'+(cls==='combined'?'combined-row':'')+'"><td><span class="store-pill"><span class="store-dot '+cls+'"></span>'+row.label+'</span></td><td>'+row.totalOrders.toLocaleString()+'</td><td>'+row.totalUnits.toLocaleString()+'</td><td>'+upo+'</td><td class="'+(row.avgProcessingFormatted==='--'?'metric-null':'')+'">'+row.avgProcessingFormatted+'</td><td class="'+(row.avgFulfillmentFormatted==='--'?'metric-null':'')+'">'+row.avgFulfillmentFormatted+'</td><td class="'+(row.avgDeliveryFormatted==='--'?'metric-null':'')+'">'+row.avgDeliveryFormatted+'</td></tr>';});buildCharts(dtc,b2b,year,month);allFlagged=data.flaggedOrders||[];renderIssues(allFlagged,'all');var count=allFlagged.length;document.getElementById('issuesTab').innerHTML='Issues <span class="issues-count-badge '+(count>0?'has-issues':'zero')+'">'+count+'</span>';}
+  var lsEl=document.getElementById('lastSync');if(lsEl&&data.lastSync){lsEl.textContent='Shopify sync: '+new Date(data.lastSync).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});}setKPI('Orders',combined.totalOrders.toLocaleString(),[{cls:'dtc',label:'DTC',val:dtc.totalOrders.toLocaleString()},{cls:'b2b',label:'B2B',val:b2b.totalOrders.toLocaleString()}]);setKPI('Units',combined.totalUnits.toLocaleString(),[{cls:'dtc',label:'DTC',val:dtc.totalUnits.toLocaleString()},{cls:'b2b',label:'B2B',val:b2b.totalUnits.toLocaleString()}]);setKPI('Processing',combined.avgProcessingFormatted,[{cls:'dtc',label:'DTC',val:dtc.avgProcessingFormatted},{cls:'b2b',label:'B2B',val:b2b.avgProcessingFormatted}]);setKPI('Fulfillment',combined.avgFulfillmentFormatted,[{cls:'dtc',label:'DTC',val:dtc.avgFulfillmentFormatted},{cls:'b2b',label:'B2B',val:b2b.avgFulfillmentFormatted}]);setKPI('Delivery',combined.avgDeliveryFormatted,[{cls:'dtc',label:'DTC',val:dtc.avgDeliveryFormatted},{cls:'b2b',label:'B2B',val:b2b.avgDeliveryFormatted}]);var tbody=document.getElementById('scorecardBody');tbody.innerHTML='';stores.concat([Object.assign({},combined,{label:'Combined'})]).forEach(function(row){var cls=row.label==='DTC'?'dtc':row.label==='B2B'?'b2b':'combined';var upo=row.totalOrders>0?(row.totalUnits/row.totalOrders).toFixed(1):'--';tbody.innerHTML+='<tr class="'+(cls==='combined'?'combined-row':'')+'"><td><span class="store-pill"><span class="store-dot '+cls+'"></span>'+row.label+'</span></td><td>'+row.totalOrders.toLocaleString()+'</td><td>'+row.totalUnits.toLocaleString()+'</td><td>'+upo+'</td><td class="'+(row.avgProcessingFormatted==='--'?'metric-null':'')+'">'+row.avgProcessingFormatted+'</td><td class="'+(row.avgFulfillmentFormatted==='--'?'metric-null':'')+'">'+row.avgFulfillmentFormatted+'</td><td class="'+(row.avgDeliveryFormatted==='--'?'metric-null':'')+'">'+row.avgDeliveryFormatted+'</td></tr>';});buildCharts(dtc,b2b,year,month);allFlagged=data.flaggedOrders||[];renderIssues(allFlagged,'all');loadTrend(data.year, data.month);var count=allFlagged.length;document.getElementById('issuesTab').innerHTML='Issues <span class="issues-count-badge '+(count>0?'has-issues':'zero')+'">'+count+'</span>';}
 function setKPI(key,value,subs){document.getElementById('kpi'+key).textContent=value;document.getElementById('kpi'+key+'Sub').innerHTML=subs.map(function(s){return'<div class="kpi-store"><span class="kpi-store-label '+s.cls+'">'+s.label+'</span><span class="kpi-store-val">'+s.val+'</span></div>';}).join('');}
 function buildCharts(dtc,b2b,year,month){destroyCharts();var labels=dtc.ordersByDay.map(function(d){return d.day;});var grid='#d4d4cc',tick='#9a9a92';var base={responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{color:tick,font:{family:'Satoshi',size:10},maxTicksLimit:10},grid:{color:grid},border:{color:'transparent'}},y:{ticks:{color:tick,font:{family:'Satoshi',size:10}},grid:{color:grid},border:{color:'transparent'},beginAtZero:true}}};var leg={display:true,labels:{color:tick,font:{family:'Satoshi',size:11},boxWidth:10}};charts.orders=new Chart(document.getElementById('chartOrders'),{type:'line',data:{labels:labels,datasets:[{label:'DTC',data:dtc.ordersByDay.map(function(d){return d.orders;}),backgroundColor:'rgba(61,92,138,0.1)',borderColor:'rgba(61,92,138,0.8)',fill:true,tension:0.3,pointRadius:0,borderWidth:2},{label:'B2B',data:b2b.ordersByDay.map(function(d){return d.orders;}),backgroundColor:'rgba(74,103,65,0.1)',borderColor:'rgba(74,103,65,0.8)',fill:true,tension:0.3,pointRadius:0,borderWidth:2}]},options:Object.assign({},base,{plugins:{legend:leg}})});charts.units=new Chart(document.getElementById('chartUnits'),{type:'line',data:{labels:labels,datasets:[{label:'DTC',data:dtc.ordersByDay.map(function(d){return d.units;}),backgroundColor:'rgba(61,92,138,0.45)',borderRadius:2},{label:'B2B',data:b2b.ordersByDay.map(function(d){return d.units;}),backgroundColor:'rgba(74,103,65,0.45)',borderRadius:2}]},options:Object.assign({},base,{plugins:{legend:leg}})});charts.processing=new Chart(document.getElementById('chartProcessing'),{type:'line',data:{labels:labels,datasets:[{label:'DTC Orders Fulfilled',data:dtc.fulfillmentsByDay.map(function(d){return d.fulfilled;}),backgroundColor:'rgba(61,92,138,0.6)',borderRadius:2},{label:'B2B Orders Fulfilled',data:b2b.fulfillmentsByDay.map(function(d){return d.fulfilled;}),backgroundColor:'rgba(74,103,65,0.6)',borderRadius:2}]},options:Object.assign({},base,{plugins:{legend:leg}})});charts.fulfillment=new Chart(document.getElementById('chartFulfillment'),{type:'line',data:{labels:labels,datasets:[{label:'DTC Units',data:dtc.ordersByDay.map(function(d){return d.units;}),backgroundColor:'rgba(61,92,138,0.08)',borderColor:'rgba(61,92,138,0.7)',fill:true,tension:0.3,pointRadius:0,borderWidth:2},{label:'B2B Units',data:b2b.ordersByDay.map(function(d){return d.units;}),backgroundColor:'rgba(74,103,65,0.08)',borderColor:'rgba(74,103,65,0.7)',fill:true,tension:0.3,pointRadius:0,borderWidth:2}]},options:Object.assign({},base,{plugins:{legend:leg}})});var dc=0,bc=0;charts.cumulative=new Chart(document.getElementById('chartCumulative'),{type:'line',data:{labels:labels,datasets:[{label:'DTC Fulfilled',data:dtc.fulfillmentsByDay.map(function(d){return(dc+=d.fulfilled);}),borderColor:'rgba(61,92,138,1)',backgroundColor:'rgba(61,92,138,0.05)',tension:0.2,fill:true,pointRadius:0,borderWidth:2},{label:'B2B Fulfilled',data:b2b.fulfillmentsByDay.map(function(d){return(bc+=d.fulfilled);}),borderColor:'rgba(74,103,65,1)',backgroundColor:'rgba(74,103,65,0.05)',tension:0.2,fill:true,pointRadius:0,borderWidth:2}]},options:Object.assign({},base,{plugins:{legend:leg}})});}
 function destroyCharts(){Object.values(charts).forEach(function(c){c.destroy();});charts={};}
