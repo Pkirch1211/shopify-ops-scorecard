@@ -280,7 +280,7 @@ async function syncStore(store, token, label, since, draftsMap = {}) {
     const values = [], params = [];
     let pi = 1;
     for (const node of batch) {
-      const row = processOrderNode(node, label, draftsMap[node.name] || null);
+      const row = processOrderNode(node, label, null); // processing time stored separately via draftsMap
       values.push(`($${pi},$${pi+1},$${pi+2},$${pi+3},$${pi+4},$${pi+5},$${pi+6},$${pi+7},$${pi+8},$${pi+9},$${pi+10},$${pi+11},$${pi+12},$${pi+13})`);
       params.push(row.id, row.store, row.order_number, row.created_at, row.updated_at,
         row.email, row.units, row.fulfillment_hours, row.delivery_hours, row.processing_hours,
@@ -315,18 +315,27 @@ async function buildDraftsMap(store, token, since) {
     : `status:completed updated_at:>=${new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)}`;
 
   const drafts = await gqlAll(store, token, DRAFT_ORDERS_QUERY, { first: 250, query },
-    d => d.draftOrders.edges, d => d.draftOrders.pageInfo, 600000); // 10min for sync
+    d => d.draftOrders.edges, d => d.draftOrders.pageInfo, 600000);
 
-  // Map: shopify order GID isn't on draft, use completedAt as proxy — store by draft name
-  // Actually we store processing_hours on the draft itself: created_at → completed_at
-  const map = {}; // draft.name → processing_hours (we'll match by order name later)
+  // Build monthly avg processing hours: draft created_at → completed_at
+  // Keyed by "YYYY-MM" for use in scorecard aggregation
+  const byMonth = {};
   for (const d of drafts) {
     if (d.completedAt) {
       const h = hoursBetween(d.createdAt, d.completedAt);
-      if (h !== null && h >= 0) map[d.name] = h;
+      if (h !== null && h >= 0 && h < 720) { // cap at 30 days to exclude outliers
+        const key = d.completedAt.slice(0, 7); // "2026-04"
+        if (!byMonth[key]) byMonth[key] = [];
+        byMonth[key].push(h);
+      }
     }
   }
-  return map;
+  // Convert to averages
+  const result = {};
+  for (const [month, hours] of Object.entries(byMonth)) {
+    result[month] = avg(hours);
+  }
+  return result;
 }
 
 async function runSync(isFullBackfill = false) {
@@ -351,10 +360,22 @@ async function runSync(isFullBackfill = false) {
       buildDraftsMap(b2bStore, b2bToken, since).catch(e => { console.warn("B2B drafts:", e.message); return {}; }),
     ]);
 
+    // Store monthly processing averages in sync_state
+    for (const [month, avgHours] of Object.entries(dtcDrafts)) {
+      await db.query(`INSERT INTO sync_state (key, value, updated_at) VALUES ($1, $2, NOW())
+        ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
+        [`processing_dtc_${month}`, String(avgHours)]);
+    }
+    for (const [month, avgHours] of Object.entries(b2bDrafts)) {
+      await db.query(`INSERT INTO sync_state (key, value, updated_at) VALUES ($1, $2, NOW())
+        ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
+        [`processing_b2b_${month}`, String(avgHours)]);
+    }
+
     // Sync both stores in parallel (different rate limit buckets)
     const [dtcCount, b2bCount] = await Promise.all([
-      syncStore(dtcStore, dtcToken, "DTC", since, dtcDrafts),
-      syncStore(b2bStore, b2bToken, "B2B", since, b2bDrafts),
+      syncStore(dtcStore, dtcToken, "DTC", since, {}),
+      syncStore(b2bStore, b2bToken, "B2B", since, {}),
     ]);
 
     // Update sync state
@@ -377,14 +398,15 @@ app.post("/api/scorecard", async (req, res) => {
   const start = new Date(Date.UTC(year, month - 1, 1));
   const end   = new Date(Date.UTC(year, month, 1));
 
+  const monthKey = `${year}-${String(month).padStart(2, '0')}`;
+
   try {
-    const [statsRes, flaggedRes, syncRes] = await Promise.all([
+    const [statsRes, flaggedRes, syncRes, processingRes] = await Promise.all([
       db.query(`
         SELECT
           store,
           COUNT(*) AS total_orders,
           SUM(units) AS total_units,
-          AVG(processing_hours) AS avg_processing,
           AVG(fulfillment_hours) AS avg_fulfillment,
           AVG(delivery_hours) AS avg_delivery
         FROM orders
@@ -402,7 +424,13 @@ app.post("/api/scorecard", async (req, res) => {
         LIMIT 500
       `, [start, end]),
       db.query("SELECT value FROM sync_state WHERE key = 'last_sync'"),
+      db.query("SELECT key, value FROM sync_state WHERE key = ANY($1)", [[`processing_dtc_${monthKey}`, `processing_b2b_${monthKey}`]]),
     ]);
+    const processingMap = {};
+    for (const r of processingRes.rows) {
+      if (r.key.includes('_dtc_')) processingMap['DTC'] = parseFloat(r.value);
+      if (r.key.includes('_b2b_')) processingMap['B2B'] = parseFloat(r.value);
+    }
 
     // Daily time series
     const dailyRes = await db.query(`
@@ -442,7 +470,7 @@ app.post("/api/scorecard", async (req, res) => {
         label,
         totalOrders: parseInt(stats.total_orders || 0),
         totalUnits: parseInt(stats.total_units || 0),
-        avgProcessingFormatted: formatDuration(parseFloat(stats.avg_processing) || null),
+        avgProcessingFormatted: formatDuration(processingMap[label] || null),
         avgFulfillmentFormatted: formatDuration(parseFloat(stats.avg_fulfillment) || null),
         avgDeliveryFormatted: formatDuration(parseFloat(stats.avg_delivery) || null),
         avgFulfillmentHours: parseFloat(stats.avg_fulfillment) || null,
@@ -459,7 +487,7 @@ app.post("/api/scorecard", async (req, res) => {
     const combined = {
       totalOrders: allStats.reduce((s, r) => s + parseInt(r.total_orders || 0), 0),
       totalUnits: allStats.reduce((s, r) => s + parseInt(r.total_units || 0), 0),
-      avgProcessingFormatted: formatDuration(avg(allStats.map(r => parseFloat(r.avg_processing)).filter(v => v > 0))),
+      avgProcessingFormatted: formatDuration(avg(Object.values(processingMap).filter(v => v > 0))),
       avgFulfillmentFormatted: formatDuration(avg(allStats.map(r => parseFloat(r.avg_fulfillment)).filter(v => v > 0))),
       avgDeliveryFormatted: formatDuration(avg(allStats.map(r => parseFloat(r.avg_delivery)).filter(v => v > 0))),
     };
@@ -524,7 +552,13 @@ app.post("/api/care-scorecard", async (req, res) => {
           AND LOWER(email) = 'care@lifelines.com'
       `, [start, end]),
       db.query("SELECT value FROM sync_state WHERE key = 'last_sync'"),
+      db.query("SELECT key, value FROM sync_state WHERE key = ANY($1)", [[`processing_dtc_${monthKey}`, `processing_b2b_${monthKey}`]]),
     ]);
+    const processingMap = {};
+    for (const r of processingRes.rows) {
+      if (r.key.includes('_dtc_')) processingMap['DTC'] = parseFloat(r.value);
+      if (r.key.includes('_b2b_')) processingMap['B2B'] = parseFloat(r.value);
+    }
 
     const dailyRes = await db.query(`
       SELECT DATE(created_at) AS day, COUNT(*) AS orders, SUM(units) AS units
