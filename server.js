@@ -374,8 +374,8 @@ async function runSync(isFullBackfill = false) {
 // ── Scorecard endpoint (reads from DB) ────────────────────────────────────────
 app.post("/api/scorecard", async (req, res) => {
   const { year, month } = req.body;
-  const start = new Date(year, month - 1, 1);
-  const end   = new Date(year, month, 1);
+  const start = new Date(Date.UTC(year, month - 1, 1));
+  const end   = new Date(Date.UTC(year, month, 1));
 
   try {
     const [statsRes, flaggedRes, syncRes] = await Promise.all([
@@ -508,8 +508,8 @@ function buildDayArray(daysInMonth, rows, countField, unitsField) {
 // ── Care@ endpoint (reads from DB) ────────────────────────────────────────────
 app.post("/api/care-scorecard", async (req, res) => {
   const { year, month } = req.body;
-  const start = new Date(year, month - 1, 1);
-  const end   = new Date(year, month, 1);
+  const start = new Date(Date.UTC(year, month - 1, 1));
+  const end   = new Date(Date.UTC(year, month, 1));
 
   try {
     const [statsRes, syncRes] = await Promise.all([
