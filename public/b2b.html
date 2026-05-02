@@ -83,6 +83,8 @@ tbody tr:hover{background:var(--bg)}
 .spinner{width:16px;height:16px;border:2px solid var(--border2);border-top-color:var(--green);border-radius:50%;animation:spin .7s linear infinite}
 .error-banner{background:#f5e0e0;border:1px solid #d49696;color:var(--danger);font-family:var(--sans);font-size:11px;padding:10px 16px;border-radius:2px;margin-bottom:16px;display:none}
 .fetch-time{font-family:var(--sans);font-size:10px;color:var(--dim)}
+.export-btn{font-size:10px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;padding:4px 10px;border-radius:2px;border:1px solid var(--border2);background:var(--surface);color:var(--muted);cursor:pointer;transition:all .12s;float:right}
+.export-btn:hover{color:var(--green);border-color:var(--green)}
 .oos-empty{padding:40px;text-align:center;font-family:var(--sans);font-size:11px;color:var(--green)}
 @media(max-width:960px){.two-col{grid-template-columns:1fr}.kpi-grid{grid-template-columns:repeat(2,1fr)}}
 </style>
@@ -92,7 +94,7 @@ tbody tr:hover{background:var(--bg)}
   <div class="header-brand"><div class="brand-name">LifeLines</div><div class="brand-sub">Ops Tools</div></div>
   <div class="header-title"><h1>B2B Order Process</h1><p>Open Draft Orders &middot; Live View</p></div>
   <div class="header-right">
-    <nav><a href="/" class="nav-link">Scorecard</a><a href="/dtc.html" class="nav-link">DTC</a><a href="/b2b.html" class="nav-link active">B2B</a><a href="/care.html" class="nav-link">Care@</a></nav>
+    <nav><a href="/" class="nav-link">Scorecard</a><a href="/dtc.html" class="nav-link">DTC</a><a href="/b2b.html" class="nav-link active">B2B</a><a href="/npi.html" class="nav-link">NPI</a><a href="/care.html" class="nav-link">Care@</a></nav>
     <div class="refresh-status"><div class="refresh-dot" id="refreshDot"></div><span id="refreshLabel">Loading...</span></div>
   </div>
 </header>
@@ -174,6 +176,12 @@ function scheduleRefresh(){clearTimers();nextRefreshAt=Date.now()+REFRESH_MS;ref
 function clearTimers(){if(refreshTimer)clearTimeout(refreshTimer);if(countdownTimer)clearInterval(countdownTimer);}
 function updateCountdown(){var r=Math.max(0,nextRefreshAt-Date.now());var m=Math.floor(r/60000);var s=Math.floor((r%60000)/1000);document.getElementById('nextRefresh').textContent='Next refresh in '+m+':'+(s<10?'0':'')+s;}
 
+async function runFetchForce(){
+  b2bDraftsFetched = false;
+  await fetch('/api/b2b-drafts', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({refresh:true})});
+  runFetch();
+}
+var b2bDraftsFetched = false;
 async function runFetch(){clearTimers();setStatus('fetching');if(!hasData)show('emptyState');hideError();try{var res=await fetch('/api/b2b-drafts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});var data=await res.json();if(!res.ok)throw new Error(data.error||'Server error');hasData=true;render(data);setStatus('live');scheduleRefresh();}catch(err){showError(err.message);setStatus('error');if(!hasData)show('emptyState');scheduleRefresh();}}
 
 function render(data){
@@ -186,6 +194,9 @@ function render(data){
   document.getElementById('refreshLabel').textContent='Updated '+new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
   if(data.needsReviewCount===0){document.getElementById('kpiNRHint').textContent='None flagged';document.getElementById('kpiNRCard').classList.remove('clickable');document.getElementById('kpiNRCard').style.cursor='default';}
   allCustomers=data.byCustomer;
+  // Build per-customer draft map for export
+  window.allCustomerDrafts = {};
+  (data.needsReviewExport || []).forEach(function(d) { if(d.email){if(!allCustomerDrafts[d.email])allCustomerDrafts[d.email]=[];allCustomerDrafts[d.email].push(d);} });
   allOOS=data.oosItems;
   exportData=data.needsReviewExport;
   renderCustomers(allCustomers);
@@ -197,7 +208,27 @@ function renderCustomers(rows){
   var maxCount=rows[0]?rows[0].draftCount:1;
   document.getElementById('customerCount').textContent=rows.length+' customers';
   if(!rows.length){tbody.innerHTML='<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:32px">No open draft orders</td></tr>';return;}
-  tbody.innerHTML=rows.map(function(r,i){return'<tr><td><span class="rank-num">'+(i+1)+'</span></td><td><div class="customer-name">'+esc(r.customer)+'</div>'+(r.email!=='--'&&r.email!=='?'?'<div class="customer-email">'+esc(r.email)+'</div>':'')+'</td><td><div class="count-bar-wrap"><span>'+r.draftCount+'</span><div class="count-bar" style="width:'+Math.max(4,Math.round(r.draftCount/maxCount*80))+'px"></div></div></td><td class="money-cell">$'+r.totalValue.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})+'</td></tr>';}).join('');
+  tbody.innerHTML=rows.map(function(r,i){return'<tr><td><span class="rank-num">'+(i+1)+'</span></td><td><div class="customer-name">'+esc(r.customer)+'<button class="export-btn" onclick="exportCustomerDrafts(\''+(r.email||'')+'\',\''+esc(r.customer)+'\')" title="Export drafts">&#8595; CSV</button></div>'+(r.email!=='--'&&r.email!=='?'?'<div class="customer-email">'+esc(r.email)+'</div>':'')+'</td><td><div class="count-bar-wrap"><span>'+r.draftCount+'</span><div class="count-bar" style="width:'+Math.max(4,Math.round(r.draftCount/maxCount*80))+'px"></div></div></td><td class="money-cell">$'+r.totalValue.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})+'</td></tr>';}).join('');
+}
+
+function exportCustomerDrafts(email, customerName) {
+  var customerDrafts = (allCustomerDrafts[email] || []);
+  if (!customerDrafts.length) return;
+  var rows = [['Draft #','Customer','Email','Created','Tags','Total','Line Item','SKU','Qty','Unit Price'].map(csvEsc).join(',')];
+  customerDrafts.forEach(function(d) {
+    if (!d.lineItems || !d.lineItems.length) {
+      rows.push([d.name, customerName, email, d.createdAt, (d.tags||[]).join(';'), d.total,'','','',''].map(csvEsc).join(','));
+    } else {
+      d.lineItems.forEach(function(li) {
+        rows.push([d.name, customerName, email, d.createdAt, (d.tags||[]).join(';'), d.total, li.title, li.sku||'', li.quantity, li.price||''].map(csvEsc).join(','));
+      });
+    }
+  });
+  var blob = new Blob([rows.join('\n')], {type:'text/csv'});
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a'); a.href=url;
+  a.download = customerName.replace(/[^a-z0-9]/gi,'-').toLowerCase()+'-drafts-'+new Date().toISOString().slice(0,10)+'.csv';
+  a.click(); URL.revokeObjectURL(url);
 }
 
 function filterCustomers(q){var filtered=q?allCustomers.filter(function(r){return r.customer.toLowerCase().includes(q.toLowerCase())||r.email.toLowerCase().includes(q.toLowerCase());}):allCustomers;renderCustomers(filtered);}
