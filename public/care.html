@@ -143,6 +143,7 @@ function render(data){
   show('dashboard');
   document.getElementById('periodBadge').textContent=MONTHS[data.month-1]+' '+data.year;
   document.getElementById('refreshLabel').textContent='Updated '+new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+  var ls=document.getElementById('lastSync');if(ls&&data.lastSync)ls.textContent='Shopify sync: '+new Date(data.lastSync).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
   document.getElementById('kpiOrders').textContent=data.totalOrders.toLocaleString();
   document.getElementById('kpiUnits').textContent=data.totalUnits.toLocaleString();
   document.getElementById('kpiFulfillment').textContent=data.avgFulfillmentFormatted||'-';
