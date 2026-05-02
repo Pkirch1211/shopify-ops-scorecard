@@ -552,13 +552,7 @@ app.post("/api/care-scorecard", async (req, res) => {
           AND LOWER(email) = 'care@lifelines.com'
       `, [start, end]),
       db.query("SELECT value FROM sync_state WHERE key = 'last_sync'"),
-      db.query("SELECT key, value FROM sync_state WHERE key = ANY($1)", [[`processing_dtc_${monthKey}`, `processing_b2b_${monthKey}`]]),
     ]);
-    const processingMap = {};
-    for (const r of processingRes.rows) {
-      if (r.key.includes('_dtc_')) processingMap['DTC'] = parseFloat(r.value);
-      if (r.key.includes('_b2b_')) processingMap['B2B'] = parseFloat(r.value);
-    }
 
     const dailyRes = await db.query(`
       SELECT DATE(created_at) AS day, COUNT(*) AS orders, SUM(units) AS units
