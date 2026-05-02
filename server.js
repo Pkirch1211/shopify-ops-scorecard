@@ -309,13 +309,13 @@ async function syncStore(store, token, label, since, draftsMap = {}) {
   return upserted;
 }
 
-async function buildDraftsMap(store, token, since) {
+async function buildDraftsMap(store, token, since, deadlineMs = 120000) {
   const query = since
     ? `status:completed updated_at:>=${since}`
     : `status:completed updated_at:>=${new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)}`;
 
   const drafts = await gqlAll(store, token, DRAFT_ORDERS_QUERY, { first: 250, query },
-    d => d.draftOrders.edges, d => d.draftOrders.pageInfo, 600000);
+    d => d.draftOrders.edges, d => d.draftOrders.pageInfo, deadlineMs);
 
   // Build monthly avg processing hours: draft created_at → completed_at
   // Keyed by "YYYY-MM" for use in scorecard aggregation
@@ -356,8 +356,8 @@ async function runSync(isFullBackfill = false) {
 
     // Build draft maps for processing times
     const [dtcDrafts, b2bDrafts] = await Promise.all([
-      buildDraftsMap(dtcStore, dtcToken, since).catch(e => { console.warn("DTC drafts:", e.message); return {}; }),
-      buildDraftsMap(b2bStore, b2bToken, since).catch(e => { console.warn("B2B drafts:", e.message); return {}; }),
+      buildDraftsMap(dtcStore, dtcToken, since, isFullBackfill ? 600000 : 60000).catch(e => { console.warn("DTC drafts:", e.message); return {}; }),
+      buildDraftsMap(b2bStore, b2bToken, since, isFullBackfill ? 600000 : 60000).catch(e => { console.warn("B2B drafts:", e.message); return {}; }),
     ]);
 
     // Store monthly processing averages in sync_state
