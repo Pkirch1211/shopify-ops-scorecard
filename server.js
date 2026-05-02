@@ -280,16 +280,16 @@ async function syncStore(store, token, label, since, draftsMap = {}) {
     const values = [], params = [];
     let pi = 1;
     for (const node of batch) {
-      const row = processOrderNode(node, label, draftsMap[node.id] || null);
-      values.push(`($${pi},$${pi+1},$${pi+2},$${pi+3},$${pi+4},$${pi+5},$${pi+6},$${pi+7},$${pi+8},$${pi+9},$${pi+10},$${pi+11},$${pi+12})`);
+      const row = processOrderNode(node, label, draftsMap[node.name] || null);
+      values.push(`($${pi},$${pi+1},$${pi+2},$${pi+3},$${pi+4},$${pi+5},$${pi+6},$${pi+7},$${pi+8},$${pi+9},$${pi+10},$${pi+11},$${pi+12},$${pi+13})`);
       params.push(row.id, row.store, row.order_number, row.created_at, row.updated_at,
         row.email, row.units, row.fulfillment_hours, row.delivery_hours, row.processing_hours,
-        row.is_flagged, row.flag_types, row.tracking_json);
-      pi += 13;
+        row.is_flagged, row.flag_types, row.tracking_json, row.customer_name);
+      pi += 14;
     }
     await db.query(`
       INSERT INTO orders (id, store, order_number, created_at, updated_at, email, units,
-        fulfillment_hours, delivery_hours, processing_hours, is_flagged, flag_types, tracking_json)
+        fulfillment_hours, delivery_hours, processing_hours, is_flagged, flag_types, tracking_json, customer_name)
       VALUES ${values.join(",")}
       ON CONFLICT (id) DO UPDATE SET
         updated_at = EXCLUDED.updated_at,
@@ -300,6 +300,7 @@ async function syncStore(store, token, label, since, draftsMap = {}) {
         is_flagged = EXCLUDED.is_flagged,
         flag_types = EXCLUDED.flag_types,
         tracking_json = EXCLUDED.tracking_json,
+        customer_name = EXCLUDED.customer_name,
         synced_at = NOW()
     `, params);
     upserted += batch.length;
@@ -474,7 +475,7 @@ app.post("/api/scorecard", async (req, res) => {
         type,
         hours: type === "fulfillment" ? r.fulfillment_hours :
                type === "delivery" ? r.delivery_hours :
-               type === "delivery_stalled" ? r.delivery_hours : 0,
+               type === "delivery_stalled" ? (r.delivery_hours || r.fulfillment_hours || 0) : 0,
       })),
       processingHours: r.processing_hours,
       fulfillmentHours: r.fulfillment_hours,
@@ -572,7 +573,7 @@ app.post("/api/dtc-stale", async (req, res) => {
   try {
     const orders = await gqlAll(dtcStore, dtcToken, DTC_STALE_QUERY,
       { first: 250, query: `fulfillment_status:fulfilled -status:cancelled created_at:>=${ninetyDaysAgo}` },
-      d => d.orders.edges, d => d.orders.pageInfo);
+      d => d.orders.edges, d => d.orders.pageInfo, 30000);
 
     const rows = [];
     for (const order of orders) {
@@ -738,8 +739,21 @@ async function boot() {
     setTimeout(() => runSync(false), 2000);
   }
 
-  // Schedule incremental sync every 5 minutes
-  setInterval(() => runSync(false), 5 * 60 * 1000);
+  // Schedule incremental sync every 5 minutes, but only during business hours (7AM-8PM MT)
+  setInterval(() => {
+    const now = new Date();
+    // Convert to Mountain Time (UTC-6 MDT / UTC-7 MST)
+    const utcHour = now.getUTCHours();
+    const month = now.getUTCMonth(); // 0=Jan
+    // MDT (UTC-6) March-Nov, MST (UTC-7) Nov-Mar
+    const isDST = month >= 2 && month <= 10;
+    const mtHour = (utcHour - (isDST ? 6 : 7) + 24) % 24;
+    if (mtHour >= 7 && mtHour < 20) {
+      runSync(false);
+    } else {
+      console.log(`[sync] Outside business hours (${mtHour}:00 MT) — skipping`);
+    }
+  }, 5 * 60 * 1000);
 }
 
 boot().catch(err => {
