@@ -176,12 +176,7 @@ function scheduleRefresh(){clearTimers();nextRefreshAt=Date.now()+REFRESH_MS;ref
 function clearTimers(){if(refreshTimer)clearTimeout(refreshTimer);if(countdownTimer)clearInterval(countdownTimer);}
 function updateCountdown(){var r=Math.max(0,nextRefreshAt-Date.now());var m=Math.floor(r/60000);var s=Math.floor((r%60000)/1000);document.getElementById('nextRefresh').textContent='Next refresh in '+m+':'+(s<10?'0':'')+s;}
 
-async function runFetchForce(){
-  b2bDraftsFetched = false;
-  await fetch('/api/b2b-drafts', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({refresh:true})});
-  runFetch();
-}
-var b2bDraftsFetched = false;
+var isManualRefresh = false;
 async function runFetch(){clearTimers();setStatus('fetching');if(!hasData)show('emptyState');hideError();try{var res=await fetch('/api/b2b-drafts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});var data=await res.json();if(!res.ok)throw new Error(data.error||'Server error');hasData=true;render(data);setStatus('live');scheduleRefresh();}catch(err){showError(err.message);setStatus('error');if(!hasData)show('emptyState');scheduleRefresh();}}
 
 function render(data){
