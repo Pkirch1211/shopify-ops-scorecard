@@ -184,7 +184,7 @@ for(var y=now.getFullYear();y>=2022;y--){var o=document.createElement('option');
 monthSel.addEventListener('change',function(){clearTimers();clearDashboard();runFetch();});
 yearSel.addEventListener('change',function(){clearTimers();clearDashboard();runFetch();});
 function scheduleRefresh(){if(refreshTimer)clearTimeout(refreshTimer);refreshTimer=setTimeout(function(){runFetch();},REFRESH_MS);}
-function clearTimers(){if(refreshTimer)clearTimeout(refreshTimer);if(countdownTimer)clearInterval(countdownTimer);}
+function clearTimers(){if(refreshTimer)clearTimeout(refreshTimer);}
 function updateCountdown(){}
 function clearDashboard(){
   if(!hasData)return;
