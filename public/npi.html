@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NPI Pipeline — LifeLines</title>
+<style>
+@import url('https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=swap');
+:root{--bg:#f0f0eb;--surface:#f7f7f3;--surface2:#e8e8e3;--border:#d4d4cc;--border2:#c8c8c0;--text:#2a2a28;--muted:#6b6b64;--dim:#9a9a92;--green:#4a6741;--green-bg:#4a6741;--green-light:#e8ede7;--npi:#7a5c2a;--npi-light:#f5ede0;--sans:'Satoshi',sans-serif;--shadow:0 1px 3px rgba(0,0,0,0.07)}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;min-height:100vh}
+header{display:grid;grid-template-columns:auto 1fr auto;align-items:stretch;border-bottom:2px solid var(--border);background:var(--surface)}
+.header-brand{background:var(--green-bg);color:#fff;padding:14px 22px;display:flex;flex-direction:column;justify-content:center}
+.brand-name{font-size:15px;font-weight:700;letter-spacing:.1em;text-transform:uppercase}
+.brand-sub{font-size:9px;letter-spacing:.14em;text-transform:uppercase;opacity:.65;margin-top:2px}
+.header-title{padding:14px 24px;display:flex;flex-direction:column;justify-content:center;border-right:1px solid var(--border)}
+.header-title h1{font-size:15px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+.header-title p{font-size:10px;color:var(--muted);margin-top:3px}
+.header-right{display:flex;align-items:center;gap:20px;padding:0 24px}
+nav{display:flex;gap:3px}
+.nav-link{font-size:10px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;padding:6px 14px;border:1px solid transparent;border-radius:2px;text-decoration:none;color:var(--muted);transition:all .12s}
+.nav-link:hover{color:var(--text);border-color:var(--border2)}
+.nav-link.active{color:var(--npi);border-color:var(--npi);background:var(--npi-light)}
+.refresh-status{font-size:10px;color:var(--dim);display:flex;align-items:center;gap:7px}
+.refresh-dot{width:6px;height:6px;border-radius:50%;background:var(--dim)}
+.refresh-dot.live{background:var(--green);animation:pulse 2s infinite}
+.refresh-dot.fetching{background:var(--npi);animation:spin .7s linear infinite;border-radius:0;width:8px;height:8px}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+@keyframes spin{to{transform:rotate(360deg)}}
+.controls-bar{display:flex;align-items:center;gap:10px;padding:14px 28px;background:var(--surface2);border-bottom:1px solid var(--border)}
+.fetch-time{font-size:10px;color:var(--dim)}
+main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
+.section-header{display:flex;align-items:center;gap:10px;margin-bottom:12px;margin-top:28px}
+.section-header:first-child{margin-top:0}
+.section-dot{width:6px;height:6px;border-radius:50%;background:var(--npi);flex-shrink:0}
+.section-title{font-size:10px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.section-line{flex:1;height:1px;background:var(--border)}
+.kpi-grid{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid var(--border);border-radius:3px;overflow:hidden;background:var(--border);gap:1px;box-shadow:var(--shadow)}
+.kpi-card{background:var(--surface);padding:18px 20px}
+.kpi-label{font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+.kpi-value{font-size:32px;font-weight:700;color:var(--text);line-height:1}
+.launch-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin-top:4px}
+.launch-card{background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:20px;box-shadow:var(--shadow);cursor:pointer;transition:all .12s}
+.launch-card:hover{border-color:var(--npi);background:#faf8f4}
+.launch-card.expanded{border-color:var(--npi);background:var(--npi-light)}
+.launch-month{font-size:16px;font-weight:700;color:var(--npi);margin-bottom:12px}
+.launch-tag{display:inline-block;font-size:9px;font-weight:600;padding:2px 8px;border-radius:2px;background:var(--npi-light);color:var(--npi);border:1px solid #d4b896;margin-bottom:12px;letter-spacing:.08em;text-transform:uppercase}
+.launch-stats{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.launch-stat{display:flex;flex-direction:column;gap:3px}
+.launch-stat-label{font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.launch-stat-val{font-size:18px;font-weight:700;color:var(--text)}
+.launch-detail{margin-top:16px;border-top:1px solid var(--border);padding-top:16px;display:none}
+.launch-card.expanded .launch-detail{display:block}
+.detail-table{width:100%;border-collapse:collapse;margin-top:8px}
+.detail-table th{font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:6px 8px;text-align:left;border-bottom:1px solid var(--border);background:var(--surface2)}
+.detail-table td{font-size:11px;padding:8px 8px;border-bottom:1px solid var(--border);color:var(--text)}
+.detail-table tr:last-child td{border-bottom:none}
+.detail-table tr:hover td{background:var(--bg)}
+.export-csv-btn{font-size:10px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;padding:4px 10px;border-radius:2px;border:1px solid var(--border2);background:var(--surface);color:var(--muted);cursor:pointer;float:right;margin-top:-2px}
+.export-csv-btn:hover{color:var(--npi);border-color:var(--npi)}
+.state-panel{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:80px 40px;gap:12px;text-align:center}
+.state-title{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text)}
+.state-sub{font-size:13px;color:var(--muted);max-width:340px;line-height:1.6}
+.spinner{width:16px;height:16px;border:2px solid var(--border2);border-top-color:var(--npi);border-radius:50%;animation:spin .7s linear infinite}
+.error-banner{background:#f5e0e0;border:1px solid #d49696;color:#8a2a2a;font-size:11px;padding:10px 16px;border-radius:2px;margin-bottom:16px;display:none}
+.empty-launches{padding:48px;text-align:center;font-size:12px;color:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <div class="header-brand"><div class="brand-name">LifeLines</div><div class="brand-sub">Ops Tools</div></div>
+  <div class="header-title"><h1>NPI Pipeline</h1><p>New Product Introductions &middot; Open Draft Orders by Launch</p></div>
+  <div class="header-right">
+    <nav>
+      <a href="/" class="nav-link">Scorecard</a>
+      <a href="/dtc.html" class="nav-link">DTC</a>
+      <a href="/b2b.html" class="nav-link">B2B</a>
+      <a href="/npi.html" class="nav-link active">NPI</a>
+      <a href="/care.html" class="nav-link">Care@</a>
+    </nav>
+    <div class="refresh-status"><div class="refresh-dot" id="refreshDot"></div><span id="refreshLabel">Loading...</span></div>
+  </div>
+</header>
+<div class="controls-bar">
+  <span class="fetch-time" id="fetchTime"></span>
+</div>
+<main>
+  <div class="error-banner" id="errorBanner"></div>
+  <div id="emptyState" class="state-panel"><div class="spinner"></div><div class="state-title">Loading...</div><div class="state-sub">Fetching NPI draft orders from Shopify.</div></div>
+  <div id="dashboard" style="display:none">
+    <div class="section-header"><span class="section-dot"></span><span class="section-title">Summary</span><div class="section-line"></div></div>
+    <div class="kpi-grid">
+      <div class="kpi-card"><div class="kpi-label">Active Launches</div><div class="kpi-value" id="kpiLaunches">-</div></div>
+      <div class="kpi-card"><div class="kpi-label">Total Open Drafts</div><div class="kpi-value" id="kpiDrafts">-</div></div>
+      <div class="kpi-card"><div class="kpi-label">Total Units on Order</div><div class="kpi-value" id="kpiUnits">-</div></div>
+    </div>
+    <div class="section-header" style="margin-top:28px"><span class="section-dot"></span><span class="section-title">By Launch Month</span><div class="section-line"></div></div>
+    <div class="launch-grid" id="launchGrid"></div>
+  </div>
+</main>
+<script>
+var REFRESH_MS = 5*60*1000;
+var refreshTimer = null;
+var hasData = false;
+var allLaunches = [];
+
+async function runFetch() {
+  setStatus('fetching'); if(!hasData) show('emptyState'); hideError();
+  try {
+    var res = await fetch('/api/npi', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+    var data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Server error');
+    hasData = true; render(data); setStatus('live');
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(function(){runFetch();}, REFRESH_MS);
+  } catch(err) { showError(err.message); setStatus('error'); if(!hasData) show('emptyState'); }
+}
+
+function render(data) {
+  show('dashboard');
+  allLaunches = data.launches || [];
+  document.getElementById('fetchTime').textContent = 'Updated ' + new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+  document.getElementById('refreshLabel').textContent = 'Updated ' + new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+  document.getElementById('kpiLaunches').textContent = allLaunches.length;
+  document.getElementById('kpiDrafts').textContent = data.totalDrafts.toLocaleString();
+  var totalUnits = allLaunches.reduce(function(s,l){return s+l.totalUnits;}, 0);
+  document.getElementById('kpiUnits').textContent = totalUnits.toLocaleString();
+  renderLaunches(allLaunches);
+}
+
+function renderLaunches(launches) {
+  var grid = document.getElementById('launchGrid');
+  if (!launches.length) {
+    grid.innerHTML = '<div class="empty-launches">No open draft orders with launch-XXX-26 tags found.</div>';
+    return;
+  }
+  grid.innerHTML = launches.map(function(l, idx) {
+    return '<div class="launch-card" id="launch-'+idx+'" onclick="toggleLaunch('+idx+')">' +
+      '<div style="display:flex;align-items:flex-start;justify-content:space-between">' +
+        '<div>' +
+          '<div class="launch-month">'+esc(l.label)+'</div>' +
+          '<div class="launch-tag">'+esc(l.tag)+'</div>' +
+        '</div>' +
+        '<button class="export-csv-btn" onclick="event.stopPropagation();exportLaunch('+idx+')" title="Export CSV">&#8595; CSV</button>' +
+      '</div>' +
+      '<div class="launch-stats">' +
+        '<div class="launch-stat"><div class="launch-stat-label">Drafts</div><div class="launch-stat-val">'+l.draftCount.toLocaleString()+'</div></div>' +
+        '<div class="launch-stat"><div class="launch-stat-label">Customers</div><div class="launch-stat-val">'+l.customerCount.toLocaleString()+'</div></div>' +
+        '<div class="launch-stat"><div class="launch-stat-label">Units</div><div class="launch-stat-val">'+l.totalUnits.toLocaleString()+'</div></div>' +
+        '<div class="launch-stat"><div class="launch-stat-label">Value</div><div class="launch-stat-val">$'+l.totalValue.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0})+'</div></div>' +
+      '</div>' +
+      '<div class="launch-detail">' +
+        '<div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:8px">Draft Orders</div>' +
+        '<table class="detail-table"><thead><tr><th>Draft #</th><th>Customer</th><th>Units</th><th>Value</th></tr></thead><tbody>' +
+        (l.drafts||[]).slice(0,20).map(function(d){
+          return '<tr><td>'+esc(d.name)+'</td><td>'+esc(d.email)+'</td><td>'+d.units+'</td><td>$'+d.value.toFixed(2)+'</td></tr>';
+        }).join('') +
+        (l.drafts&&l.drafts.length>20 ? '<tr><td colspan="4" style="color:var(--muted);text-align:center">+' + (l.drafts.length-20) + ' more — export CSV to see all</td></tr>' : '') +
+        '</tbody></table>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function toggleLaunch(idx) {
+  var card = document.getElementById('launch-'+idx);
+  card.classList.toggle('expanded');
+}
+
+function exportLaunch(idx) {
+  var l = allLaunches[idx];
+  if (!l || !l.drafts) return;
+  var rows = [['Launch','Draft #','Email','Units','Value','Created','Line Item','SKU','Qty'].map(csvEsc).join(',')];
+  l.drafts.forEach(function(d) {
+    if (!d.lineItems || !d.lineItems.length) {
+      rows.push([l.tag, d.name, d.email, d.units, d.value.toFixed(2), d.createdAt,'','',''].map(csvEsc).join(','));
+    } else {
+      d.lineItems.forEach(function(li) {
+        rows.push([l.tag, d.name, d.email, d.units, d.value.toFixed(2), d.createdAt, li.title, li.sku||'', li.quantity].map(csvEsc).join(','));
+      });
+    }
+  });
+  var blob = new Blob([rows.join('
+')], {type:'text/csv'});
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a'); a.href=url;
+  a.download = 'npi-'+l.tag+'-'+new Date().toISOString().slice(0,10)+'.csv';
+  a.click(); URL.revokeObjectURL(url);
+}
+
+function csvEsc(v){var s=String(v===null||v===undefined?'':v);if(s.includes(',')||s.includes('"')||s.includes('
+'))return '"'+s.replace(/"/g,'""')+'"';return s;}
+function setStatus(state){var dot=document.getElementById('refreshDot');dot.className='refresh-dot';if(state==='live')dot.classList.add('live');if(state==='fetching')dot.classList.add('fetching');}
+function show(id){['emptyState','dashboard'].forEach(function(s){var el=document.getElementById(s);if(!el)return;el.style.display=s===id?(s==='dashboard'?'block':'flex'):'none';});}
+function showError(msg){var el=document.getElementById('errorBanner');el.textContent='Error: '+msg;el.style.display='block';}
+function hideError(){document.getElementById('errorBanner').style.display='none';}
+function esc(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+runFetch();
+</script>
+</body>
+</html>
