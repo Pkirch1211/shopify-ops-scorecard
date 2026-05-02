@@ -4,7 +4,6 @@ const { Pool } = require("pg");
 
 const app = express();
 app.use(express.json());
-app.use(express.static(path.join(__dirname, "public")));
 
 // ── Password protection ───────────────────────────────────────────────────────
 const SITE_PASSWORD = process.env.SITE_PASSWORD || "edpd";
@@ -63,7 +62,9 @@ app.post("/login", express.urlencoded({ extended: false }), (req, res) => {
   }
 });
 
+app.get('/favicon.svg', (req, res) => res.sendFile(path.join(__dirname, 'public', 'favicon.svg')));
 app.use(requireAuth);
+app.use(express.static(path.join(__dirname, "public")));
 
 
 // ── Credentials ───────────────────────────────────────────────────────────────
