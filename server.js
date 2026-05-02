@@ -6,6 +6,66 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
+// ── Password protection ───────────────────────────────────────────────────────
+const SITE_PASSWORD = process.env.SITE_PASSWORD || "edpd";
+const AUTH_COOKIE = "ops_auth";
+const authenticated = new Set(); // in-memory session store
+
+function requireAuth(req, res, next) {
+  // Skip auth for API routes and static assets
+  if (req.path.startsWith("/api/")) return next();
+  // Check cookie
+  const cookies = req.headers.cookie || "";
+  const token = cookies.split(";").map(c => c.trim())
+    .find(c => c.startsWith(AUTH_COOKIE + "="))?.split("=")[1];
+  if (token && authenticated.has(token)) return next();
+  // Serve login page
+  if (req.method === "POST" && req.path === "/login") return next();
+  if (req.path === "/login") return next();
+  res.send(`<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<title>LifeLines Ops — Login</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<style>
+@import url('https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=swap');
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#f0f0eb;display:flex;align-items:center;justify-content:center;min-height:100vh;font-family:'Satoshi',sans-serif}
+.box{background:#f7f7f3;border:1px solid #d4d4cc;border-radius:4px;padding:40px;width:320px;box-shadow:0 2px 8px rgba(0,0,0,0.08)}
+.brand{font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#4a6741;margin-bottom:24px}
+h1{font-size:16px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#2a2a28;margin-bottom:24px}
+input{width:100%;background:#fff;border:1px solid #c8c8c0;color:#2a2a28;font-family:'Satoshi',sans-serif;font-size:14px;padding:10px 12px;border-radius:2px;outline:none;margin-bottom:12px}
+input:focus{border-color:#4a6741}
+button{width:100%;background:#4a6741;color:#fff;border:none;font-family:'Satoshi',sans-serif;font-size:12px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;padding:10px;border-radius:2px;cursor:pointer}
+button:hover{opacity:.85}
+.err{color:#8a2a2a;font-size:12px;margin-top:8px;display:none}
+</style></head>
+<body><div class="box">
+<div class="brand">LifeLines</div>
+<h1>Ops Tools</h1>
+<form method="POST" action="/login">
+<input type="password" name="password" placeholder="Password" autofocus>
+<button type="submit">Enter</button>
+<div class="err" id="err">${req.query.err ? "Incorrect password" : ""}</div>
+</form>
+</div>
+<script>document.querySelector('.err').style.display='${req.query.err ? "block" : "none"}'</script>
+</body></html>`);
+}
+
+app.post("/login", express.urlencoded({ extended: false }), (req, res) => {
+  if (req.body.password === SITE_PASSWORD) {
+    const token = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    authenticated.add(token);
+    res.setHeader("Set-Cookie", AUTH_COOKIE + "=" + token + "; Path=/; HttpOnly; Max-Age=" + (60*60*24*30));
+    res.redirect("/");
+  } else {
+    res.redirect("/login?err=1");
+  }
+});
+
+app.use(requireAuth);
+
+
 // ── Credentials ───────────────────────────────────────────────────────────────
 const CREDS = {
   dtcStore: process.env.DTC_STORE,
@@ -650,9 +710,17 @@ app.post("/api/b2b-drafts", async (req, res) => {
   if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
 
   try {
-    const drafts = await gqlAll(b2bStore, b2bToken, DRAFT_ORDERS_QUERY,
-      { first: 250, query: "status:open" },
-      d => d.draftOrders.edges, d => d.draftOrders.pageInfo);
+    let drafts;
+    const forceRefresh = req.body.refresh === true;
+    if (!forceRefresh && b2bDraftsCache && Date.now() - b2bDraftsCacheTime < B2B_CACHE_TTL) {
+      drafts = b2bDraftsCache;
+    } else {
+      drafts = await gqlAll(b2bStore, b2bToken, DRAFT_ORDERS_QUERY,
+        { first: 250, query: "status:open" },
+        d => d.draftOrders.edges, d => d.draftOrders.pageInfo);
+      b2bDraftsCache = drafts;
+      b2bDraftsCacheTime = Date.now();
+    }
 
     const needsReview = drafts.filter(d => (d.tags || []).map(t => t.toLowerCase()).includes("needs-review"));
 
