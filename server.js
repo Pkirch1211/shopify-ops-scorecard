@@ -319,6 +319,14 @@ function processOrderNode(node, store, draftCompletedAt) {
   };
 }
 
+// ── In-memory caches ──────────────────────────────────────────────────────────
+let b2bDraftsCache = null;
+let b2bDraftsCacheTime = 0;
+let dtcStaleCache = null;
+let dtcStaleCacheTime = 0;
+const B2B_CACHE_TTL = 5 * 60 * 1000;
+const DTC_STALE_TTL = 5 * 60 * 1000;
+
 // ── Sync logic ────────────────────────────────────────────────────────────────
 let syncInProgress = false;
 async function syncStore(store, token, label, since, draftsMap = {}) {
@@ -793,6 +801,101 @@ app.post("/api/b2b-drafts", async (req, res) => {
     }));
 
     res.json({ totalDrafts: drafts.length, needsReviewCount: needsReview.length, needsReviewExport, byCustomer, oosItems });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// ── NPI endpoint ─────────────────────────────────────────────────────────────
+app.post("/api/npi", async (req, res) => {
+  const { b2bStore, b2bToken } = CREDS;
+  if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
+
+  try {
+    let drafts;
+    if (b2bDraftsCache && Date.now() - b2bDraftsCacheTime < B2B_CACHE_TTL) {
+      drafts = b2bDraftsCache;
+    } else {
+      drafts = await gqlAll(b2bStore, b2bToken, DRAFT_ORDERS_QUERY,
+        { first: 250, query: "status:open" },
+        d => d.draftOrders.edges, d => d.draftOrders.pageInfo);
+      b2bDraftsCache = drafts;
+      b2bDraftsCacheTime = Date.now();
+    }
+
+    const LAUNCH_RE = /^launch-([a-z]{3})-26$/i;
+    const launchMap = {};
+
+    for (const d of drafts) {
+      const tags = d.tags || [];
+      const launchTag = tags.find(t => LAUNCH_RE.test(t));
+      if (!launchTag) continue;
+      const match = launchTag.match(LAUNCH_RE);
+      const monthCode = match[1].toLowerCase();
+      const key = monthCode + "-26";
+      if (!launchMap[key]) {
+        launchMap[key] = {
+          tag: launchTag, monthCode,
+          label: monthCode.charAt(0).toUpperCase() + monthCode.slice(1) + " 2026",
+          draftCount: 0, totalUnits: 0, totalValue: 0,
+          customers: new Set(), drafts: [],
+        };
+      }
+      const units = (d.lineItems && d.lineItems.edges || []).reduce((s, e) => s + (e.node.quantity || 0), 0);
+      launchMap[key].draftCount++;
+      launchMap[key].totalUnits += units;
+      launchMap[key].totalValue += parseFloat(d.totalPrice || 0);
+      if (d.email) launchMap[key].customers.add(d.email.toLowerCase());
+      launchMap[key].drafts.push({
+        name: d.name, email: d.email || "—", units,
+        value: parseFloat(d.totalPrice || 0),
+        createdAt: d.createdAt, tags: d.tags,
+        lineItems: (d.lineItems && d.lineItems.edges || []).map(function(e) {
+          return { title: e.node.title, sku: e.node.sku || "", quantity: e.node.quantity };
+        }),
+      });
+    }
+
+    const MONTH_ORDER = { jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12 };
+    const launches = Object.values(launchMap)
+      .map(l => Object.assign({}, l, { customerCount: l.customers.size, customers: undefined }))
+      .sort((a, b) => (MONTH_ORDER[a.monthCode] || 99) - (MONTH_ORDER[b.monthCode] || 99));
+
+    res.json({ launches, totalDrafts: launches.reduce((s, l) => s + l.draftCount, 0) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Delivery trend endpoint ───────────────────────────────────────────────────
+app.post("/api/delivery-trend", async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT
+        store,
+        TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') AS month,
+        AVG(fulfillment_hours) AS avg_fulfillment,
+        AVG(delivery_hours) AS avg_delivery,
+        COUNT(*) AS orders
+      FROM orders
+      WHERE created_at >= NOW() - INTERVAL '12 months'
+        AND (fulfillment_hours IS NOT NULL OR delivery_hours IS NOT NULL)
+      GROUP BY store, DATE_TRUNC('month', created_at)
+      ORDER BY DATE_TRUNC('month', created_at)
+    `);
+    const byStore = {};
+    for (const row of result.rows) {
+      if (!byStore[row.store]) byStore[row.store] = [];
+      byStore[row.store].push({
+        month: row.month,
+        avgFulfillmentHours: parseFloat(row.avg_fulfillment) || null,
+        orders: parseInt(row.orders),
+      });
+    }
+    res.json({ byStore });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
