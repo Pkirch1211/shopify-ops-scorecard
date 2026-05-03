@@ -734,7 +734,7 @@ app.post("/api/b2b-drafts", async (req, res) => {
     } else {
       drafts = await gqlAll(b2bStore, b2bToken, DRAFT_ORDERS_QUERY,
         { first: 250, query: "status:open" },
-        d => d.draftOrders.edges, d => d.draftOrders.pageInfo);
+        d => d.draftOrders.edges, d => d.draftOrders.pageInfo, 120000); // 2min
       b2bDraftsCache = drafts;
       b2bDraftsCacheTime = Date.now();
     }
@@ -820,7 +820,7 @@ app.post("/api/npi", async (req, res) => {
     } else {
       drafts = await gqlAll(b2bStore, b2bToken, DRAFT_ORDERS_QUERY,
         { first: 250, query: "status:open" },
-        d => d.draftOrders.edges, d => d.draftOrders.pageInfo);
+        d => d.draftOrders.edges, d => d.draftOrders.pageInfo, 120000); // 2min
       b2bDraftsCache = drafts;
       b2bDraftsCacheTime = Date.now();
     }
@@ -896,6 +896,64 @@ app.post("/api/delivery-trend", async (req, res) => {
       });
     }
     res.json({ byStore });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// ── Quality SKU endpoint (YTD top replacement SKUs from flagged orders) ────────
+app.post("/api/quality-skus", async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT
+        tracking_json,
+        order_number,
+        store,
+        created_at,
+        flag_types,
+        fulfillment_hours,
+        delivery_hours
+      FROM orders
+      WHERE is_flagged = TRUE
+        AND created_at >= DATE_TRUNC('year', NOW())
+        AND tracking_json IS NOT NULL
+      ORDER BY created_at DESC
+      LIMIT 2000
+    `);
+
+    // Parse tracking_json and tally by SKU/company (carrier)
+    const carrierMap = {};
+    for (const row of result.rows) {
+      let tracking = null;
+      try { tracking = JSON.parse(row.tracking_json); } catch(e) { continue; }
+      if (!tracking || !tracking.company) continue;
+      const carrier = tracking.company;
+      if (!carrierMap[carrier]) carrierMap[carrier] = { carrier, count: 0, orders: [] };
+      carrierMap[carrier].count++;
+      carrierMap[carrier].orders.push(row.order_number);
+    }
+
+    // Also get top flagged order counts by month/store for YTD
+    const ytdRes = await db.query(`
+      SELECT
+        store,
+        TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') AS month,
+        COUNT(*) AS flagged_count,
+        SUM(CASE WHEN flag_types LIKE '%fulfillment%' THEN 1 ELSE 0 END) AS fulfillment_flags,
+        SUM(CASE WHEN flag_types LIKE '%delivery%' THEN 1 ELSE 0 END) AS delivery_flags
+      FROM orders
+      WHERE is_flagged = TRUE
+        AND created_at >= DATE_TRUNC('year', NOW())
+      GROUP BY store, DATE_TRUNC('month', created_at)
+      ORDER BY DATE_TRUNC('month', created_at)
+    `);
+
+    res.json({
+      topCarriers: Object.values(carrierMap).sort((a,b) => b.count - a.count).slice(0,10),
+      byMonth: ytdRes.rows,
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
