@@ -117,10 +117,10 @@ tbody tr:hover{background:var(--bg)}
     <div class="charts-grid">
       <div class="chart-card full"><div class="chart-title">Cumulative Orders Fulfilled</div><div class="chart-container"><canvas id="chartCumulative"></canvas></div></div>
     </div>
-    <div class="section-header" style="margin-top:28px"><span class="section-dot"></span><span class="section-title">YTD Issues by Month</span><div class="section-line"></div></div>
+    <div class="section-header" style="margin-top:28px"><span class="section-dot"></span><span class="section-title">Top SKUs Ordered via Care@</span><div class="section-line"></div><span style="font-size:10px;color:var(--muted);margin-left:8px">Products most frequently sent as replacements this period</span></div>
     <div class="table-wrap">
-      <table><thead><tr><th>Month</th><th>Store</th><th>Flagged Orders</th><th>Fulfillment Flags</th><th>Delivery Flags</th></tr></thead>
-      <tbody id="qualityBody"><tr><td colspan="5" class="quality-empty">Loading...</td></tr></tbody></table>
+      <table><thead><tr><th>SKU</th><th>Product</th><th>Total Units</th><th>Orders</th></tr></thead>
+      <tbody id="skuBody"><tr><td colspan="4" class="quality-empty">Loading...</td></tr></tbody></table>
     </div>
   </div>
 </main>
@@ -141,12 +141,12 @@ function clearDashboard(){if(!hasData)return;['kpiOrders','kpiUnits','kpiFulfill
 async function runFetch(){
   setStatus('fetching');if(!hasData)show('emptyState');hideError();
   try{
-    var [res, qRes] = await Promise.all([
+    var [res, skuRes] = await Promise.all([
       fetch('/api/care-scorecard',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({year:parseInt(yearSel.value),month:parseInt(monthSel.value)})}),
-      fetch('/api/quality-skus',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
+      fetch('/api/care-skus',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({year:parseInt(yearSel.value),month:parseInt(monthSel.value)})})
     ]);
     var data=await res.json();
-    var qData=qRes.ok ? await qRes.json() : null;
+    var qData=skuRes.ok ? await skuRes.json() : null;
     if(!res.ok)throw new Error(data.error||'Server error');
     hasData=true;render(data, qData);setStatus('live');
     refreshTimer=setTimeout(function(){runFetch();},REFRESH_MS);
@@ -163,22 +163,24 @@ function render(data, qData){
   document.getElementById('kpiFulfillment').textContent=data.avgFulfillmentFormatted||'-';
   document.getElementById('kpiDelivery').textContent=data.avgDeliveryFormatted||'-';
   buildCharts(data);
-  if (qData) renderQuality(qData);
+  if (qData) renderSkus(qData);
 }
 
-function renderQuality(qData) {
-  var tbody = document.getElementById('qualityBody');
+function renderSkus(qData) {
+  var tbody = document.getElementById('skuBody');
   if (!tbody) return;
-  var rows = qData.byMonth || [];
-  if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="5" class="quality-empty">No flagged orders YTD</td></tr>';
+  var skus = qData.topSkus || [];
+  if (!skus.length) {
+    tbody.innerHTML = '<tr><td colspan="4" class="quality-empty">No orders found for this period</td></tr>';
     return;
   }
-  tbody.innerHTML = rows.map(function(r) {
-    return '<tr><td>' + r.month + '</td><td>' + r.store + '</td>' +
-      '<td style="font-weight:600">' + r.flagged_count + '</td>' +
-      '<td><span class="flag-pill fulfillment">' + r.fulfillment_flags + ' fulfillment</span></td>' +
-      '<td><span class="flag-pill delivery">' + r.delivery_flags + ' delivery</span></td></tr>';
+  tbody.innerHTML = skus.map(function(s, i) {
+    return '<tr>' +
+      '<td style="font-family:monospace;font-size:11px;color:var(--muted)">' + esc(s.sku || '—') + '</td>' +
+      '<td style="font-weight:500">' + esc(s.title) + '</td>' +
+      '<td style="font-weight:700;color:var(--care)">' + s.qty.toLocaleString() + '</td>' +
+      '<td>' + s.orderCount + '</td>' +
+      '</tr>';
   }).join('');
 }
 
@@ -194,6 +196,7 @@ function buildCharts(data){
   charts.cumulative=new Chart(document.getElementById('chartCumulative'),{type:'line',data:{labels:labels,datasets:[{label:'Fulfilled',data:data.fulfillmentsByDay.map(function(d){return(cum+=d.fulfilled);}),borderColor:careColor+'1)',backgroundColor:careColor+'0.05)',tension:0.2,fill:true,pointRadius:0,borderWidth:2}]},options:base});
 }
 
+function esc(s){if(!s)return"";return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
 function destroyCharts(){Object.values(charts).forEach(function(c){c.destroy();});charts={};}
 function setStatus(state){var dot=document.getElementById('refreshDot');dot.className='refresh-dot';if(state==='live')dot.classList.add('live');if(state==='fetching')dot.classList.add('fetching');}
 function show(id){['emptyState','loadingState','dashboard'].forEach(function(s){var el=document.getElementById(s);if(!el)return;el.style.display=s===id?(s==='dashboard'?'block':'flex'):'none';});}
