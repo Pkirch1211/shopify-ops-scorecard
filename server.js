@@ -903,6 +903,60 @@ app.post("/api/delivery-trend", async (req, res) => {
 });
 
 
+
+// ── Care@ SKU breakdown (live from Shopify - small dataset) ──────────────────
+app.post("/api/care-skus", async (req, res) => {
+  const { year, month } = req.body;
+  const { b2bStore, b2bToken } = CREDS;
+  if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
+
+  const CARE_SKU_QUERY = `
+query CareOrders($first: Int!, $after: String, $query: String!) {
+  orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT) {
+    pageInfo { hasNextPage endCursor }
+    edges {
+      node {
+        id name createdAt
+        lineItems(first: 50) {
+          edges { node { sku title quantity } }
+        }
+      }
+    }
+  }
+}`;
+
+  const start = `${year}-${String(month).padStart(2, "0")}-01`;
+  const endDate = new Date(Date.UTC(year, month, 1));
+  const end = `${endDate.getFullYear()}-${String(endDate.getMonth() + 1).padStart(2, "0")}-01`;
+
+  try {
+    const orders = await gqlAll(b2bStore, b2bToken, CARE_SKU_QUERY,
+      { first: 250, query: `email:care@lifelines.com created_at:>=${start} created_at:<${end}` },
+      d => d.orders.edges, d => d.orders.pageInfo, 30000);
+
+    // Tally SKUs
+    const skuMap = {};
+    for (const order of orders) {
+      for (const edge of order.lineItems.edges || []) {
+        const li = edge.node;
+        const key = li.sku || li.title;
+        if (!skuMap[key]) skuMap[key] = { sku: li.sku || "", title: li.title, qty: 0, orderCount: 0 };
+        skuMap[key].qty += li.quantity || 0;
+        skuMap[key].orderCount++;
+      }
+    }
+
+    const topSkus = Object.values(skuMap)
+      .sort((a, b) => b.qty - a.qty)
+      .slice(0, 20);
+
+    res.json({ topSkus, totalOrders: orders.length });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Quality SKU endpoint (YTD top replacement SKUs from flagged orders) ────────
 app.post("/api/quality-skus", async (req, res) => {
   try {
