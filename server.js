@@ -656,6 +656,11 @@ app.post("/api/dtc-stale", async (req, res) => {
   const { dtcStore, dtcToken } = CREDS;
   if (!dtcStore || !dtcToken) return res.status(400).json({ error: "Missing DTC credentials." });
 
+  // Serve from cache if fresh
+  if (dtcStaleCache && Date.now() - dtcStaleCacheTime < DTC_STALE_TTL) {
+    return res.json({ ...dtcStaleCache, fromCache: true });
+  }
+
   const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const TARGET = new Set(["IN_TRANSIT", "CONFIRMED"]);
 
@@ -698,7 +703,10 @@ app.post("/api/dtc-stale", async (req, res) => {
     }
 
     rows.sort((a, b) => b.daysSinceFulfilled - a.daysSinceFulfilled);
-    res.json({ rows, total: rows.length });
+    const dtcResult = { rows, total: rows.length };
+    dtcStaleCache = dtcResult;
+    dtcStaleCacheTime = Date.now();
+    res.json(dtcResult);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
