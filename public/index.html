@@ -194,10 +194,8 @@ async function loadTrend(year, month) {
   if (trendLoaded) return;
   try {
     var r1 = await fetch('/api/delivery-trend', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
-    var r2 = await fetch('/api/fulfillment-sla', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({year:year,month:month})});
     var trend = await r1.json();
-    var sla = await r2.json();
-    renderTrend(trend, sla, month);
+    renderTrend(trend, {}, month);
     trendLoaded = true;
   } catch(e) { console.warn('Trend load failed:', e); }
 }
@@ -231,14 +229,6 @@ function renderTrend(trend, sla, currentMonth) {
     ]}, options:Object.assign({},baseOpts,{scales:{x:baseOpts.scales.x, y:Object.assign({},baseOpts.scales.y,{title:{display:true,text:'Days',color:tick}})}})
   });
 
-  if (charts.trendDelivery) charts.trendDelivery.destroy();
-  charts.trendDelivery = new Chart(document.getElementById('chartTrendDelivery'), {
-    type:'line', data:{labels:monthLabels, datasets:[
-      {label:'DTC', data:allMonths.map(function(m){return getVal(dtc,m,'avgDeliveryHours');}), borderColor:'rgba(61,92,138,0.9)', backgroundColor:'rgba(61,92,138,0.06)', tension:0.3, fill:true, pointRadius:3, borderWidth:2},
-      {label:'B2B', data:allMonths.map(function(m){return getVal(b2b,m,'avgDeliveryHours');}), borderColor:'rgba(74,103,65,0.9)', backgroundColor:'rgba(74,103,65,0.06)', tension:0.3, fill:true, pointRadius:3, borderWidth:2},
-    ]}, options:baseOpts
-  });
-
   // Monthly volume chart
   if (charts.volumeMonthly) charts.volumeMonthly.destroy();
   if (document.getElementById('chartVolumeMonthly')) {
@@ -250,21 +240,7 @@ function renderTrend(trend, sla, currentMonth) {
     });
   }
 
-  // SLA chart
-  var slaData = sla.sla || {};
-  var stores = Object.keys(slaData);
-  if (charts.sla) charts.sla.destroy();
-  charts.sla = new Chart(document.getElementById('chartSLA'), {
-    type:'bar', data:{
-      labels: stores,
-      datasets:[
-        {label:'Within 24h', data:stores.map(function(s){return slaData[s]?slaData[s].pct24h:0;}), backgroundColor:'rgba(74,103,65,0.8)', borderRadius:2},
-        {label:'Within 48h', data:stores.map(function(s){return slaData[s]?slaData[s].pct48h:0;}), backgroundColor:'rgba(74,103,65,0.45)', borderRadius:2},
-        {label:'Within 72h', data:stores.map(function(s){return slaData[s]?slaData[s].pct72h:0;}), backgroundColor:'rgba(74,103,65,0.2)', borderRadius:2},
-      ]
-    },
-    options:Object.assign({},baseOpts,{scales:{x:baseOpts.scales.x, y:Object.assign({},baseOpts.scales.y,{max:100,ticks:Object.assign({},baseOpts.scales.y.ticks,{callback:function(v){return v+'%'}})})}})
-  });
+
 }
 
 function clearDashboard(){trendLoaded=false;
