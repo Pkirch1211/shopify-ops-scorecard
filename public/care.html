@@ -65,6 +65,10 @@ tbody tr:hover{background:var(--bg)}
 .state-sub{font-size:13px;color:var(--muted);max-width:340px;line-height:1.6}
 .spinner{width:16px;height:16px;border:2px solid var(--border2);border-top-color:var(--care);border-radius:50%;animation:spin .7s linear infinite}
 .error-banner{background:#f5e0e0;border:1px solid #d49696;color:#8a2a2a;font-size:11px;padding:10px 16px;border-radius:2px;margin-bottom:16px;display:none}
+.flag-pill{display:inline-block;font-size:9px;font-weight:600;padding:2px 7px;border-radius:2px;margin-right:3px;text-transform:uppercase;letter-spacing:.07em}
+.flag-pill.fulfillment{background:#f5ede0;color:#7a4a1a;border:1px solid #d4b896}
+.flag-pill.delivery,.flag-pill.delivery_stalled{background:#e8e0f0;color:#4a2a7a;border:1px solid #c4aad8}
+.quality-empty{padding:24px;text-align:center;font-size:12px;color:var(--muted)}
 .care-tag{display:inline-block;font-size:10px;font-weight:600;padding:2px 10px;border-radius:2px;background:var(--care-light);color:var(--care);border:1px solid #c4aad8;margin-left:8px;letter-spacing:.05em}
 @media(max-width:900px){.kpi-grid{grid-template-columns:repeat(2,1fr)}.charts-grid{grid-template-columns:1fr}.chart-card.full{grid-column:span 1}}
 </style>
@@ -81,6 +85,7 @@ tbody tr:hover{background:var(--bg)}
       <a href="/" class="nav-link">Scorecard</a>
       <a href="/dtc.html" class="nav-link">DTC</a>
       <a href="/b2b.html" class="nav-link">B2B</a>
+      <a href="/npi.html" class="nav-link">NPI</a>
       <a href="/care.html" class="nav-link active">Care@</a>
     </nav>
     <div class="refresh-status"><div class="refresh-dot" id="refreshDot"></div><span id="refreshLabel">Loading...</span></div>
@@ -112,6 +117,11 @@ tbody tr:hover{background:var(--bg)}
     <div class="charts-grid">
       <div class="chart-card full"><div class="chart-title">Cumulative Orders Fulfilled</div><div class="chart-container"><canvas id="chartCumulative"></canvas></div></div>
     </div>
+    <div class="section-header" style="margin-top:28px"><span class="section-dot"></span><span class="section-title">YTD Issues by Month</span><div class="section-line"></div></div>
+    <div class="table-wrap">
+      <table><thead><tr><th>Month</th><th>Store</th><th>Flagged Orders</th><th>Fulfillment Flags</th><th>Delivery Flags</th></tr></thead>
+      <tbody id="qualityBody"><tr><td colspan="5" class="quality-empty">Loading...</td></tr></tbody></table>
+    </div>
   </div>
 </main>
 <script>
@@ -131,15 +141,19 @@ function clearDashboard(){if(!hasData)return;['kpiOrders','kpiUnits','kpiFulfill
 async function runFetch(){
   setStatus('fetching');if(!hasData)show('emptyState');hideError();
   try{
-    var res=await fetch('/api/care-scorecard',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({year:parseInt(yearSel.value),month:parseInt(monthSel.value)})});
+    var [res, qRes] = await Promise.all([
+      fetch('/api/care-scorecard',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({year:parseInt(yearSel.value),month:parseInt(monthSel.value)})}),
+      fetch('/api/quality-skus',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
+    ]);
     var data=await res.json();
+    var qData=qRes.ok ? await qRes.json() : null;
     if(!res.ok)throw new Error(data.error||'Server error');
-    hasData=true;render(data);setStatus('live');
+    hasData=true;render(data, qData);setStatus('live');
     refreshTimer=setTimeout(function(){runFetch();},REFRESH_MS);
   }catch(err){showError(err.message);setStatus('error');if(!hasData)show('emptyState');}
 }
 
-function render(data){
+function render(data, qData){
   show('dashboard');
   document.getElementById('periodBadge').textContent=MONTHS[data.month-1]+' '+data.year;
   document.getElementById('refreshLabel').textContent='Updated '+new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
@@ -149,6 +163,23 @@ function render(data){
   document.getElementById('kpiFulfillment').textContent=data.avgFulfillmentFormatted||'-';
   document.getElementById('kpiDelivery').textContent=data.avgDeliveryFormatted||'-';
   buildCharts(data);
+  if (qData) renderQuality(qData);
+}
+
+function renderQuality(qData) {
+  var tbody = document.getElementById('qualityBody');
+  if (!tbody) return;
+  var rows = qData.byMonth || [];
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="quality-empty">No flagged orders YTD</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(function(r) {
+    return '<tr><td>' + r.month + '</td><td>' + r.store + '</td>' +
+      '<td style="font-weight:600">' + r.flagged_count + '</td>' +
+      '<td><span class="flag-pill fulfillment">' + r.fulfillment_flags + ' fulfillment</span></td>' +
+      '<td><span class="flag-pill delivery">' + r.delivery_flags + ' delivery</span></td></tr>';
+  }).join('');
 }
 
 function buildCharts(data){
