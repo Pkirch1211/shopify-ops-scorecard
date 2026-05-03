@@ -157,6 +157,8 @@ tbody tr.combined-row{background:var(--green-light)}
         <div class="chart-card"><div class="chart-title">Avg Processing Time (hrs)</div><div class="chart-container"><canvas id="chartProcessing"></canvas></div></div>
         <div class="chart-card"><div class="chart-title">Avg Fulfillment Time (hrs)</div><div class="chart-container"><canvas id="chartFulfillment"></canvas></div></div>
         <div class="chart-card full"><div class="chart-title">Cumulative Orders Fulfilled</div><div class="chart-container"><canvas id="chartCumulative"></canvas></div></div>
+        <div class="chart-card full"><div class="chart-title">Avg Fulfillment Time by Month — DTC vs B2B</div><div class="chart-container"><canvas id="chartTrendFulfillment"></canvas></div></div>
+        <div class="chart-card full"><div class="chart-title">Monthly Order Volume by Store</div><div class="chart-container"><canvas id="chartVolumeMonthly"></canvas></div></div>
       </div>
     </div>
     <div class="view" id="view-issues">
@@ -236,6 +238,17 @@ function renderTrend(trend, sla, currentMonth) {
       {label:'B2B', data:allMonths.map(function(m){return getVal(b2b,m,'avgDeliveryHours');}), borderColor:'rgba(74,103,65,0.9)', backgroundColor:'rgba(74,103,65,0.06)', tension:0.3, fill:true, pointRadius:3, borderWidth:2},
     ]}, options:baseOpts
   });
+
+  // Monthly volume chart
+  if (charts.volumeMonthly) charts.volumeMonthly.destroy();
+  if (document.getElementById('chartVolumeMonthly')) {
+    charts.volumeMonthly = new Chart(document.getElementById('chartVolumeMonthly'), {
+      type:'line', data:{labels:monthLabels, datasets:[
+        {label:'DTC Orders', data:allMonths.map(function(m){var r=dtc.find(function(d){return d.month===m;});return r?r.orders:null;}), borderColor:'rgba(61,92,138,0.9)', backgroundColor:'rgba(61,92,138,0.06)', tension:0.3, fill:true, pointRadius:3, borderWidth:2},
+        {label:'B2B Orders', data:allMonths.map(function(m){var r=b2b.find(function(d){return d.month===m;});return r?r.orders:null;}), borderColor:'rgba(74,103,65,0.9)', backgroundColor:'rgba(74,103,65,0.06)', tension:0.3, fill:true, pointRadius:3, borderWidth:2},
+      ]}, options:Object.assign({},baseOpts,{scales:{x:baseOpts.scales.x,y:Object.assign({},baseOpts.scales.y,{title:{display:true,text:'Orders',color:tick}})}})
+    });
+  }
 
   // SLA chart
   var slaData = sla.sla || {};
