@@ -106,6 +106,29 @@ async function initDB() {
       value TEXT,
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS stale_fulfillments (
+      fulfillment_id TEXT PRIMARY KEY,
+      order_id TEXT,
+      order_name TEXT,
+      order_created_at TIMESTAMPTZ,
+      email TEXT,
+      customer_name TEXT,
+      shipping_address TEXT,
+      order_total TEXT,
+      fulfilled_at TIMESTAMPTZ,
+      display_status TEXT,
+      has_tracking BOOLEAN DEFAULT FALSE,
+      tracking_json TEXT,
+      skus TEXT,
+      tags TEXT,
+      latest_event_json TEXT,
+      all_events_json TEXT,
+      days_since_fulfilled REAL,
+      synced_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_stale_display_status ON stale_fulfillments(display_status);
+    CREATE INDEX IF NOT EXISTS idx_stale_fulfilled_at ON stale_fulfillments(fulfilled_at);
   `);
   console.log("DB initialized");
 }
@@ -407,6 +430,91 @@ async function buildDraftsMap(store, token, since, deadlineMs = 120000) {
   return result;
 }
 
+
+// ── Sync stale fulfillments to DB ────────────────────────────────────────────
+async function syncStaleFulfillments(store, token) {
+  const TARGET = new Set(["IN_TRANSIT", "CONFIRMED"]);
+  const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+  const orders = await gqlAll(store, token, DTC_STALE_QUERY,
+    { first: 250, query: `fulfillment_status:fulfilled -status:cancelled created_at:>=${ninetyDaysAgo}` },
+    d => d.orders.edges, d => d.orders.pageInfo, 120000);
+
+  // Clear old stale data and rebuild
+  await db.query("DELETE FROM stale_fulfillments");
+
+  const rows = [];
+  for (const order of orders) {
+    if (order.cancelledAt) continue;
+    for (const f of order.fulfillments || []) {
+      const status = (f.displayStatus || "").toUpperCase().replace(/ /g, "_");
+      if (!TARGET.has(status)) continue;
+      const days = (Date.now() - new Date(f.createdAt).getTime()) / 864e5;
+      if (days < 10) continue;
+
+      const events = (f.events.edges || []).map(e => e.node).filter(e => e.happenedAt)
+        .sort((a, b) => new Date(b.happenedAt) - new Date(a.happenedAt));
+      const skus = (f.fulfillmentLineItems.edges || [])
+        .map(e => `${e.node.lineItem.sku || e.node.lineItem.title} x${e.node.quantity}`);
+      const addr = order.shippingAddress || {};
+      const total = order.totalPriceSet?.shopMoney || {};
+      const tracking = (f.trackingInfo || []).map(t => ({ company: t.company, number: t.number, url: t.url }));
+
+      rows.push({
+        fulfillment_id: f.id,
+        order_id: order.id,
+        order_name: order.name,
+        order_created_at: order.createdAt,
+        email: order.email || null,
+        customer_name: addr.name || order.email || "",
+        shipping_address: [addr.address1, addr.address2, addr.city, addr.province, addr.zip, addr.country].filter(Boolean).join(", "),
+        order_total: total.amount ? `${total.currencyCode} ${parseFloat(total.amount).toFixed(2)}` : "",
+        fulfilled_at: f.createdAt,
+        display_status: f.displayStatus,
+        has_tracking: tracking.length > 0,
+        tracking_json: JSON.stringify(tracking),
+        skus: skus.join(" | "),
+        tags: (order.tags || []).join(", "),
+        latest_event_json: events[0] ? JSON.stringify(events[0]) : null,
+        all_events_json: JSON.stringify(events),
+        days_since_fulfilled: Math.floor(days),
+      });
+    }
+  }
+
+  // Upsert in batches
+  const BATCH = 50;
+  for (let i = 0; i < rows.length; i += BATCH) {
+    const batch = rows.slice(i, i + BATCH);
+    const values = [], params = [];
+    let pi = 1;
+    for (const r of batch) {
+      values.push(`($${pi},$${pi+1},$${pi+2},$${pi+3},$${pi+4},$${pi+5},$${pi+6},$${pi+7},$${pi+8},$${pi+9},$${pi+10},$${pi+11},$${pi+12},$${pi+13},$${pi+14},$${pi+15},$${pi+16})`);
+      params.push(r.fulfillment_id, r.order_id, r.order_name, r.order_created_at, r.email,
+        r.customer_name, r.shipping_address, r.order_total, r.fulfilled_at, r.display_status,
+        r.has_tracking, r.tracking_json, r.skus, r.tags, r.latest_event_json, r.all_events_json, r.days_since_fulfilled);
+      pi += 17;
+    }
+    await db.query(`
+      INSERT INTO stale_fulfillments (fulfillment_id, order_id, order_name, order_created_at, email,
+        customer_name, shipping_address, order_total, fulfilled_at, display_status,
+        has_tracking, tracking_json, skus, tags, latest_event_json, all_events_json, days_since_fulfilled)
+      VALUES ${values.join(",")}
+      ON CONFLICT (fulfillment_id) DO UPDATE SET
+        display_status = EXCLUDED.display_status,
+        has_tracking = EXCLUDED.has_tracking,
+        tracking_json = EXCLUDED.tracking_json,
+        latest_event_json = EXCLUDED.latest_event_json,
+        all_events_json = EXCLUDED.all_events_json,
+        days_since_fulfilled = EXCLUDED.days_since_fulfilled,
+        synced_at = NOW()
+    `, params);
+  }
+
+  console.log(`[sync] DTC stale: ${rows.length} stale fulfillments synced`);
+  return rows.length;
+}
+
 async function runSync(isFullBackfill = false) {
   if (syncInProgress) { console.log('[sync] Skipping — sync already in progress'); return; }
   const { dtcStore, dtcToken, b2bStore, b2bToken } = CREDS;
@@ -454,6 +562,13 @@ async function runSync(isFullBackfill = false) {
     `, [syncStart]);
 
     console.log(`[sync] Done — DTC: ${dtcCount}, B2B: ${b2bCount} orders upserted`);
+
+    // Sync DTC stale fulfillments to DB
+    try {
+      await syncStaleFulfillments(dtcStore, dtcToken);
+    } catch (err) {
+      console.warn("[sync] DTC stale fulfillments error:", err.message);
+    }
   } catch (err) {
     console.error("[sync] Error:", err.message);
   } finally {
@@ -661,60 +776,33 @@ app.post("/api/care-scorecard", async (req, res) => {
 
 // ── DTC Stale (direct GQL — needs fresh data) ─────────────────────────────────
 app.post("/api/dtc-stale", async (req, res) => {
-  const { dtcStore, dtcToken } = CREDS;
-  if (!dtcStore || !dtcToken) return res.status(400).json({ error: "Missing DTC credentials." });
-
-  // Serve from cache if fresh
-  if (dtcStaleCache && Date.now() - dtcStaleCacheTime < DTC_STALE_TTL) {
-    return res.json({ ...dtcStaleCache, fromCache: true });
-  }
-
-  const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const TARGET = new Set(["IN_TRANSIT", "CONFIRMED"]);
-
   try {
-    const orders = await gqlAll(dtcStore, dtcToken, DTC_STALE_QUERY,
-      { first: 250, query: `fulfillment_status:fulfilled -status:cancelled created_at:>=${ninetyDaysAgo}` },
-      d => d.orders.edges, d => d.orders.pageInfo, 30000);
+    const result = await db.query(`
+      SELECT * FROM stale_fulfillments
+      ORDER BY days_since_fulfilled DESC
+    `);
 
-    const rows = [];
-    for (const order of orders) {
-      if (order.cancelledAt) continue;
-      for (const f of order.fulfillments || []) {
-        const status = (f.displayStatus || "").toUpperCase().replace(/ /g, "_");
-        if (!TARGET.has(status)) continue;
-        const days = (Date.now() - new Date(f.createdAt).getTime()) / 864e5;
-        if (days < 10) continue;
+    const rows = result.rows.map(r => ({
+      orderName: r.order_name,
+      orderId: r.order_id,
+      orderCreatedAt: r.order_created_at,
+      email: r.email,
+      customerName: r.customer_name,
+      shippingAddress: r.shipping_address,
+      orderTotal: r.order_total,
+      fulfillmentId: r.fulfillment_id,
+      fulfilledAt: r.fulfilled_at,
+      daysSinceFulfilled: Math.round(r.days_since_fulfilled),
+      displayStatus: r.display_status,
+      hasTracking: r.has_tracking,
+      tracking: r.tracking_json ? JSON.parse(r.tracking_json) : [],
+      skus: r.skus ? r.skus.split(" | ") : [],
+      tags: r.tags || "",
+      latestEvent: r.latest_event_json ? JSON.parse(r.latest_event_json) : null,
+      allEvents: r.all_events_json ? JSON.parse(r.all_events_json) : [],
+    }));
 
-        const events = (f.events.edges || []).map(e => e.node).filter(e => e.happenedAt)
-          .sort((a, b) => new Date(b.happenedAt) - new Date(a.happenedAt));
-        const skus = (f.fulfillmentLineItems.edges || [])
-          .map(e => `${e.node.lineItem.sku || e.node.lineItem.title} x${e.node.quantity}`);
-        const addr = order.shippingAddress || {};
-        const total = order.totalPriceSet?.shopMoney || {};
-
-        rows.push({
-          orderName: order.name, orderId: order.id, orderCreatedAt: order.createdAt,
-          email: order.email,
-          customerName: addr.name || order.email || "",
-          shippingAddress: [addr.address1, addr.address2, addr.city, addr.province, addr.zip, addr.country].filter(Boolean).join(", "),
-          orderTotal: total.amount ? `${total.currencyCode} ${parseFloat(total.amount).toFixed(2)}` : "",
-          fulfillmentId: f.id, fulfillmentName: f.name, fulfilledAt: f.createdAt,
-          daysSinceFulfilled: Math.floor(days),
-          fulfillmentStatus: f.status, displayStatus: f.displayStatus,
-          hasTracking: (f.trackingInfo || []).length > 0,
-          tracking: (f.trackingInfo || []).map(t => ({ company: t.company, number: t.number, url: t.url })),
-          skus, tags: (order.tags || []).join(", "),
-          latestEvent: events[0] || null, allEvents: events,
-        });
-      }
-    }
-
-    rows.sort((a, b) => b.daysSinceFulfilled - a.daysSinceFulfilled);
-    const dtcResult = { rows, total: rows.length };
-    dtcStaleCache = dtcResult;
-    dtcStaleCacheTime = Date.now();
-    res.json(dtcResult);
+    res.json({ rows, total: rows.length, fromDB: true });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
