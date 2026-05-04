@@ -244,7 +244,11 @@ query DraftOrders($first: Int!, $after: String, $query: String!) {
           edges {
             node {
               title variantTitle sku quantity originalUnitPrice
-              variant { id inventoryItem { id } }
+              variant {
+                id
+                inventoryItem { id }
+                product { tags }
+              }
             }
           }
         }
@@ -917,8 +921,13 @@ app.post("/api/npi", async (req, res) => {
     const launchMap = {};
 
     for (const d of drafts) {
-      const tags = d.tags || [];
-      const launchTag = tags.find(t => LAUNCH_RE.test(t));
+      // Look for launch tags on product variants, not the draft order itself
+      let launchTag = null;
+      for (const edge of d.lineItems?.edges || []) {
+        const productTags = edge.node.variant?.product?.tags || [];
+        launchTag = productTags.find(t => LAUNCH_RE.test(t));
+        if (launchTag) break;
+      }
       if (!launchTag) continue;
       const match = launchTag.match(LAUNCH_RE);
       const monthCode = match[1].toLowerCase();
@@ -1118,19 +1127,23 @@ app.get("/api/debug-tags", async (req, res) => {
       b2bDraftsCache = drafts;
       b2bDraftsCacheTime = Date.now();
     }
-    // Count all tags and find launch tags
-    const tagCounts = {};
+    // Count product tags from line items and find launch tags
     const launchTags = new Set();
+    const sampleProductTags = [];
     for (const d of drafts) {
-      for (const t of (d.tags || [])) {
-        tagCounts[t] = (tagCounts[t] || 0) + 1;
-        if (/launch/i.test(t)) launchTags.add(t);
+      for (const edge of (d.lineItems?.edges || [])) {
+        const productTags = edge.node.variant?.product?.tags || [];
+        for (const t of productTags) {
+          if (/launch/i.test(t)) launchTags.add(t);
+        }
+        if (sampleProductTags.length < 10) sampleProductTags.push(...productTags.slice(0,3));
       }
     }
     res.json({
       totalDrafts: drafts.length,
       launchTags: [...launchTags].sort(),
-      sampleDraftTags: drafts.slice(0, 5).map(d => ({ name: d.name, tags: d.tags })),
+      sampleProductTags: [...new Set(sampleProductTags)].slice(0, 20),
+      sampleDraftOrderTags: drafts.slice(0, 3).map(d => ({ name: d.name, orderTags: d.tags })),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
