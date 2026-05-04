@@ -52,7 +52,7 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
 .launch-stat-val{font-size:18px;font-weight:700;color:var(--text)}
 .launch-detail{margin-top:16px;border-top:1px solid var(--border);padding-top:16px;display:none}
 .launch-card.expanded .launch-detail{display:block}
-.detail-table{width:100%;border-collapse:collapse;margin-top:8px}
+.detail-table{width:100%;border-collapse:collapse;margin-top:8px;table-layout:fixed}
 .detail-table th{font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:6px 8px;text-align:left;border-bottom:1px solid var(--border);background:var(--surface2)}
 .detail-table td{font-size:11px;padding:8px 8px;border-bottom:1px solid var(--border);color:var(--text)}
 .detail-table tr:last-child td{border-bottom:none}
@@ -152,9 +152,9 @@ function renderLaunches(launches) {
       '</div>' +
       '<div class="launch-detail">' +
         '<div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:8px">Draft Orders</div>' +
-        '<table class="detail-table"><thead><tr><th>Draft #</th><th>Customer</th><th>Units</th><th>Value</th></tr></thead><tbody>' +
-        (l.drafts||[]).slice(0,20).map(function(d){
-          return '<tr><td>'+esc(d.name)+'</td><td>'+esc(d.email)+'</td><td>'+d.units+'</td><td>$'+d.value.toFixed(2)+'</td></tr>';
+        '<table class="detail-table"><thead><tr><th>Draft #</th><th>Customer</th><th style="text-align:right">Units</th><th style="text-align:right">Value</th></tr></thead><tbody>' +
+        (l.drafts||[]).slice().sort(function(a,b){return b.units-a.units;}).slice(0,20).map(function(d){
+          return '<tr><td style="font-weight:500">'+esc(d.name)+'</td><td style="color:var(--muted);font-size:11px">'+esc(d.email)+'</td><td style="text-align:right;font-weight:600">'+d.units.toLocaleString()+'</td><td style="text-align:right">$'+d.value.toFixed(2)+'</td></tr>';
         }).join('') +
         (l.drafts&&l.drafts.length>20 ? '<tr><td colspan="4" style="color:var(--muted);text-align:center">+' + (l.drafts.length-20) + ' more — export CSV to see all</td></tr>' : '') +
         '</tbody></table>' +
