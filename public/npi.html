@@ -188,8 +188,7 @@ function exportLaunch(idx) {
   a.click(); URL.revokeObjectURL(url);
 }
 
-function csvEsc(v){var s=String(v===null||v===undefined?'':v);if(s.includes(',')||s.includes('"')||s.includes('
-'))return '"'+s.replace(/"/g,'""')+'"';return s;}
+function csvEsc(v){var s=String(v===null||v===undefined?'':v);if(s.includes(',')||s.includes('"')||s.includes('\n'))return '"'+s.replace(/"/g,'""')+'"';return s;}
 function setStatus(state){var dot=document.getElementById('refreshDot');dot.className='refresh-dot';if(state==='live')dot.classList.add('live');if(state==='fetching')dot.classList.add('fetching');}
 function show(id){['emptyState','dashboard'].forEach(function(s){var el=document.getElementById(s);if(!el)return;el.style.display=s===id?(s==='dashboard'?'block':'flex'):'none';});}
 function showError(msg){var el=document.getElementById('errorBanner');el.textContent='Error: '+msg;el.style.display='block';}
