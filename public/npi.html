@@ -34,14 +34,14 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
 .section-header{display:flex;align-items:center;gap:10px;margin-bottom:12px;margin-top:28px}
 .section-header:first-child{margin-top:0}
 .section-dot{width:6px;height:6px;border-radius:50%;background:var(--npi);flex-shrink:0}
-.section-title{font-size:10px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.section-title{font-size:10px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);white-space:nowrap}
 .section-line{flex:1;height:1px;background:var(--border)}
 .kpi-grid{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid var(--border);border-radius:3px;overflow:hidden;background:var(--border);gap:1px;box-shadow:var(--shadow)}
 .kpi-card{background:var(--surface);padding:18px 20px}
 .kpi-label{font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
 .kpi-value{font-size:32px;font-weight:700;color:var(--text);line-height:1}
 .launch-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin-top:4px}
-.launch-card{background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:20px;box-shadow:var(--shadow);cursor:pointer;transition:all .12s}
+.launch-card{background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:20px;box-shadow:var(--shadow);cursor:pointer;transition:all .12s;user-select:none}
 .launch-card:hover{border-color:var(--npi);background:#faf8f4}
 .launch-card.expanded{border-color:var(--npi);background:var(--npi-light)}
 .launch-month{font-size:16px;font-weight:700;color:var(--npi);margin-bottom:12px}
@@ -50,15 +50,23 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
 .launch-stat{display:flex;flex-direction:column;gap:3px}
 .launch-stat-label{font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
 .launch-stat-val{font-size:18px;font-weight:700;color:var(--text)}
-.launch-detail{margin-top:16px;border-top:1px solid var(--border);padding-top:16px;display:none}
-.launch-card.expanded .launch-detail{display:block}
-.detail-table{width:100%;border-collapse:collapse;margin-top:8px;table-layout:fixed}
-.detail-table th{font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:6px 8px;text-align:left;border-bottom:1px solid var(--border);background:var(--surface2)}
-.detail-table td{font-size:11px;padding:8px 8px;border-bottom:1px solid var(--border);color:var(--text)}
+/* Detail panel — below the grid */
+.detail-panel{background:var(--surface);border:1px solid var(--npi);border-radius:3px;box-shadow:var(--shadow);overflow:hidden}
+.detail-panel-header{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;background:var(--npi-light);border-bottom:1px solid #d4b896}
+.detail-panel-title{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--npi)}
+.detail-panel-meta{font-size:10px;color:var(--muted)}
+.export-csv-btn{font-size:10px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;padding:5px 12px;border-radius:2px;border:1px solid var(--border2);background:var(--surface);color:var(--muted);cursor:pointer}
+.export-csv-btn:hover{color:var(--npi);border-color:var(--npi)}
+.detail-table{width:100%;border-collapse:collapse;table-layout:auto}
+.detail-table th{font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:8px 16px;text-align:left;border-bottom:1px solid var(--border);background:var(--surface2);white-space:nowrap}
+.detail-table th.num{text-align:right}
+.detail-table td{font-size:12px;padding:9px 16px;border-bottom:1px solid var(--border);color:var(--text)}
+.detail-table td.num{text-align:right;font-variant-numeric:tabular-nums}
 .detail-table tr:last-child td{border-bottom:none}
 .detail-table tr:hover td{background:var(--bg)}
-.export-csv-btn{font-size:10px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;padding:4px 10px;border-radius:2px;border:1px solid var(--border2);background:var(--surface);color:var(--muted);cursor:pointer;float:right;margin-top:-2px}
-.export-csv-btn:hover{color:var(--npi);border-color:var(--npi)}
+.detail-table td.draft-num{font-weight:600;white-space:nowrap;width:90px}
+.detail-table td.email{color:var(--muted);font-size:11px}
+.detail-more{text-align:center;font-size:11px;color:var(--muted);padding:12px;border-top:1px solid var(--border);background:var(--surface2)}
 .state-panel{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:80px 40px;gap:12px;text-align:center}
 .state-title{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text)}
 .state-sub{font-size:13px;color:var(--muted);max-width:340px;line-height:1.6}
@@ -89,14 +97,45 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
   <div class="error-banner" id="errorBanner"></div>
   <div id="emptyState" class="state-panel"><div class="spinner"></div><div class="state-title">Loading...</div><div class="state-sub">Fetching NPI draft orders from Shopify.</div></div>
   <div id="dashboard" style="display:none">
+
     <div class="section-header"><span class="section-dot"></span><span class="section-title">Summary</span><div class="section-line"></div></div>
     <div class="kpi-grid">
       <div class="kpi-card"><div class="kpi-label">Active Launches</div><div class="kpi-value" id="kpiLaunches">-</div></div>
       <div class="kpi-card"><div class="kpi-label">Total Open Drafts</div><div class="kpi-value" id="kpiDrafts">-</div></div>
       <div class="kpi-card"><div class="kpi-label">Total Units on Order</div><div class="kpi-value" id="kpiUnits">-</div></div>
     </div>
+
     <div class="section-header" style="margin-top:28px"><span class="section-dot"></span><span class="section-title">By Launch Month</span><div class="section-line"></div></div>
     <div class="launch-grid" id="launchGrid"></div>
+
+    <!-- Detail panel renders below the grid on card click -->
+    <div id="launchDetail" style="display:none;margin-top:24px">
+      <div class="section-header">
+        <span class="section-dot"></span>
+        <span class="section-title" id="launchDetailTitle">Draft Orders</span>
+        <div class="section-line"></div>
+        <button class="export-csv-btn" id="launchDetailExport">&#8595; CSV</button>
+      </div>
+      <div class="detail-panel">
+        <div class="detail-panel-header">
+          <span class="detail-panel-title" id="launchDetailSubtitle"></span>
+          <span class="detail-panel-meta" id="launchDetailMeta"></span>
+        </div>
+        <table class="detail-table">
+          <thead>
+            <tr>
+              <th style="width:90px">Draft #</th>
+              <th>Customer</th>
+              <th class="num" style="width:70px">Units</th>
+              <th class="num" style="width:100px">Value</th>
+            </tr>
+          </thead>
+          <tbody id="launchDetailBody"></tbody>
+        </table>
+        <div class="detail-more" id="launchDetailMore" style="display:none"></div>
+      </div>
+    </div>
+
   </div>
 </main>
 <script>
@@ -104,29 +143,42 @@ var REFRESH_MS = 5*60*1000;
 var refreshTimer = null;
 var hasData = false;
 var allLaunches = [];
+var activeIdx = null;
 
 async function runFetch() {
-  setStatus('fetching'); if(!hasData) show('emptyState'); hideError();
+  setStatus('fetching');
+  if (!hasData) show('emptyState');
+  hideError();
   try {
     var res = await fetch('/api/npi', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
     var data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Server error');
-    hasData = true; render(data); setStatus('live');
+    hasData = true;
+    render(data);
+    setStatus('live');
     if (refreshTimer) clearTimeout(refreshTimer);
-    refreshTimer = setTimeout(function(){runFetch();}, REFRESH_MS);
-  } catch(err) { showError(err.message); setStatus('error'); if(!hasData) show('emptyState'); }
+    refreshTimer = setTimeout(function(){ runFetch(); }, REFRESH_MS);
+  } catch(err) {
+    showError(err.message);
+    setStatus('error');
+    if (!hasData) show('emptyState');
+  }
 }
 
 function render(data) {
   show('dashboard');
   allLaunches = data.launches || [];
-  document.getElementById('fetchTime').textContent = 'Updated ' + new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-  document.getElementById('refreshLabel').textContent = 'Updated ' + new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+  var t = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+  document.getElementById('fetchTime').textContent = 'Updated ' + t;
+  document.getElementById('refreshLabel').textContent = 'Updated ' + t;
   document.getElementById('kpiLaunches').textContent = allLaunches.length;
   document.getElementById('kpiDrafts').textContent = data.totalDrafts.toLocaleString();
-  var totalUnits = allLaunches.reduce(function(s,l){return s+l.totalUnits;}, 0);
+  var totalUnits = allLaunches.reduce(function(s,l){ return s + l.totalUnits; }, 0);
   document.getElementById('kpiUnits').textContent = totalUnits.toLocaleString();
   renderLaunches(allLaunches);
+  // Reset detail panel on re-render
+  activeIdx = null;
+  document.getElementById('launchDetail').style.display = 'none';
 }
 
 function renderLaunches(launches) {
@@ -137,35 +189,69 @@ function renderLaunches(launches) {
   }
   grid.innerHTML = launches.map(function(l, idx) {
     return '<div class="launch-card" id="launch-'+idx+'" onclick="toggleLaunch('+idx+')">' +
-      '<div style="display:flex;align-items:flex-start;justify-content:space-between">' +
-        '<div>' +
-          '<div class="launch-month">'+esc(l.label)+'</div>' +
-          '<div class="launch-tag">'+esc(l.tag)+'</div>' +
-        '</div>' +
+      '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:4px">' +
+        '<div class="launch-month">'+esc(l.label)+'</div>' +
         '<button class="export-csv-btn" onclick="event.stopPropagation();exportLaunch('+idx+')" title="Export CSV">&#8595; CSV</button>' +
       '</div>' +
+      '<div class="launch-tag">'+esc(l.tag)+'</div>' +
       '<div class="launch-stats">' +
         '<div class="launch-stat"><div class="launch-stat-label">Drafts</div><div class="launch-stat-val">'+l.draftCount.toLocaleString()+'</div></div>' +
         '<div class="launch-stat"><div class="launch-stat-label">Customers</div><div class="launch-stat-val">'+l.customerCount.toLocaleString()+'</div></div>' +
         '<div class="launch-stat"><div class="launch-stat-label">Units</div><div class="launch-stat-val">'+l.totalUnits.toLocaleString()+'</div></div>' +
         '<div class="launch-stat"><div class="launch-stat-label">Value</div><div class="launch-stat-val">$'+l.totalValue.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0})+'</div></div>' +
       '</div>' +
-      '<div class="launch-detail">' +
-        '<div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:8px">Draft Orders</div>' +
-        '<table class="detail-table"><thead><tr><th>Draft #</th><th>Customer</th><th style="text-align:right">Units</th><th style="text-align:right">Value</th></tr></thead><tbody>' +
-        (l.drafts||[]).slice().sort(function(a,b){return b.units-a.units;}).slice(0,20).map(function(d){
-          return '<tr><td style="font-weight:500">'+esc(d.name)+'</td><td style="color:var(--muted);font-size:11px">'+esc(d.email)+'</td><td style="text-align:right;font-weight:600">'+d.units.toLocaleString()+'</td><td style="text-align:right">$'+d.value.toFixed(2)+'</td></tr>';
-        }).join('') +
-        (l.drafts&&l.drafts.length>20 ? '<tr><td colspan="4" style="color:var(--muted);text-align:center">+' + (l.drafts.length-20) + ' more — export CSV to see all</td></tr>' : '') +
-        '</tbody></table>' +
-      '</div>' +
     '</div>';
   }).join('');
 }
 
 function toggleLaunch(idx) {
-  var card = document.getElementById('launch-'+idx);
-  card.classList.toggle('expanded');
+  var cards = document.querySelectorAll('.launch-card');
+  var panel = document.getElementById('launchDetail');
+
+  // Clicking the active card closes the panel
+  if (activeIdx === idx) {
+    activeIdx = null;
+    cards.forEach(function(c){ c.classList.remove('expanded'); });
+    panel.style.display = 'none';
+    return;
+  }
+
+  activeIdx = idx;
+  cards.forEach(function(c, i){ c.classList.toggle('expanded', i === idx); });
+
+  var l = allLaunches[idx];
+  var sorted = (l.drafts || []).slice().sort(function(a,b){ return b.units - a.units; });
+  var visible = sorted.slice(0, 50);
+  var overflow = sorted.length - 50;
+
+  document.getElementById('launchDetailTitle').textContent = esc(l.label) + ' — Draft Orders';
+  document.getElementById('launchDetailSubtitle').textContent = esc(l.tag);
+  document.getElementById('launchDetailMeta').textContent =
+    sorted.length.toLocaleString() + ' drafts · ' +
+    l.totalUnits.toLocaleString() + ' units · $' +
+    l.totalValue.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0});
+
+  document.getElementById('launchDetailExport').onclick = function(){ exportLaunch(idx); };
+
+  document.getElementById('launchDetailBody').innerHTML = visible.map(function(d){
+    return '<tr>' +
+      '<td class="draft-num">' + esc(d.name) + '</td>' +
+      '<td class="email">' + esc(d.email) + '</td>' +
+      '<td class="num">' + d.units.toLocaleString() + '</td>' +
+      '<td class="num">$' + d.value.toFixed(2) + '</td>' +
+    '</tr>';
+  }).join('');
+
+  var moreEl = document.getElementById('launchDetailMore');
+  if (overflow > 0) {
+    moreEl.style.display = 'block';
+    moreEl.textContent = '+' + overflow.toLocaleString() + ' more — export CSV to see all';
+  } else {
+    moreEl.style.display = 'none';
+  }
+
+  panel.style.display = 'block';
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 function exportLaunch(idx) {
@@ -174,7 +260,7 @@ function exportLaunch(idx) {
   var rows = [['Launch','Draft #','Email','Units','Value','Created','Line Item','SKU','Qty'].map(csvEsc).join(',')];
   l.drafts.forEach(function(d) {
     if (!d.lineItems || !d.lineItems.length) {
-      rows.push([l.tag, d.name, d.email, d.units, d.value.toFixed(2), d.createdAt,'','',''].map(csvEsc).join(','));
+      rows.push([l.tag, d.name, d.email, d.units, d.value.toFixed(2), d.createdAt, '', '', ''].map(csvEsc).join(','));
     } else {
       d.lineItems.forEach(function(li) {
         rows.push([l.tag, d.name, d.email, d.units, d.value.toFixed(2), d.createdAt, li.title, li.sku||'', li.quantity].map(csvEsc).join(','));
@@ -183,17 +269,20 @@ function exportLaunch(idx) {
   });
   var blob = new Blob([rows.join('\n')], {type:'text/csv'});
   var url = URL.createObjectURL(blob);
-  var a = document.createElement('a'); a.href=url;
-  a.download = 'npi-'+l.tag+'-'+new Date().toISOString().slice(0,10)+'.csv';
-  a.click(); URL.revokeObjectURL(url);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'npi-' + l.tag + '-' + new Date().toISOString().slice(0,10) + '.csv';
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
-function csvEsc(v){var s=String(v===null||v===undefined?'':v);if(s.includes(',')||s.includes('"')||s.includes('\n'))return '"'+s.replace(/"/g,'""')+'"';return s;}
-function setStatus(state){var dot=document.getElementById('refreshDot');dot.className='refresh-dot';if(state==='live')dot.classList.add('live');if(state==='fetching')dot.classList.add('fetching');}
-function show(id){['emptyState','dashboard'].forEach(function(s){var el=document.getElementById(s);if(!el)return;el.style.display=s===id?(s==='dashboard'?'block':'flex'):'none';});}
-function showError(msg){var el=document.getElementById('errorBanner');el.textContent='Error: '+msg;el.style.display='block';}
-function hideError(){document.getElementById('errorBanner').style.display='none';}
-function esc(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function csvEsc(v){ var s=String(v===null||v===undefined?'':v); if(s.includes(',')||s.includes('"')||s.includes('\n')) return '"'+s.replace(/"/g,'""')+'"'; return s; }
+function setStatus(state){ var dot=document.getElementById('refreshDot'); dot.className='refresh-dot'; if(state==='live') dot.classList.add('live'); if(state==='fetching') dot.classList.add('fetching'); }
+function show(id){ ['emptyState','dashboard'].forEach(function(s){ var el=document.getElementById(s); if(!el) return; el.style.display = s===id ? (s==='dashboard'?'block':'flex') : 'none'; }); }
+function showError(msg){ var el=document.getElementById('errorBanner'); el.textContent='Error: '+msg; el.style.display='block'; }
+function hideError(){ document.getElementById('errorBanner').style.display='none'; }
+function esc(s){ if(!s) return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
 runFetch();
 </script>
 </body>
