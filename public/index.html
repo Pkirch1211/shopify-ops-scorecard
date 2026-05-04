@@ -12,7 +12,7 @@
 :root{--bg:#f0f0eb;--surface:#f7f7f3;--surface2:#e8e8e3;--border:#d4d4cc;--border2:#c8c8c0;--text:#2a2a28;--muted:#6b6b64;--dim:#9a9a92;--green:#4a6741;--green-bg:#4a6741;--green-light:#e8ede7;--dtc:#3d5c8a;--dtc-light:#e8edf4;--b2b:#4a6741;--warn:#8a5c2a;--danger:#8a2a2a;--mono:'IBM Plex Mono',monospace;--sans:'IBM Plex Sans',sans-serif;--shadow:0 1px 3px rgba(0,0,0,0.07)}
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;min-height:100vh}
-header{display:grid;grid-template-columns:auto 1fr auto;align-items:stretch;border-bottom:2px solid var(--border);background:var(--surface)}
+header{position:sticky;top:0;z-index:100;display:grid;grid-template-columns:auto 1fr auto;align-items:stretch;border-bottom:2px solid var(--border);background:var(--surface)}
 .header-brand{background:var(--green-bg);color:#fff;padding:14px 22px;display:flex;flex-direction:column;justify-content:center}
 .brand-name{font-family:var(--mono);font-size:15px;font-weight:600;letter-spacing:.12em;text-transform:uppercase}
 .brand-sub{font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;opacity:.65;margin-top:2px}
