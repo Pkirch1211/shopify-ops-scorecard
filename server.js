@@ -1103,6 +1103,40 @@ app.post("/api/quality-skus", async (req, res) => {
   }
 });
 
+
+// ── Debug: inspect draft tags ─────────────────────────────────────────────────
+app.get("/api/debug-tags", async (req, res) => {
+  const { b2bStore, b2bToken } = CREDS;
+  try {
+    let drafts;
+    if (b2bDraftsCache && Date.now() - b2bDraftsCacheTime < B2B_CACHE_TTL) {
+      drafts = b2bDraftsCache;
+    } else {
+      drafts = await gqlAll(b2bStore, b2bToken, DRAFT_ORDERS_QUERY,
+        { first: 250, query: "status:open" },
+        d => d.draftOrders.edges, d => d.draftOrders.pageInfo, 120000);
+      b2bDraftsCache = drafts;
+      b2bDraftsCacheTime = Date.now();
+    }
+    // Count all tags and find launch tags
+    const tagCounts = {};
+    const launchTags = new Set();
+    for (const d of drafts) {
+      for (const t of (d.tags || [])) {
+        tagCounts[t] = (tagCounts[t] || 0) + 1;
+        if (/launch/i.test(t)) launchTags.add(t);
+      }
+    }
+    res.json({
+      totalDrafts: drafts.length,
+      launchTags: [...launchTags].sort(),
+      sampleDraftTags: drafts.slice(0, 5).map(d => ({ name: d.name, tags: d.tags })),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Manual backfill trigger ───────────────────────────────────────────────────
 app.post("/api/trigger-backfill", async (req, res) => {
   // Reset last_sync so next runSync treats it as a fresh backfill
