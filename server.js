@@ -917,7 +917,7 @@ app.post("/api/npi", async (req, res) => {
       b2bDraftsCacheTime = Date.now();
     }
 
-    const LAUNCH_RE = /^launch-([a-z]{3})-26$/i;
+    const LAUNCH_RE = /^launch-([a-z]{3})-2026$/i;
     const launchMap = {};
 
     for (const d of drafts) {
@@ -931,7 +931,7 @@ app.post("/api/npi", async (req, res) => {
       if (!launchTag) continue;
       const match = launchTag.match(LAUNCH_RE);
       const monthCode = match[1].toLowerCase();
-      const key = monthCode + "-26";
+      const key = monthCode + "-2026";
       if (!launchMap[key]) {
         launchMap[key] = {
           tag: launchTag, monthCode,
