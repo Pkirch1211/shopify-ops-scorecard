@@ -309,7 +309,7 @@ function processOrderNode(node, store, draftCompletedAt) {
 
   const processingHours = draftCompletedAt ? hoursBetween(node.createdAt, draftCompletedAt) : null;
 
-  const THRESHOLD = 10 * 24;
+  const THRESHOLD = 5 * 24;
   const EXCLUDED = new Set(["inquiries@lifelines.com", "care@lifelines.com"]);
   const flags = [];
   if (fulfillmentHours !== null && fulfillmentHours > THRESHOLD) flags.push("fulfillment");
