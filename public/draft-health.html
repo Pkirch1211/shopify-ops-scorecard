@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Order Engine — LifeLines</title>
+<style>
+@import url('https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=swap');
+:root{--bg:#f0f0eb;--surface:#f7f7f3;--surface2:#e8e8e3;--border:#d4d4cc;--border2:#c8c8c0;--text:#2a2a28;--muted:#6b6b64;--dim:#9a9a92;--green:#4a6741;--green-bg:#4a6741;--green-light:#e8ede7;--dtc:#3d5c8a;--b2b:#4a6741;--warn:#8a5c2a;--danger:#8a2a2a;--mono:'IBM Plex Mono',monospace;--sans:'IBM Plex Sans',sans-serif;--shadow:0 1px 3px rgba(0,0,0,0.07)}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;min-height:100vh}
+header{position:sticky;top:0;z-index:100;display:grid;grid-template-columns:auto 1fr auto;align-items:stretch;border-bottom:2px solid var(--border);background:var(--surface)}
+.header-brand{background:var(--green-bg);color:#fff;padding:14px 22px;display:flex;flex-direction:column;justify-content:center}
+.brand-name{font-family:var(--sans);font-size:15px;font-weight:600;letter-spacing:.12em;text-transform:uppercase}
+.brand-sub{font-family:var(--sans);font-size:9px;letter-spacing:.14em;text-transform:uppercase;opacity:.65;margin-top:2px}
+.header-title{padding:14px 24px;display:flex;flex-direction:column;justify-content:center;border-right:1px solid var(--border)}
+.header-title h1{font-family:var(--sans);font-size:15px;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+.header-title p{font-family:var(--sans);font-size:10px;color:var(--muted);margin-top:3px;letter-spacing:.05em}
+.header-right{display:flex;align-items:center;gap:20px;padding:0 24px}
+nav{display:flex;gap:3px}
+.nav-link{font-family:var(--sans);font-size:10px;letter-spacing:.1em;text-transform:uppercase;padding:6px 14px;border:1px solid transparent;border-radius:2px;text-decoration:none;color:var(--muted);transition:all .12s}
+.nav-link:hover{color:var(--text);border-color:var(--border2)}
+.nav-link.active{color:var(--green);border-color:var(--green);background:var(--green-light)}
+.refresh-status{font-family:var(--sans);font-size:10px;color:var(--dim);display:flex;align-items:center;gap:7px;white-space:nowrap}
+.refresh-dot{width:6px;height:6px;border-radius:50%;background:var(--dim);flex-shrink:0;transition:background .3s}
+.refresh-dot.live{background:var(--green);animation:pulse 2s infinite}
+.refresh-dot.fetching{background:var(--warn);animation:spin .7s linear infinite;border-radius:0;width:8px;height:8px}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+@keyframes spin{to{transform:rotate(360deg)}}
+.controls-bar{display:flex;align-items:center;gap:10px;padding:14px 28px;background:var(--surface2);border-bottom:1px solid var(--border)}
+.fetch-time{font-family:var(--sans);font-size:10px;color:var(--dim)}
+.next-refresh{font-family:var(--sans);font-size:10px;color:var(--dim);margin-left:auto}
+main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
+.section-header{display:flex;align-items:center;gap:10px;margin-bottom:12px;margin-top:28px}
+.section-header:first-child{margin-top:0}
+.section-dot{width:6px;height:6px;border-radius:50%;background:var(--green);flex-shrink:0}
+.section-title{font-family:var(--sans);font-size:10px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.section-line{flex:1;height:1px;background:var(--border)}
+.kpi-grid{display:grid;grid-template-columns:repeat(5,1fr);border:1px solid var(--border);border-radius:3px;overflow:hidden;background:var(--border);gap:1px;box-shadow:var(--shadow)}
+.kpi-card{background:var(--surface);padding:18px 20px}
+.kpi-label{font-family:var(--sans);font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+.kpi-value{font-family:var(--sans);font-size:32px;font-weight:600;color:var(--text);line-height:1}
+.kpi-value.warn{color:var(--warn)}
+.kpi-value.danger{color:var(--danger)}
+.kpi-value.ok{color:var(--green)}
+.kpi-hint{font-family:var(--sans);font-size:10px;color:var(--dim);margin-top:8px}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start}
+.table-wrap{border:1px solid var(--border);border-radius:3px;overflow:hidden;box-shadow:var(--shadow)}
+table{width:100%;border-collapse:collapse}
+thead tr{background:var(--surface2)}
+th{font-family:var(--sans);font-size:9px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);padding:10px 16px;text-align:left;border-bottom:1px solid var(--border)}
+th.sortable{cursor:pointer;user-select:none}
+th.sortable:hover{color:var(--text)}
+th .sort-icon{margin-left:4px;opacity:.4;font-size:10px}
+th.sorted .sort-icon{opacity:1;color:var(--green)}
+td{padding:11px 16px;border-bottom:1px solid var(--border);font-family:var(--sans);font-size:12px}
+tr:last-child td{border-bottom:none}
+tbody tr{background:var(--surface)}
+tbody tr:hover{background:var(--bg)}
+.table-toolbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px}
+.search-input{background:var(--surface);border:1px solid var(--border2);color:var(--text);font-family:var(--sans);font-size:12px;padding:5px 10px;border-radius:2px;outline:none;width:220px}
+.search-input:focus{border-color:var(--green)}
+.count-label{font-family:var(--sans);font-size:10px;color:var(--muted)}
+.export-btn{font-size:10px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;padding:4px 10px;border-radius:2px;border:1px solid var(--border2);background:var(--surface);color:var(--muted);cursor:pointer;transition:all .12s}
+.export-btn:hover{color:var(--green);border-color:var(--green)}
+.state-panel{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:80px 40px;gap:12px;text-align:center}
+.state-title{font-family:var(--sans);font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--text)}
+.state-sub{font-size:13px;color:var(--muted);max-width:340px;line-height:1.6}
+.spinner{width:16px;height:16px;border:2px solid var(--border2);border-top-color:var(--green);border-radius:50%;animation:spin .7s linear infinite}
+.error-banner{background:#f5e0e0;border:1px solid #d49696;color:var(--danger);font-family:var(--sans);font-size:11px;padding:10px 16px;border-radius:2px;margin-bottom:16px;display:none}
+
+/* Status badges */
+.badge{display:inline-block;font-family:var(--sans);font-size:9px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;padding:3px 7px;border-radius:2px;white-space:nowrap}
+.badge-oos{background:#f5e0e0;color:var(--danger)}
+.badge-review{background:#f5ece0;color:var(--warn)}
+.badge-npi{background:#e0eaf5;color:var(--dtc)}
+.badge-excl-sku{background:#ece0f5;color:#6a2a8a}
+.badge-delayed{background:#f5f5e0;color:#6b6b20}
+.badge-excl-cust{background:#e8e8e3;color:var(--muted)}
+.badge-ready{background:var(--green-light);color:var(--green)}
+
+/* Split opportunity table */
+.split-grid{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--border);border-radius:3px;overflow:hidden;background:var(--border);gap:1px;box-shadow:var(--shadow)}
+.split-card{background:var(--surface);padding:16px 18px}
+.split-threshold{font-family:var(--sans);font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
+.split-count{font-family:var(--sans);font-size:28px;font-weight:600;color:var(--text);line-height:1}
+.split-count.zero{color:var(--dim)}
+.split-value{font-family:var(--sans);font-size:11px;color:var(--muted);margin-top:6px}
+.split-value span{color:var(--green);font-weight:500}
+.split-hint{font-family:var(--sans);font-size:10px;color:var(--dim);margin-top:4px}
+
+/* Draft name */
+.draft-name{color:var(--text);font-weight:500;font-family:var(--sans)}
+.draft-email{color:var(--muted);font-size:11px;margin-top:2px}
+.draft-age{color:var(--dim);font-size:11px}
+.money-cell{color:var(--green)}
+.instock-dim{color:var(--dim)}
+.ship-date{color:var(--warn);font-size:11px;margin-top:2px}
+
+@media(max-width:960px){.two-col{grid-template-columns:1fr}.kpi-grid{grid-template-columns:repeat(3,1fr)}.split-grid{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<header>
+  <div class="header-brand"><div class="brand-name">LifeLines</div><div class="brand-sub">Ops Tools</div></div>
+  <div class="header-title"><h1>Order Engine</h1><p>Draft Order Health &middot; Live View</p></div>
+  <div class="header-right">
+    <nav>
+      <a href="/" class="nav-link">Scorecard</a>
+      <a href="/dtc.html" class="nav-link">DTC</a>
+      <a href="/b2b.html" class="nav-link">B2B</a>
+      <a href="/npi.html" class="nav-link">NPI</a>
+      <a href="/care.html" class="nav-link">Care@</a>
+      <a href="/draft-health.html" class="nav-link active">Order Engine</a>
+    </nav>
+    <div class="refresh-status"><div class="refresh-dot" id="refreshDot"></div><span id="refreshLabel">Loading...</span></div>
+  </div>
+</header>
+<div class="controls-bar">
+  <span class="fetch-time" id="fetchTime"></span>
+  <span class="next-refresh" id="nextRefresh"></span>
+</div>
+<main>
+  <div class="error-banner" id="errorBanner"></div>
+  <div id="emptyState" class="state-panel">
+    <div class="spinner"></div>
+    <div class="state-title">Loading...</div>
+    <div class="state-sub">Fetching open draft orders and inventory from Shopify.</div>
+  </div>
+  <div id="dashboard" style="display:none">
+
+    <!-- KPI row -->
+    <div class="section-header"><span class="section-dot"></span><span class="section-title">Overview</span><div class="section-line"></div></div>
+    <div class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-label">Total Open Drafts</div>
+        <div class="kpi-value" id="kpiTotal">-</div>
+        <div class="kpi-hint">All statuses</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Needs Review</div>
+        <div class="kpi-value warn" id="kpiReview">-</div>
+        <div class="kpi-hint">Manual intervention required</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Out of Stock</div>
+        <div class="kpi-value danger" id="kpiOOS">-</div>
+        <div class="kpi-hint">Blocked by inventory</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">NPI / Delayed</div>
+        <div class="kpi-value warn" id="kpiNpiDelayed">-</div>
+        <div class="kpi-hint">NPI items or future ship date</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Ready to Release</div>
+        <div class="kpi-value ok" id="kpiReady">-</div>
+        <div class="kpi-hint">instock-ready, no blockers</div>
+      </div>
+    </div>
+
+    <!-- Partial split opportunity -->
+    <div class="section-header" style="margin-top:28px"><span class="section-dot"></span><span class="section-title">Partial Split Opportunity</span><div class="section-line"></div></div>
+    <p style="font-family:var(--sans);font-size:11px;color:var(--muted);margin-bottom:12px">Held drafts with in-stock items — value of shippable lines if split today</p>
+    <div class="split-grid" id="splitGrid"></div>
+
+    <!-- Draft order table -->
+    <div class="section-header" style="margin-top:28px"><span class="section-dot"></span><span class="section-title">All Open Drafts</span><div class="section-line"></div></div>
+    <div class="table-toolbar">
+      <input class="search-input" type="text" placeholder="Search draft # or customer..." oninput="filterDrafts(this.value)" id="searchInput">
+      <div style="display:flex;gap:8px;align-items:center">
+        <select id="statusFilter" onchange="filterDrafts(document.getElementById('searchInput').value)" style="background:var(--surface);border:1px solid var(--border2);color:var(--text);font-family:var(--sans);font-size:11px;padding:5px 8px;border-radius:2px;outline:none">
+          <option value="">All statuses</option>
+          <option value="needs-review">Needs Review</option>
+          <option value="out-of-stock">Out of Stock</option>
+          <option value="npi-item">NPI Item</option>
+          <option value="excluded-sku">Excluded SKU</option>
+          <option value="delayed-ship-date">Delayed Ship Date</option>
+          <option value="excluded-customer">Excluded Customer</option>
+          <option value="instock-ready">Ready</option>
+        </select>
+        <span class="count-label" id="draftCount"></span>
+        <button class="export-btn" onclick="exportCSV()">&#8595; Export CSV</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th class="sortable sorted" onclick="sortDrafts('name',this)" data-col="name">Draft <span class="sort-icon">&#8595;</span></th>
+          <th>Status</th>
+          <th class="sortable" onclick="sortDrafts('totalPrice',this)" data-col="totalPrice">Order Value <span class="sort-icon">&#8597;</span></th>
+          <th class="sortable" onclick="sortDrafts('instockValue',this)" data-col="instockValue">In-Stock $ <span class="sort-icon">&#8597;</span></th>
+          <th class="sortable" onclick="sortDrafts('ageDays',this)" data-col="ageDays">Age <span class="sort-icon">&#8597;</span></th>
+        </tr></thead>
+        <tbody id="draftBody"></tbody>
+      </table>
+    </div>
+
+  </div><!-- /dashboard -->
+</main>
+<script>
+const REFRESH_MS = 5 * 60 * 1000;
+let allDrafts = [], filteredDrafts = [];
+let sortCol = 'name', sortDir = 1;
+let refreshTimer = null, countdownTimer = null, nextRefreshAt = null, hasData = false;
+
+const STATUS_LABEL = {
+  'needs-review':     'Needs Review',
+  'out-of-stock':     'Out of Stock',
+  'npi-item':         'NPI Item',
+  'excluded-sku':     'Excluded SKU',
+  'delayed-ship-date':'Delayed Ship Date',
+  'excluded-customer':'Excluded Customer',
+  'instock-ready':    'Ready',
+};
+const STATUS_CLASS = {
+  'needs-review':     'badge-review',
+  'out-of-stock':     'badge-oos',
+  'npi-item':         'badge-npi',
+  'excluded-sku':     'badge-excl-sku',
+  'delayed-ship-date':'badge-delayed',
+  'excluded-customer':'badge-excl-cust',
+  'instock-ready':    'badge-ready',
+};
+
+function scheduleRefresh() {
+  clearTimers();
+  nextRefreshAt = Date.now() + REFRESH_MS;
+  refreshTimer = setTimeout(function() { runFetch(); }, REFRESH_MS);
+  countdownTimer = setInterval(updateCountdown, 1000);
+  updateCountdown();
+}
+function clearTimers() {
+  if (refreshTimer) clearTimeout(refreshTimer);
+  if (countdownTimer) clearInterval(countdownTimer);
+}
+function updateCountdown() {
+  var r = Math.max(0, nextRefreshAt - Date.now());
+  var m = Math.floor(r / 60000);
+  var s = Math.floor((r % 60000) / 1000);
+  document.getElementById('nextRefresh').textContent = 'Next refresh in ' + m + ':' + (s < 10 ? '0' : '') + s;
+}
+
+async function runFetch() {
+  clearTimers();
+  setStatus('fetching');
+  if (!hasData) show('emptyState');
+  hideError();
+  try {
+    var res = await fetch('/api/draft-health', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+    var data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Server error');
+    hasData = true;
+    render(data);
+    setStatus('live');
+    scheduleRefresh();
+  } catch (err) {
+    showError(err.message);
+    setStatus('error');
+    if (!hasData) show('emptyState');
+    scheduleRefresh();
+  }
+}
+
+function render(data) {
+  show('dashboard');
+
+  var sc = data.statusCounts || {};
+  document.getElementById('kpiTotal').textContent = data.total.toLocaleString();
+  document.getElementById('kpiReview').textContent = (sc['needs-review'] || 0).toLocaleString();
+  document.getElementById('kpiOOS').textContent = (sc['out-of-stock'] || 0).toLocaleString();
+  document.getElementById('kpiNpiDelayed').textContent = ((sc['npi-item'] || 0) + (sc['delayed-ship-date'] || 0)).toLocaleString();
+  document.getElementById('kpiReady').textContent = (sc['instock-ready'] || 0).toLocaleString();
+  document.getElementById('fetchTime').textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  document.getElementById('refreshLabel').textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  // Split opportunity cards
+  var grid = document.getElementById('splitGrid');
+  grid.innerHTML = (data.splitBuckets || []).map(function(b) {
+    var isZero = b.count === 0;
+    return '<div class="split-card">' +
+      '<div class="split-threshold">' + esc(b.label) + ' in-stock</div>' +
+      '<div class="split-count' + (isZero ? ' zero' : '') + '">' + b.count + '</div>' +
+      '<div class="split-value">' + (isZero ? '<span style="color:var(--dim)">—</span>' : 'Total shippable: <span>$' + b.totalInstockValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '</span>') + '</div>' +
+      '<div class="split-hint">' + (isZero ? 'No drafts in range' : (b.count === 1 ? '1 draft' : b.count + ' drafts') + ' held') + '</div>' +
+      '</div>';
+  }).join('');
+
+  // Attach age in days to each row for sorting
+  var now = Date.now();
+  allDrafts = (data.rows || []).map(function(r) {
+    return Object.assign({}, r, { ageDays: Math.floor((now - new Date(r.createdAt).getTime()) / 864e5) });
+  });
+
+  applyFilters();
+}
+
+function applyFilters() {
+  var q = (document.getElementById('searchInput').value || '').toLowerCase();
+  var statusVal = document.getElementById('statusFilter').value;
+  filteredDrafts = allDrafts.filter(function(r) {
+    var matchQ = !q || r.name.toLowerCase().includes(q) || r.email.toLowerCase().includes(q);
+    var matchS = !statusVal || r.status === statusVal;
+    return matchQ && matchS;
+  });
+  // Apply current sort
+  filteredDrafts.sort(function(a, b) {
+    var av = a[sortCol], bv = b[sortCol];
+    if (typeof av === 'string') return sortDir * av.localeCompare(bv);
+    return sortDir * (av - bv);
+  });
+  renderDrafts(filteredDrafts);
+}
+
+function filterDrafts(q) { applyFilters(); }
+
+function sortDrafts(col, th) {
+  if (sortCol === col) sortDir *= -1; else { sortCol = col; sortDir = col === 'name' ? 1 : -1; }
+  th.closest('thead').querySelectorAll('th[data-col]').forEach(function(t) {
+    t.classList.remove('sorted');
+    t.querySelector('.sort-icon').innerHTML = '&#8597;';
+  });
+  th.classList.add('sorted');
+  th.querySelector('.sort-icon').innerHTML = sortDir === 1 ? '&#8593;' : '&#8595;';
+  applyFilters();
+}
+
+function renderDrafts(rows) {
+  var tbody = document.getElementById('draftBody');
+  document.getElementById('draftCount').textContent = rows.length + ' draft' + (rows.length !== 1 ? 's' : '');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:32px">No drafts match</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(function(r) {
+    var badge = '<span class="badge ' + (STATUS_CLASS[r.status] || '') + '">' + (STATUS_LABEL[r.status] || r.status) + '</span>';
+    var shipDateHtml = (r.status === 'delayed-ship-date' && r.shipDate)
+      ? '<div class="ship-date">Ship ' + esc(r.shipDate) + '</div>' : '';
+    var instockHtml = r.instockValue > 0
+      ? '$' + r.instockValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      : '<span class="instock-dim">—</span>';
+    var age = r.ageDays === 0 ? 'Today' : r.ageDays + 'd';
+    return '<tr>' +
+      '<td><div class="draft-name">' + esc(r.name) + '</div><div class="draft-email">' + esc(r.email) + '</div>' + shipDateHtml + '</td>' +
+      '<td>' + badge + '</td>' +
+      '<td class="money-cell">$' + r.totalPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '</td>' +
+      '<td>' + instockHtml + '</td>' +
+      '<td class="draft-age">' + age + '</td>' +
+      '</tr>';
+  }).join('');
+}
+
+function exportCSV() {
+  var rows = [['Draft #','Customer Email','Status','Order Value','In-Stock Value','Age (days)','Ship Date'].map(csvEsc).join(',')];
+  filteredDrafts.forEach(function(r) {
+    rows.push([r.name, r.email, r.status, r.totalPrice.toFixed(2), r.instockValue.toFixed(2), r.ageDays, r.shipDate || ''].map(csvEsc).join(','));
+  });
+  var blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'order-engine-' + new Date().toISOString().slice(0, 10) + '.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function csvEsc(v) {
+  var s = String(v === null || v === undefined ? '' : v);
+  if (s.includes(',') || s.includes('"') || s.includes('\n')) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+function setStatus(state) {
+  var dot = document.getElementById('refreshDot');
+  dot.className = 'refresh-dot';
+  if (state === 'live') dot.classList.add('live');
+  if (state === 'fetching') dot.classList.add('fetching');
+}
+function show(id) {
+  ['emptyState', 'dashboard'].forEach(function(s) {
+    document.getElementById(s).style.display = s === id ? (s === 'dashboard' ? 'block' : 'flex') : 'none';
+  });
+}
+function showError(msg) { var el = document.getElementById('errorBanner'); el.textContent = 'Error: ' + msg; el.style.display = 'block'; }
+function hideError() { document.getElementById('errorBanner').style.display = 'none'; }
+function esc(s) { if (!s) return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+runFetch();
+</script>
+</body>
+</html>
