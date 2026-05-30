@@ -427,7 +427,7 @@ async function syncStaleFulfillments(store, token) {
       const status = (f.displayStatus || "").toUpperCase().replace(/ /g, "_");
       if (!TARGET.has(status)) continue;
       const days = (Date.now() - new Date(f.createdAt).getTime()) / 864e5;
-      if (days < 10) continue;
+      if (days < 5) continue;
 
       const events = (f.events.edges || []).map(e => e.node).filter(e => e.happenedAt)
         .sort((a, b) => new Date(b.happenedAt) - new Date(a.happenedAt));
