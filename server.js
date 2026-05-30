@@ -11,14 +11,11 @@ const AUTH_COOKIE = "ops_auth";
 const authenticated = new Set(); // in-memory session store
 
 function requireAuth(req, res, next) {
-  // Skip auth for API routes and static assets
   if (req.path.startsWith("/api/")) return next();
-  // Check cookie
   const cookies = req.headers.cookie || "";
   const token = cookies.split(";").map(c => c.trim())
     .find(c => c.startsWith(AUTH_COOKIE + "="))?.split("=")[1];
   if (token && authenticated.has(token)) return next();
-  // Serve login page
   if (req.method === "POST" && req.path === "/login") return next();
   if (req.path === "/login") return next();
   res.send(`<!DOCTYPE html>
@@ -212,7 +209,7 @@ function formatDuration(h) {
   return `${(h / 24).toFixed(1)}d`;
 }
 
-// ── GQL Query ─────────────────────────────────────────────────────────────────
+// ── GQL Queries ───────────────────────────────────────────────────────────────
 const ORDERS_QUERY = `
 query Orders($first: Int!, $after: String, $query: String!) {
   orders(first: $first, after: $after, query: $query, sortKey: UPDATED_AT, reverse: true) {
@@ -240,6 +237,7 @@ query DraftOrders($first: Int!, $after: String, $query: String!) {
       node {
         id name createdAt completedAt status email tags
         totalPrice subtotalPrice
+        metafield(namespace: "b2b", key: "ship_date") { value }
         lineItems(first: 50) {
           edges {
             node {
@@ -278,15 +276,14 @@ query StaleFulfillments($first: Int!, $after: String, $query: String!) {
   }
 }`;
 
-// ── Order processor (Shopify node → DB row) ───────────────────────────────────
+// ── Order processor (Shopify node -> DB row) ──────────────────────────────────
 function processOrderNode(node, store, draftCompletedAt) {
   const units = (node.lineItems?.edges || []).reduce((s, e) => s + (e.node.quantity || 0), 0);
   const addr = node.shippingAddress || node.billingAddress || {};
   const customerName = [addr.firstName, addr.lastName].filter(Boolean).join(" ") || node.email || "—";
   const fulfs = node.fulfillments || [];
 
-  let fulfillmentHours = null, deliveryHours = null;
-  let trackingInfo = null;
+  let fulfillmentHours = null, deliveryHours = null, trackingInfo = null;
 
   if (fulfs.length > 0) {
     const sorted = [...fulfs].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
@@ -310,11 +307,8 @@ function processOrderNode(node, store, draftCompletedAt) {
     };
   }
 
-  const processingHours = draftCompletedAt
-    ? hoursBetween(node.createdAt, draftCompletedAt)
-    : null;
+  const processingHours = draftCompletedAt ? hoursBetween(node.createdAt, draftCompletedAt) : null;
 
-  // Flag logic
   const THRESHOLD = 10 * 24;
   const EXCLUDED = new Set(["inquiries@lifelines.com", "care@lifelines.com"]);
   const flags = [];
@@ -329,17 +323,11 @@ function processOrderNode(node, store, draftCompletedAt) {
   const isFlagged = flags.length > 0 && !EXCLUDED.has((node.email || "").toLowerCase());
 
   return {
-    id: node.id,
-    store,
-    order_number: node.name,
-    created_at: node.createdAt,
-    updated_at: node.updatedAt,
-    email: node.email || null,
-    units,
-    fulfillment_hours: fulfillmentHours,
-    delivery_hours: deliveryHours,
-    processing_hours: processingHours,
-    is_flagged: isFlagged,
+    id: node.id, store, order_number: node.name,
+    created_at: node.createdAt, updated_at: node.updatedAt,
+    email: node.email || null, units,
+    fulfillment_hours: fulfillmentHours, delivery_hours: deliveryHours,
+    processing_hours: processingHours, is_flagged: isFlagged,
     flag_types: flags.join(","),
     tracking_json: trackingInfo ? JSON.stringify(trackingInfo) : null,
     customer_name: customerName,
@@ -356,19 +344,18 @@ const DTC_STALE_TTL = 5 * 60 * 1000;
 
 // ── Sync logic ────────────────────────────────────────────────────────────────
 let syncInProgress = false;
-async function syncStore(store, token, label, since, draftsMap = {}) {
+
+async function syncStore(store, token, label, since) {
   const query = since
     ? `updated_at:>=${since}`
     : `created_at:>=${new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)}`;
 
   console.log(`[sync] ${label}: fetching orders since ${since || "12mo ago"}`);
   const orders = await gqlAll(store, token, ORDERS_QUERY, { first: 250, query },
-    d => d.orders.edges, d => d.orders.pageInfo, 600000); // 10min for sync
+    d => d.orders.edges, d => d.orders.pageInfo, 600000);
   console.log(`[sync] ${label}: got ${orders.length} orders`);
-
   if (!orders.length) return 0;
 
-  // Upsert in batches of 50
   const BATCH = 50;
   let upserted = 0;
   for (let i = 0; i < orders.length; i += BATCH) {
@@ -376,7 +363,7 @@ async function syncStore(store, token, label, since, draftsMap = {}) {
     const values = [], params = [];
     let pi = 1;
     for (const node of batch) {
-      const row = processOrderNode(node, label, null); // processing time stored separately via draftsMap
+      const row = processOrderNode(node, label, null);
       values.push(`($${pi},$${pi+1},$${pi+2},$${pi+3},$${pi+4},$${pi+5},$${pi+6},$${pi+7},$${pi+8},$${pi+9},$${pi+10},$${pi+11},$${pi+12},$${pi+13})`);
       params.push(row.id, row.store, row.order_number, row.created_at, row.updated_at,
         row.email, row.units, row.fulfillment_hours, row.delivery_hours, row.processing_hours,
@@ -388,20 +375,14 @@ async function syncStore(store, token, label, since, draftsMap = {}) {
         fulfillment_hours, delivery_hours, processing_hours, is_flagged, flag_types, tracking_json, customer_name)
       VALUES ${values.join(",")}
       ON CONFLICT (id) DO UPDATE SET
-        updated_at = EXCLUDED.updated_at,
-        units = EXCLUDED.units,
-        fulfillment_hours = EXCLUDED.fulfillment_hours,
-        delivery_hours = EXCLUDED.delivery_hours,
-        processing_hours = EXCLUDED.processing_hours,
-        is_flagged = EXCLUDED.is_flagged,
-        flag_types = EXCLUDED.flag_types,
-        tracking_json = EXCLUDED.tracking_json,
-        customer_name = EXCLUDED.customer_name,
-        synced_at = NOW()
+        updated_at = EXCLUDED.updated_at, units = EXCLUDED.units,
+        fulfillment_hours = EXCLUDED.fulfillment_hours, delivery_hours = EXCLUDED.delivery_hours,
+        processing_hours = EXCLUDED.processing_hours, is_flagged = EXCLUDED.is_flagged,
+        flag_types = EXCLUDED.flag_types, tracking_json = EXCLUDED.tracking_json,
+        customer_name = EXCLUDED.customer_name, synced_at = NOW()
     `, params);
     upserted += batch.length;
   }
-
   return upserted;
 }
 
@@ -413,29 +394,22 @@ async function buildDraftsMap(store, token, since, deadlineMs = 120000) {
   const drafts = await gqlAll(store, token, DRAFT_ORDERS_QUERY, { first: 250, query },
     d => d.draftOrders.edges, d => d.draftOrders.pageInfo, deadlineMs);
 
-  // Build monthly avg processing hours: draft created_at → completed_at
-  // Keyed by "YYYY-MM" for use in scorecard aggregation
   const byMonth = {};
   for (const d of drafts) {
     if (d.completedAt) {
       const h = hoursBetween(d.createdAt, d.completedAt);
-      if (h !== null && h >= 0 && h < 720) { // cap at 30 days to exclude outliers
-        const key = d.completedAt.slice(0, 7); // "2026-04"
+      if (h !== null && h >= 0 && h < 720) {
+        const key = d.completedAt.slice(0, 7);
         if (!byMonth[key]) byMonth[key] = [];
         byMonth[key].push(h);
       }
     }
   }
-  // Convert to averages
   const result = {};
-  for (const [month, hours] of Object.entries(byMonth)) {
-    result[month] = avg(hours);
-  }
+  for (const [month, hours] of Object.entries(byMonth)) result[month] = avg(hours);
   return result;
 }
 
-
-// ── Sync stale fulfillments to DB ────────────────────────────────────────────
 async function syncStaleFulfillments(store, token) {
   const TARGET = new Set(["IN_TRANSIT", "CONFIRMED"]);
   const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -444,7 +418,6 @@ async function syncStaleFulfillments(store, token) {
     { first: 250, query: `fulfillment_status:fulfilled -status:cancelled created_at:>=${ninetyDaysAgo}` },
     d => d.orders.edges, d => d.orders.pageInfo, 120000);
 
-  // Clear old stale data and rebuild
   await db.query("DELETE FROM stale_fulfillments");
 
   const rows = [];
@@ -465,20 +438,14 @@ async function syncStaleFulfillments(store, token) {
       const tracking = (f.trackingInfo || []).map(t => ({ company: t.company, number: t.number, url: t.url }));
 
       rows.push({
-        fulfillment_id: f.id,
-        order_id: order.id,
-        order_name: order.name,
-        order_created_at: order.createdAt,
-        email: order.email || null,
+        fulfillment_id: f.id, order_id: order.id, order_name: order.name,
+        order_created_at: order.createdAt, email: order.email || null,
         customer_name: addr.name || order.email || "",
         shipping_address: [addr.address1, addr.address2, addr.city, addr.province, addr.zip, addr.country].filter(Boolean).join(", "),
         order_total: total.amount ? `${total.currencyCode} ${parseFloat(total.amount).toFixed(2)}` : "",
-        fulfilled_at: f.createdAt,
-        display_status: f.displayStatus,
-        has_tracking: tracking.length > 0,
-        tracking_json: JSON.stringify(tracking),
-        skus: skus.join(" | "),
-        tags: (order.tags || []).join(", "),
+        fulfilled_at: f.createdAt, display_status: f.displayStatus,
+        has_tracking: tracking.length > 0, tracking_json: JSON.stringify(tracking),
+        skus: skus.join(" | "), tags: (order.tags || []).join(", "),
         latest_event_json: events[0] ? JSON.stringify(events[0]) : null,
         all_events_json: JSON.stringify(events),
         days_since_fulfilled: Math.floor(days),
@@ -486,7 +453,6 @@ async function syncStaleFulfillments(store, token) {
     }
   }
 
-  // Upsert in batches
   const BATCH = 50;
   for (let i = 0; i < rows.length; i += BATCH) {
     const batch = rows.slice(i, i + BATCH);
@@ -505,12 +471,9 @@ async function syncStaleFulfillments(store, token) {
         has_tracking, tracking_json, skus, tags, latest_event_json, all_events_json, days_since_fulfilled)
       VALUES ${values.join(",")}
       ON CONFLICT (fulfillment_id) DO UPDATE SET
-        display_status = EXCLUDED.display_status,
-        has_tracking = EXCLUDED.has_tracking,
-        tracking_json = EXCLUDED.tracking_json,
-        latest_event_json = EXCLUDED.latest_event_json,
-        all_events_json = EXCLUDED.all_events_json,
-        days_since_fulfilled = EXCLUDED.days_since_fulfilled,
+        display_status = EXCLUDED.display_status, has_tracking = EXCLUDED.has_tracking,
+        tracking_json = EXCLUDED.tracking_json, latest_event_json = EXCLUDED.latest_event_json,
+        all_events_json = EXCLUDED.all_events_json, days_since_fulfilled = EXCLUDED.days_since_fulfilled,
         synced_at = NOW()
     `, params);
   }
@@ -526,7 +489,6 @@ async function runSync(isFullBackfill = false) {
   syncInProgress = true;
 
   try {
-    // Get last sync time
     const stateRes = await db.query("SELECT value FROM sync_state WHERE key = 'last_sync'");
     const lastSync = stateRes.rows[0]?.value || null;
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
@@ -535,13 +497,11 @@ async function runSync(isFullBackfill = false) {
 
     console.log(`[sync] Starting ${isFullBackfill ? "BACKFILL" : "incremental"} sync`);
 
-    // Build draft maps for processing times
     const [dtcDrafts, b2bDrafts] = await Promise.all([
       buildDraftsMap(dtcStore, dtcToken, since, isFullBackfill ? 600000 : 60000).catch(e => { console.warn("DTC drafts:", e.message); return {}; }),
       buildDraftsMap(b2bStore, b2bToken, since, isFullBackfill ? 600000 : 60000).catch(e => { console.warn("B2B drafts:", e.message); return {}; }),
     ]);
 
-    // Store monthly processing averages in sync_state
     for (const [month, avgHours] of Object.entries(dtcDrafts)) {
       await db.query(`INSERT INTO sync_state (key, value, updated_at) VALUES ($1, $2, NOW())
         ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
@@ -553,13 +513,11 @@ async function runSync(isFullBackfill = false) {
         [`processing_b2b_${month}`, String(avgHours)]);
     }
 
-    // Sync both stores in parallel (different rate limit buckets)
     const [dtcCount, b2bCount] = await Promise.all([
-      syncStore(dtcStore, dtcToken, "DTC", since, {}),
-      syncStore(b2bStore, b2bToken, "B2B", since, {}),
+      syncStore(dtcStore, dtcToken, "DTC", since),
+      syncStore(b2bStore, b2bToken, "B2B", since),
     ]);
 
-    // Update sync state
     await db.query(`
       INSERT INTO sync_state (key, value, updated_at) VALUES ('last_sync', $1, NOW())
       ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()
@@ -567,7 +525,6 @@ async function runSync(isFullBackfill = false) {
 
     console.log(`[sync] Done — DTC: ${dtcCount}, B2B: ${b2bCount} orders upserted`);
 
-    // Sync DTC stale fulfillments to DB
     try {
       await syncStaleFulfillments(dtcStore, dtcToken);
     } catch (err) {
@@ -580,80 +537,54 @@ async function runSync(isFullBackfill = false) {
   }
 }
 
-// ── Scorecard endpoint (reads from DB) ────────────────────────────────────────
+// ── Scorecard endpoint ────────────────────────────────────────────────────────
 app.post("/api/scorecard", async (req, res) => {
   const { year, month } = req.body;
   const start = new Date(Date.UTC(year, month - 1, 1));
   const end   = new Date(Date.UTC(year, month, 1));
-
   const monthKey = `${year}-${String(month).padStart(2, '0')}`;
 
   try {
     const [statsRes, flaggedRes, syncRes, processingRes] = await Promise.all([
       db.query(`
-        SELECT
-          store,
-          COUNT(*) AS total_orders,
-          SUM(units) AS total_units,
-          AVG(fulfillment_hours) AS avg_fulfillment,
-          AVG(delivery_hours) AS avg_delivery
-        FROM orders
-        WHERE created_at >= $1 AND created_at < $2
-        GROUP BY store
+        SELECT store, COUNT(*) AS total_orders, SUM(units) AS total_units,
+          AVG(fulfillment_hours) AS avg_fulfillment, AVG(delivery_hours) AS avg_delivery
+        FROM orders WHERE created_at >= $1 AND created_at < $2 GROUP BY store
       `, [start, end]),
       db.query(`
         SELECT id, store, order_number, customer_name, email, units,
                created_at, flag_types, fulfillment_hours, delivery_hours,
                processing_hours, tracking_json
         FROM orders
-        WHERE created_at >= $1 AND created_at < $2
-          AND is_flagged = TRUE
-        ORDER BY GREATEST(COALESCE(fulfillment_hours,0), COALESCE(delivery_hours,0)) DESC
-        LIMIT 500
+        WHERE created_at >= $1 AND created_at < $2 AND is_flagged = TRUE
+        ORDER BY GREATEST(COALESCE(fulfillment_hours,0), COALESCE(delivery_hours,0)) DESC LIMIT 500
       `, [start, end]),
       db.query("SELECT value FROM sync_state WHERE key = 'last_sync'"),
-      db.query("SELECT key, value FROM sync_state WHERE key = ANY($1)", [[`processing_dtc_${monthKey}`, `processing_b2b_${monthKey}`]]),
+      db.query("SELECT key, value FROM sync_state WHERE key = ANY($1)",
+        [[`processing_dtc_${monthKey}`, `processing_b2b_${monthKey}`]]),
     ]);
+
     const processingMap = {};
     for (const r of processingRes.rows) {
       if (r.key.includes('_dtc_')) processingMap['DTC'] = parseFloat(r.value);
       if (r.key.includes('_b2b_')) processingMap['B2B'] = parseFloat(r.value);
     }
 
-    // Daily time series
     const dailyRes = await db.query(`
-      SELECT
-        store,
-        DATE(created_at) AS day,
-        COUNT(*) AS orders,
-        SUM(units) AS units
-      FROM orders
-      WHERE created_at >= $1 AND created_at < $2
-      GROUP BY store, DATE(created_at)
-      ORDER BY day
+      SELECT store, DATE(created_at) AS day, COUNT(*) AS orders, SUM(units) AS units
+      FROM orders WHERE created_at >= $1 AND created_at < $2
+      GROUP BY store, DATE(created_at) ORDER BY day
     `, [start, end]);
 
     const fulfillRes = await db.query(`
-      SELECT
-        store,
-        DATE(created_at) AS day,
-        COUNT(*) AS fulfilled
-      FROM orders
-      WHERE created_at >= $1 AND created_at < $2
-        AND fulfillment_hours IS NOT NULL
-      GROUP BY store, DATE(created_at)
-      ORDER BY day
+      SELECT store, DATE(created_at) AS day, COUNT(*) AS fulfilled
+      FROM orders WHERE created_at >= $1 AND created_at < $2 AND fulfillment_hours IS NOT NULL
+      GROUP BY store, DATE(created_at) ORDER BY day
     `, [start, end]);
 
-    // Shape response to match frontend expectations
     const daysInMonth = new Date(year, month, 0).getDate();
-    const storeLabels = ["DTC", "B2B"];
-
-    const stores = storeLabels.map(label => {
+    const stores = ["DTC", "B2B"].map(label => {
       const stats = statsRes.rows.find(r => r.store === label) || {};
-      const ordersByDay = buildDayArray(daysInMonth, dailyRes.rows.filter(r => r.store === label), "orders", "units");
-      const fulfillmentsByDay = buildDayArray(daysInMonth, fulfillRes.rows.filter(r => r.store === label), "fulfilled");
-
       return {
         label,
         totalOrders: parseInt(stats.total_orders || 0),
@@ -663,11 +594,9 @@ app.post("/api/scorecard", async (req, res) => {
         avgDeliveryFormatted: formatDuration(parseFloat(stats.avg_delivery) || null),
         avgFulfillmentHours: parseFloat(stats.avg_fulfillment) || null,
         avgDeliveryHours: parseFloat(stats.avg_delivery) || null,
-        rawProcessingTimes: [],
-        rawFulfillmentTimes: [],
-        ordersByDay,
-        fulfillmentsByDay,
-        flaggedOrders: [],
+        rawProcessingTimes: [], rawFulfillmentTimes: [], flaggedOrders: [],
+        ordersByDay: buildDayArray(daysInMonth, dailyRes.rows.filter(r => r.store === label), "orders", "units"),
+        fulfillmentsByDay: buildDayArray(daysInMonth, fulfillRes.rows.filter(r => r.store === label), "fulfilled"),
       };
     });
 
@@ -681,28 +610,20 @@ app.post("/api/scorecard", async (req, res) => {
     };
 
     const flaggedOrders = flaggedRes.rows.map(r => ({
-      store: r.store,
-      orderNumber: r.order_number,
-      customerName: r.customer_name,
-      email: r.email,
-      units: r.units,
-      createdAt: r.created_at,
+      store: r.store, orderNumber: r.order_number, customerName: r.customer_name,
+      email: r.email, units: r.units, createdAt: r.created_at,
       issues: (r.flag_types || "").split(",").filter(Boolean).map(type => ({
         type,
         hours: type === "fulfillment" ? r.fulfillment_hours :
                type === "delivery" ? r.delivery_hours :
                type === "delivery_stalled" ? (r.delivery_hours || r.fulfillment_hours || 0) : 0,
       })),
-      processingHours: r.processing_hours,
-      fulfillmentHours: r.fulfillment_hours,
+      processingHours: r.processing_hours, fulfillmentHours: r.fulfillment_hours,
       deliveryHours: r.delivery_hours,
       tracking: r.tracking_json ? JSON.parse(r.tracking_json) : null,
     }));
 
-    res.json({
-      stores, combined, flaggedOrders, year, month,
-      lastSync: syncRes.rows[0]?.value || null,
-    });
+    res.json({ stores, combined, flaggedOrders, year, month, lastSync: syncRes.rows[0]?.value || null });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -721,7 +642,7 @@ function buildDayArray(daysInMonth, rows, countField, unitsField) {
   return arr;
 }
 
-// ── Care@ endpoint (reads from DB) ────────────────────────────────────────────
+// ── Care@ endpoint ────────────────────────────────────────────────────────────
 app.post("/api/care-scorecard", async (req, res) => {
   const { year, month } = req.body;
   const start = new Date(Date.UTC(year, month - 1, 1));
@@ -730,38 +651,28 @@ app.post("/api/care-scorecard", async (req, res) => {
   try {
     const [statsRes, syncRes] = await Promise.all([
       db.query(`
-        SELECT
-          COUNT(*) AS total_orders,
-          SUM(units) AS total_units,
-          AVG(fulfillment_hours) AS avg_fulfillment,
-          AVG(delivery_hours) AS avg_delivery
-        FROM orders
-        WHERE created_at >= $1 AND created_at < $2
-          AND LOWER(email) = 'care@lifelines.com'
+        SELECT COUNT(*) AS total_orders, SUM(units) AS total_units,
+          AVG(fulfillment_hours) AS avg_fulfillment, AVG(delivery_hours) AS avg_delivery
+        FROM orders WHERE created_at >= $1 AND created_at < $2 AND LOWER(email) = 'care@lifelines.com'
       `, [start, end]),
       db.query("SELECT value FROM sync_state WHERE key = 'last_sync'"),
     ]);
 
     const dailyRes = await db.query(`
       SELECT DATE(created_at) AS day, COUNT(*) AS orders, SUM(units) AS units
-      FROM orders
-      WHERE created_at >= $1 AND created_at < $2
-        AND LOWER(email) = 'care@lifelines.com'
+      FROM orders WHERE created_at >= $1 AND created_at < $2 AND LOWER(email) = 'care@lifelines.com'
       GROUP BY DATE(created_at) ORDER BY day
     `, [start, end]);
 
     const fulfillRes = await db.query(`
       SELECT DATE(created_at) AS day, COUNT(*) AS fulfilled
-      FROM orders
-      WHERE created_at >= $1 AND created_at < $2
-        AND LOWER(email) = 'care@lifelines.com'
-        AND fulfillment_hours IS NOT NULL
+      FROM orders WHERE created_at >= $1 AND created_at < $2
+        AND LOWER(email) = 'care@lifelines.com' AND fulfillment_hours IS NOT NULL
       GROUP BY DATE(created_at) ORDER BY day
     `, [start, end]);
 
     const daysInMonth = new Date(year, month, 0).getDate();
     const stats = statsRes.rows[0] || {};
-
     res.json({
       totalOrders: parseInt(stats.total_orders || 0),
       totalUnits: parseInt(stats.total_units || 0),
@@ -769,8 +680,7 @@ app.post("/api/care-scorecard", async (req, res) => {
       avgDeliveryFormatted: formatDuration(parseFloat(stats.avg_delivery) || null),
       ordersByDay: buildDayArray(daysInMonth, dailyRes.rows, "orders", "units"),
       fulfillmentsByDay: buildDayArray(daysInMonth, fulfillRes.rows, "fulfilled"),
-      year, month,
-      lastSync: syncRes.rows[0]?.value || null,
+      year, month, lastSync: syncRes.rows[0]?.value || null,
     });
   } catch (err) {
     console.error(err);
@@ -778,34 +688,20 @@ app.post("/api/care-scorecard", async (req, res) => {
   }
 });
 
-// ── DTC Stale (direct GQL — needs fresh data) ─────────────────────────────────
+// ── DTC Stale ─────────────────────────────────────────────────────────────────
 app.post("/api/dtc-stale", async (req, res) => {
   try {
-    const result = await db.query(`
-      SELECT * FROM stale_fulfillments
-      ORDER BY days_since_fulfilled DESC
-    `);
-
+    const result = await db.query(`SELECT * FROM stale_fulfillments ORDER BY days_since_fulfilled DESC`);
     const rows = result.rows.map(r => ({
-      orderName: r.order_name,
-      orderId: r.order_id,
-      orderCreatedAt: r.order_created_at,
-      email: r.email,
-      customerName: r.customer_name,
-      shippingAddress: r.shipping_address,
-      orderTotal: r.order_total,
-      fulfillmentId: r.fulfillment_id,
-      fulfilledAt: r.fulfilled_at,
-      daysSinceFulfilled: Math.round(r.days_since_fulfilled),
-      displayStatus: r.display_status,
-      hasTracking: r.has_tracking,
-      tracking: r.tracking_json ? JSON.parse(r.tracking_json) : [],
-      skus: r.skus ? r.skus.split(" | ") : [],
-      tags: r.tags || "",
+      orderName: r.order_name, orderId: r.order_id, orderCreatedAt: r.order_created_at,
+      email: r.email, customerName: r.customer_name, shippingAddress: r.shipping_address,
+      orderTotal: r.order_total, fulfillmentId: r.fulfillment_id, fulfilledAt: r.fulfilled_at,
+      daysSinceFulfilled: Math.round(r.days_since_fulfilled), displayStatus: r.display_status,
+      hasTracking: r.has_tracking, tracking: r.tracking_json ? JSON.parse(r.tracking_json) : [],
+      skus: r.skus ? r.skus.split(" | ") : [], tags: r.tags || "",
       latestEvent: r.latest_event_json ? JSON.parse(r.latest_event_json) : null,
       allEvents: r.all_events_json ? JSON.parse(r.all_events_json) : [],
     }));
-
     res.json({ rows, total: rows.length, fromDB: true });
   } catch (err) {
     console.error(err);
@@ -813,7 +709,7 @@ app.post("/api/dtc-stale", async (req, res) => {
   }
 });
 
-// ── B2B Drafts (direct GQL — always needs fresh) ──────────────────────────────
+// ── B2B Drafts ────────────────────────────────────────────────────────────────
 app.post("/api/b2b-drafts", async (req, res) => {
   const { b2bStore, b2bToken } = CREDS;
   if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
@@ -826,7 +722,7 @@ app.post("/api/b2b-drafts", async (req, res) => {
     } else {
       drafts = await gqlAll(b2bStore, b2bToken, DRAFT_ORDERS_QUERY,
         { first: 250, query: "status:open" },
-        d => d.draftOrders.edges, d => d.draftOrders.pageInfo, 120000); // 2min
+        d => d.draftOrders.edges, d => d.draftOrders.pageInfo, 120000);
       b2bDraftsCache = drafts;
       b2bDraftsCacheTime = Date.now();
     }
@@ -835,9 +731,8 @@ app.post("/api/b2b-drafts", async (req, res) => {
 
     const customerMap = {};
     for (const d of drafts) {
-      const email = d.email || null;
-      const key = email || "Unknown";
-      if (!customerMap[key]) customerMap[key] = { customer: key, email: email || "—", draftCount: 0, totalValue: 0 };
+      const key = d.email || "Unknown";
+      if (!customerMap[key]) customerMap[key] = { customer: key, email: d.email || "—", draftCount: 0, totalValue: 0 };
       customerMap[key].draftCount++;
       customerMap[key].totalValue += parseFloat(d.totalPrice || 0);
     }
@@ -846,7 +741,6 @@ app.post("/api/b2b-drafts", async (req, res) => {
     const invItemIds = [...new Set(
       drafts.flatMap(d => (d.lineItems.edges || []).map(e => e.node.variant?.inventoryItem?.id).filter(Boolean))
     )];
-
     const inventoryMap = {};
     if (invItemIds.length > 0) {
       const numericIds = invItemIds.map(id => id.replace("gid://shopify/InventoryItem/", ""));
@@ -883,8 +777,7 @@ app.post("/api/b2b-drafts", async (req, res) => {
 
     const needsReviewExport = needsReview.map(d => ({
       name: d.name, createdAt: d.createdAt, tags: (d.tags || []).join(", "),
-      customerName: d.email || "—",
-      email: d.email || "",
+      customerName: d.email || "—", email: d.email || "",
       subtotal: d.subtotalPrice, total: d.totalPrice,
       lineItems: (d.lineItems.edges || []).map(e => ({
         title: e.node.title, variantTitle: e.node.variantTitle || "",
@@ -899,8 +792,7 @@ app.post("/api/b2b-drafts", async (req, res) => {
   }
 });
 
-
-// ── NPI endpoint ─────────────────────────────────────────────────────────────
+// ── NPI endpoint ──────────────────────────────────────────────────────────────
 app.post("/api/npi", async (req, res) => {
   const { b2bStore, b2bToken } = CREDS;
   if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
@@ -912,7 +804,7 @@ app.post("/api/npi", async (req, res) => {
     } else {
       drafts = await gqlAll(b2bStore, b2bToken, DRAFT_ORDERS_QUERY,
         { first: 250, query: "status:open" },
-        d => d.draftOrders.edges, d => d.draftOrders.pageInfo, 120000); // 2min
+        d => d.draftOrders.edges, d => d.draftOrders.pageInfo, 120000);
       b2bDraftsCache = drafts;
       b2bDraftsCacheTime = Date.now();
     }
@@ -921,7 +813,6 @@ app.post("/api/npi", async (req, res) => {
     const launchMap = {};
 
     for (const d of drafts) {
-      // Look for launch tags on product variants, not the draft order itself
       let launchTag = null;
       for (const edge of d.lineItems?.edges || []) {
         const productTags = edge.node.variant?.product?.tags || [];
@@ -936,22 +827,20 @@ app.post("/api/npi", async (req, res) => {
         launchMap[key] = {
           tag: launchTag, monthCode,
           label: monthCode.charAt(0).toUpperCase() + monthCode.slice(1) + " 2026",
-          draftCount: 0, totalUnits: 0, totalValue: 0,
-          customers: new Set(), drafts: [],
+          draftCount: 0, totalUnits: 0, totalValue: 0, customers: new Set(), drafts: [],
         };
       }
-      const units = (d.lineItems && d.lineItems.edges || []).reduce((s, e) => s + (e.node.quantity || 0), 0);
+      const units = (d.lineItems?.edges || []).reduce((s, e) => s + (e.node.quantity || 0), 0);
       launchMap[key].draftCount++;
       launchMap[key].totalUnits += units;
       launchMap[key].totalValue += parseFloat(d.totalPrice || 0);
       if (d.email) launchMap[key].customers.add(d.email.toLowerCase());
       launchMap[key].drafts.push({
         name: d.name, email: d.email || "—", units,
-        value: parseFloat(d.totalPrice || 0),
-        createdAt: d.createdAt, tags: d.tags,
-        lineItems: (d.lineItems && d.lineItems.edges || []).map(function(e) {
-          return { title: e.node.title, sku: e.node.sku || "", quantity: e.node.quantity };
-        }),
+        value: parseFloat(d.totalPrice || 0), createdAt: d.createdAt, tags: d.tags,
+        lineItems: (d.lineItems?.edges || []).map(e => ({
+          title: e.node.title, sku: e.node.sku || "", quantity: e.node.quantity,
+        })),
       });
     }
 
@@ -967,19 +856,169 @@ app.post("/api/npi", async (req, res) => {
   }
 });
 
+// ── Draft Health endpoint ─────────────────────────────────────────────────────
+app.post("/api/draft-health", async (req, res) => {
+  const { b2bStore, b2bToken } = CREDS;
+  if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
+
+  const EXCLUDED_CUSTOMERS = [
+    "replacements customer care customer care",
+    "replacements and customer care",
+    "customer samples",
+    "faire",
+    "tjx companies, inc",
+    "norman's hallmark",
+    "trudy's hallmark",
+    "noreen batdorf",
+    "faire marketplace",
+    "tjx canada",
+    "new seasons market",
+  ];
+
+  const EXCLUDED_SKUS = new Set([
+    "LL-16-3162","LL-16-3158","LL-16-3157",
+    "LL-20-3227","LL-20-3228","LL-20-3229","LL-20-3230","LL-20-3231","LL-20-3232",
+    "LL-99-0014","LL-16-3154",
+  ]);
+
+  const LAUNCH_RE = /^launch-[a-z]{3}-2026$/i;
+
+  function isExcludedCustomer(email, name) {
+    const haystack = ((email || "") + " " + (name || "")).toLowerCase();
+    return EXCLUDED_CUSTOMERS.some(excl => haystack.includes(excl));
+  }
+
+  function classifyDraft(draft, inventoryMap) {
+    const tags = (draft.tags || []).map(t => t.toLowerCase());
+    const lines = (draft.lineItems?.edges || []).map(e => e.node);
+
+    if (isExcludedCustomer(draft.email, draft.name)) return "excluded-customer";
+    if (tags.includes("needs-review")) return "needs-review";
+
+    const hasNpi = lines.some(li =>
+      (li.variant?.product?.tags || []).some(t => LAUNCH_RE.test(t))
+    );
+    if (hasNpi) return "npi-item";
+
+    const hasExcludedSku = lines.some(li => EXCLUDED_SKUS.has(li.sku));
+    if (hasExcludedSku) return "excluded-sku";
+
+    const isReady = tags.includes("instock-ready");
+    if (!isReady) {
+      const hasOos = lines.some(li => {
+        const invId = li.variant?.inventoryItem?.id;
+        if (!invId) return false;
+        const avail = inventoryMap[invId];
+        return avail !== undefined && avail < li.quantity;
+      });
+      if (hasOos) return "out-of-stock";
+    }
+
+    const shipDateVal = draft.metafield?.value;
+    if (shipDateVal) {
+      const shipDate = new Date(shipDateVal);
+      if (!isNaN(shipDate) && shipDate > new Date()) return "delayed-ship-date";
+    }
+
+    if (isReady) return "instock-ready";
+    return "out-of-stock";
+  }
+
+  try {
+    let drafts;
+    const forceRefresh = req.body.refresh === true;
+    if (!forceRefresh && b2bDraftsCache && Date.now() - b2bDraftsCacheTime < B2B_CACHE_TTL) {
+      drafts = b2bDraftsCache;
+    } else {
+      drafts = await gqlAll(b2bStore, b2bToken, DRAFT_ORDERS_QUERY,
+        { first: 250, query: "status:open" },
+        d => d.draftOrders.edges, d => d.draftOrders.pageInfo, 120000);
+      b2bDraftsCache = drafts;
+      b2bDraftsCacheTime = Date.now();
+    }
+
+    // Build inventory map (same pattern as b2b-drafts)
+    const invItemIds = [...new Set(
+      drafts.flatMap(d => (d.lineItems.edges || [])
+        .map(e => e.node.variant?.inventoryItem?.id).filter(Boolean))
+    )];
+    const inventoryMap = {};
+    if (invItemIds.length > 0) {
+      const numericIds = invItemIds.map(id => id.replace("gid://shopify/InventoryItem/", ""));
+      for (let i = 0; i < numericIds.length; i += 50) {
+        const batch = numericIds.slice(i, i + 50).join(",");
+        const levels = await restFetchAll(b2bStore, b2bToken,
+          `/inventory_levels.json?inventory_item_ids=${batch}&limit=250`, "inventory_levels");
+        for (const lvl of levels) {
+          const gid = `gid://shopify/InventoryItem/${lvl.inventory_item_id}`;
+          inventoryMap[gid] = (inventoryMap[gid] || 0) + (lvl.available || 0);
+        }
+      }
+    }
+
+    const STATUS_ORDER = ["needs-review","out-of-stock","npi-item","excluded-sku","delayed-ship-date","excluded-customer","instock-ready"];
+
+    const rows = drafts.map(draft => {
+      const lines = (draft.lineItems?.edges || []).map(e => e.node);
+      const status = classifyDraft(draft, inventoryMap);
+
+      // Compute in-stock value: lines where inventory covers the quantity (or untracked)
+      let instockValue = 0;
+      for (const li of lines) {
+        const invId = li.variant?.inventoryItem?.id;
+        const avail = invId ? (inventoryMap[invId] ?? null) : null;
+        const tracked = !!invId;
+        if (!tracked || (avail !== null && avail >= li.quantity)) {
+          instockValue += parseFloat(li.originalUnitPrice || 0) * (li.quantity || 0);
+        }
+      }
+
+      return {
+        name: draft.name,
+        email: draft.email || "—",
+        createdAt: draft.createdAt,
+        totalPrice: parseFloat(draft.totalPrice || 0),
+        status,
+        shipDate: draft.metafield?.value || null,
+        instockValue: parseFloat(instockValue.toFixed(2)),
+        tags: draft.tags || [],
+      };
+    }).sort((a, b) => STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status));
+
+    // Status summary counts
+    const statusCounts = {};
+    for (const r of rows) statusCounts[r.status] = (statusCounts[r.status] || 0) + 1;
+
+    // Partial split opportunity: held drafts with some in-stock value
+    const heldRows = rows.filter(r => r.status !== "instock-ready" && r.instockValue > 0);
+    const splitBuckets = [
+      { label: "< $20",    min: 0,   max: 20,       count: 0, totalInstockValue: 0 },
+      { label: "$20–$50",  min: 20,  max: 50,       count: 0, totalInstockValue: 0 },
+      { label: "$50–$100", min: 50,  max: 100,      count: 0, totalInstockValue: 0 },
+      { label: "> $100",   min: 100, max: Infinity, count: 0, totalInstockValue: 0 },
+    ];
+    for (const r of heldRows) {
+      const bucket = splitBuckets.find(b => r.instockValue >= b.min && r.instockValue < b.max);
+      if (bucket) { bucket.count++; bucket.totalInstockValue += r.instockValue; }
+    }
+    for (const b of splitBuckets) b.totalInstockValue = parseFloat(b.totalInstockValue.toFixed(2));
+
+    res.json({ total: rows.length, statusCounts, splitBuckets, rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Delivery trend endpoint ───────────────────────────────────────────────────
 app.post("/api/delivery-trend", async (req, res) => {
   try {
     const result = await db.query(`
-      SELECT
-        store,
-        TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') AS month,
-        AVG(fulfillment_hours) AS avg_fulfillment,
-        AVG(delivery_hours) AS avg_delivery,
+      SELECT store, TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') AS month,
+        AVG(fulfillment_hours) AS avg_fulfillment, AVG(delivery_hours) AS avg_delivery,
         COUNT(*) AS orders
       FROM orders
-      WHERE created_at >= NOW() - INTERVAL '9 months'
-        AND fulfillment_hours IS NOT NULL
+      WHERE created_at >= NOW() - INTERVAL '9 months' AND fulfillment_hours IS NOT NULL
       GROUP BY store, DATE_TRUNC('month', created_at)
       ORDER BY DATE_TRUNC('month', created_at)
     `);
@@ -1000,9 +1039,7 @@ app.post("/api/delivery-trend", async (req, res) => {
   }
 });
 
-
-
-// ── Care@ SKU breakdown (live from Shopify - small dataset) ──────────────────
+// ── Care@ SKU breakdown ───────────────────────────────────────────────────────
 app.post("/api/care-skus", async (req, res) => {
   const { year, month } = req.body;
   const { b2bStore, b2bToken } = CREDS;
@@ -1015,9 +1052,7 @@ query CareOrders($first: Int!, $after: String, $query: String!) {
     edges {
       node {
         id name createdAt
-        lineItems(first: 50) {
-          edges { node { sku title quantity } }
-        }
+        lineItems(first: 50) { edges { node { sku title quantity } } }
       }
     }
   }
@@ -1032,7 +1067,6 @@ query CareOrders($first: Int!, $after: String, $query: String!) {
       { first: 250, query: `email:care@lifelines.com created_at:>=${start} created_at:<${end}` },
       d => d.orders.edges, d => d.orders.pageInfo, 30000);
 
-    // Tally SKUs
     const skuMap = {};
     for (const order of orders) {
       for (const edge of order.lineItems.edges || []) {
@@ -1044,10 +1078,7 @@ query CareOrders($first: Int!, $after: String, $query: String!) {
       }
     }
 
-    const topSkus = Object.values(skuMap)
-      .sort((a, b) => b.qty - a.qty)
-      .slice(0, 20);
-
+    const topSkus = Object.values(skuMap).sort((a, b) => b.qty - a.qty).slice(0, 20);
     res.json({ topSkus, totalOrders: orders.length });
   } catch (err) {
     console.error(err);
@@ -1055,27 +1086,18 @@ query CareOrders($first: Int!, $after: String, $query: String!) {
   }
 });
 
-// ── Quality SKU endpoint (YTD top replacement SKUs from flagged orders) ────────
+// ── Quality SKU endpoint ──────────────────────────────────────────────────────
 app.post("/api/quality-skus", async (req, res) => {
   try {
     const result = await db.query(`
-      SELECT
-        tracking_json,
-        order_number,
-        store,
-        created_at,
-        flag_types,
-        fulfillment_hours,
-        delivery_hours
+      SELECT tracking_json, order_number, store, created_at, flag_types,
+             fulfillment_hours, delivery_hours
       FROM orders
-      WHERE is_flagged = TRUE
-        AND created_at >= DATE_TRUNC('year', NOW())
+      WHERE is_flagged = TRUE AND created_at >= DATE_TRUNC('year', NOW())
         AND tracking_json IS NOT NULL
-      ORDER BY created_at DESC
-      LIMIT 2000
+      ORDER BY created_at DESC LIMIT 2000
     `);
 
-    // Parse tracking_json and tally by SKU/company (carrier)
     const carrierMap = {};
     for (const row of result.rows) {
       let tracking = null;
@@ -1087,17 +1109,13 @@ app.post("/api/quality-skus", async (req, res) => {
       carrierMap[carrier].orders.push(row.order_number);
     }
 
-    // Also get top flagged order counts by month/store for YTD
     const ytdRes = await db.query(`
-      SELECT
-        store,
-        TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') AS month,
+      SELECT store, TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') AS month,
         COUNT(*) AS flagged_count,
         SUM(CASE WHEN flag_types LIKE '%fulfillment%' THEN 1 ELSE 0 END) AS fulfillment_flags,
         SUM(CASE WHEN flag_types LIKE '%delivery%' THEN 1 ELSE 0 END) AS delivery_flags
       FROM orders
-      WHERE is_flagged = TRUE
-        AND created_at >= DATE_TRUNC('year', NOW())
+      WHERE is_flagged = TRUE AND created_at >= DATE_TRUNC('year', NOW())
       GROUP BY store, DATE_TRUNC('month', created_at)
       ORDER BY DATE_TRUNC('month', created_at)
     `);
@@ -1111,7 +1129,6 @@ app.post("/api/quality-skus", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
 
 // ── Debug: inspect draft tags ─────────────────────────────────────────────────
 app.get("/api/debug-tags", async (req, res) => {
@@ -1127,15 +1144,12 @@ app.get("/api/debug-tags", async (req, res) => {
       b2bDraftsCache = drafts;
       b2bDraftsCacheTime = Date.now();
     }
-    // Count product tags from line items and find launch tags
     const launchTags = new Set();
     const sampleProductTags = [];
     for (const d of drafts) {
       for (const edge of (d.lineItems?.edges || [])) {
         const productTags = edge.node.variant?.product?.tags || [];
-        for (const t of productTags) {
-          if (/launch/i.test(t)) launchTags.add(t);
-        }
+        for (const t of productTags) { if (/launch/i.test(t)) launchTags.add(t); }
         if (sampleProductTags.length < 10) sampleProductTags.push(...productTags.slice(0,3));
       }
     }
@@ -1152,7 +1166,6 @@ app.get("/api/debug-tags", async (req, res) => {
 
 // ── Manual backfill trigger ───────────────────────────────────────────────────
 app.post("/api/trigger-backfill", async (req, res) => {
-  // Reset last_sync so next runSync treats it as a fresh backfill
   await db.query("DELETE FROM sync_state WHERE key = 'last_sync'");
   res.json({ ok: true, message: "Backfill will start within 5 seconds" });
   setTimeout(() => runSync(true), 2000);
@@ -1180,13 +1193,11 @@ const PORT = process.env.PORT || 3000;
 async function boot() {
   await initDB();
 
-  // Check if we need a backfill
   const stateRes = await db.query("SELECT value FROM sync_state WHERE key = 'last_sync'");
   const needsBackfill = !stateRes.rows[0];
 
   app.listen(PORT, () => console.log(`Ops Scorecard running on :${PORT}`));
 
-  // Run initial sync/backfill after server is up
   if (needsBackfill) {
     console.log("[sync] No previous sync found — running 12-month backfill in background");
     setTimeout(() => runSync(true), 2000);
@@ -1195,13 +1206,10 @@ async function boot() {
     setTimeout(() => runSync(false), 2000);
   }
 
-  // Schedule incremental sync every 5 minutes, but only during business hours (7AM-8PM MT)
   setInterval(() => {
     const now = new Date();
-    // Convert to Mountain Time (UTC-6 MDT / UTC-7 MST)
     const utcHour = now.getUTCHours();
-    const month = now.getUTCMonth(); // 0=Jan
-    // MDT (UTC-6) March-Nov, MST (UTC-7) Nov-Mar
+    const month = now.getUTCMonth();
     const isDST = month >= 2 && month <= 10;
     const mtHour = (utcHour - (isDST ? 6 : 7) + 24) % 24;
     if (mtHour >= 7 && mtHour < 20) {
