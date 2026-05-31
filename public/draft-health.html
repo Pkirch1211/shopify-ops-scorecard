@@ -42,8 +42,6 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
 .state-title{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text)}
 .state-sub{font-size:13px;color:var(--muted);max-width:340px;line-height:1.6}
 .spinner{width:16px;height:16px;border:2px solid var(--border2);border-top-color:var(--green);border-radius:50%;animation:spin .7s linear infinite}
-
-/* KPI grid */
 .kpi-grid{display:grid;grid-template-columns:repeat(5,1fr);border:1px solid var(--border);border-radius:3px;overflow:hidden;background:var(--border);gap:1px;box-shadow:var(--shadow)}
 .kpi-card{background:var(--surface);padding:18px 20px;cursor:default}
 .kpi-card.clickable{cursor:pointer;transition:background .12s}
@@ -55,17 +53,15 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
 .kpi-value.ok{color:var(--green)}
 .kpi-hint{font-size:10px;color:var(--dim);margin-top:8px}
 .kpi-hint.action{color:var(--green)}
-
-/* Split section — two column panels */
-.split-columns{display:grid;grid-template-columns:1fr 1fr;gap:20px}
-.split-panel{border:1px solid var(--border);border-radius:3px;overflow:hidden;box-shadow:var(--shadow)}
+.split-panel{border:1px solid var(--border);border-radius:3px;overflow:hidden;box-shadow:var(--shadow);margin-bottom:16px}
+.split-panel:last-child{margin-bottom:0}
 .split-panel-header{padding:12px 16px;background:var(--surface2);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
-.split-panel-title{font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.split-panel-title{font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
 .split-panel-title.clean{color:var(--green)}
 .split-panel-title.flagged{color:var(--warn)}
 .split-panel-sub{font-size:10px;color:var(--dim)}
 .split-buckets{display:grid;grid-template-columns:repeat(4,1fr);background:var(--border);gap:1px}
-.split-bucket{background:var(--surface);padding:14px 16px;cursor:pointer;transition:background .12s}
+.split-bucket{background:var(--surface);padding:16px 18px;cursor:pointer;transition:background .12s}
 .split-bucket:hover{background:#eeeee9}
 .split-bucket.zero{cursor:default}
 .split-bucket.zero:hover{background:var(--surface)}
@@ -75,9 +71,8 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
 .split-value{font-size:11px;margin-top:5px}
 .split-value span{color:var(--green);font-weight:500}
 .split-hint{font-size:10px;color:var(--dim);margin-top:3px}
-.click-hint{font-size:9px;color:var(--green);margin-top:4px;letter-spacing:.05em}
-
-@media(max-width:960px){.kpi-grid{grid-template-columns:repeat(3,1fr)}.split-columns{grid-template-columns:1fr}}
+.click-hint{font-size:9px;color:var(--green);margin-top:4px}
+@media(max-width:960px){.kpi-grid{grid-template-columns:repeat(3,1fr)}.split-buckets{grid-template-columns:repeat(2,1fr)}}
 </style>
 </head>
 <body>
@@ -109,7 +104,6 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
   </div>
   <div id="dashboard" style="display:none">
 
-    <!-- KPI row -->
     <div class="section-header"><span class="section-dot"></span><span class="section-title">Overview</span><div class="section-line"></div></div>
     <div class="kpi-grid">
       <div class="kpi-card">
@@ -139,28 +133,27 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
       </div>
     </div>
 
-    <!-- Partial split opportunity -->
     <div class="section-header" style="margin-top:28px">
       <span class="section-dot"></span>
       <span class="section-title">Partial Split Opportunity</span>
       <div class="section-line"></div>
     </div>
-    <p style="font-size:11px;color:var(--muted);margin-bottom:14px">OOS and delayed drafts only — value of shippable lines if split today. Click any bucket to export those drafts.</p>
-    <div class="split-columns">
-      <div class="split-panel">
-        <div class="split-panel-header">
-          <span class="split-panel-title clean">Without Excluded SKUs</span>
-          <span class="split-panel-sub" id="cleanTotal">—</span>
-        </div>
-        <div class="split-buckets" id="cleanBuckets"></div>
+    <p style="font-size:11px;color:var(--muted);margin-bottom:16px">Value of shippable lines if split today. Click any bucket to export those drafts.</p>
+
+    <div class="split-panel">
+      <div class="split-panel-header">
+        <span class="split-panel-title clean">Without Excluded SKUs</span>
+        <span class="split-panel-sub" id="cleanTotal">—</span>
       </div>
-      <div class="split-panel">
-        <div class="split-panel-header">
-          <span class="split-panel-title flagged">With Excluded SKUs</span>
-          <span class="split-panel-sub" id="flaggedTotal">—</span>
-        </div>
-        <div class="split-buckets" id="flaggedBuckets"></div>
+      <div class="split-buckets" id="cleanBuckets"></div>
+    </div>
+
+    <div class="split-panel">
+      <div class="split-panel-header">
+        <span class="split-panel-title flagged">With Excluded SKUs — Seasonal Hold</span>
+        <span class="split-panel-sub" id="flaggedTotal">—</span>
       </div>
+      <div class="split-buckets" id="flaggedBuckets"></div>
     </div>
 
   </div>
@@ -170,18 +163,17 @@ const REFRESH_MS = 5 * 60 * 1000;
 let allDrafts = [];
 let refreshTimer = null, countdownTimer = null, nextRefreshAt = null, hasData = false;
 
-const EXCLUDED_SKUS = new Set([
-  'LL-16-3162','LL-16-3158','LL-16-3157',
-  'LL-20-3227','LL-20-3228','LL-20-3229','LL-20-3230','LL-20-3231','LL-20-3232',
-  'LL-99-0014','LL-16-3154'
-]);
-
+// Bucket definitions — stored so export can reference by index safely
 const BUCKETS = [
   { label: '< $20',    min: 0,   max: 20 },
   { label: '$20–$50',  min: 20,  max: 50 },
   { label: '$50–$100', min: 50,  max: 100 },
   { label: '> $100',   min: 100, max: Infinity },
 ];
+
+// Computed bucket rows stored here so onclick can reference by index — no JSON in HTML attrs
+var cleanBucketRows = [];
+var flaggedBucketRows = [];
 
 function scheduleRefresh() {
   clearTimers();
@@ -229,45 +221,45 @@ function render(data) {
   document.getElementById('refreshLabel').textContent = 'Updated ' + t;
 
   document.getElementById('kpiTotal').textContent = data.total.toLocaleString();
-  setKpiCard('kpiReview', 'kpiReviewHint', 'kpiReviewCard', sc['needs-review'] || 0);
-  setKpiCard('kpiOOS', 'kpiOOSHint', 'kpiOOSCard', sc['out-of-stock'] || 0);
-  setKpiCard('kpiNpiDelayed', 'kpiNpiHint', 'kpiNpiCard', ((sc['npi-item'] || 0) + (sc['delayed-ship-date'] || 0)));
+  setKpiCard('kpiReview',     'kpiReviewHint', 'kpiReviewCard', sc['needs-review'] || 0);
+  setKpiCard('kpiOOS',        'kpiOOSHint',    'kpiOOSCard',    sc['out-of-stock'] || 0);
+  setKpiCard('kpiNpiDelayed', 'kpiNpiHint',    'kpiNpiCard',    (sc['npi-item'] || 0) + (sc['delayed-ship-date'] || 0));
   document.getElementById('kpiReady').textContent = (sc['instock-ready'] || 0).toLocaleString();
 
-  // Split candidates: only OOS and delayed, not excluded-customer
-  var splitStatuses = new Set(['out-of-stock', 'delayed-ship-date']);
-  var candidates = allDrafts.filter(function(r) { return splitStatuses.has(r.status) && r.instockValue > 0; });
+  // Left panel: OOS + delayed drafts (by priority order these have no excluded SKUs)
+  var cleanDrafts = allDrafts.filter(function(r) {
+    return (r.status === 'out-of-stock' || r.status === 'delayed-ship-date') && r.instockValue > 0;
+  });
 
-  // Split by whether they carry any excluded SKU tag
-  // The server classifies by primary status — but we need to know if excluded SKUs are present
-  // We use the `tags` array: server sets status=excluded-sku when that's the primary reason,
-  // but here we need drafts already classified as oos/delayed that ALSO have excluded SKUs.
-  // Since tags aren't line-item level in the response, we use a proxy:
-  // the server would have classified these as excluded-sku if they had one, so oos/delayed drafts
-  // reaching here did NOT trigger the excluded-sku check — meaning they don't have excluded SKUs.
-  // Therefore: all split candidates are "clean". We still build both panels for clarity.
-  var clean = candidates; // oos/delayed drafts passed the excluded-sku check by priority ordering
-  var flagged = []; // would have been classified as excluded-sku, not oos/delayed
+  // Right panel: excluded-sku drafts that have in-stock value (the seasonal hold scenario)
+  var flaggedDrafts = allDrafts.filter(function(r) {
+    return r.status === 'excluded-sku' && r.instockValue > 0;
+  });
 
-  renderSplitPanel('cleanBuckets', 'cleanTotal', clean, false);
-  renderSplitPanel('flaggedBuckets', 'flaggedTotal', flagged, true);
+  cleanBucketRows = buildBuckets(cleanDrafts);
+  flaggedBucketRows = buildBuckets(flaggedDrafts);
+
+  renderSplitPanel('cleanBuckets', 'cleanTotal', cleanBucketRows, cleanDrafts);
+  renderSplitPanel('flaggedBuckets', 'flaggedTotal', flaggedBucketRows, flaggedDrafts);
 }
 
-function setKpiCard(valId, hintId, cardId, count) {
-  document.getElementById(valId).textContent = count.toLocaleString();
-  if (count === 0) {
-    document.getElementById(hintId).textContent = 'None';
-    document.getElementById(hintId).classList.remove('action');
-    document.getElementById(cardId).classList.remove('clickable');
-    document.getElementById(cardId).style.cursor = 'default';
-  }
+function buildBuckets(drafts) {
+  return BUCKETS.map(function(b) {
+    var rows = drafts.filter(function(r) { return r.instockValue >= b.min && r.instockValue < b.max; });
+    return {
+      label: b.label,
+      rows: rows,
+      count: rows.length,
+      total: rows.reduce(function(s, r) { return s + r.instockValue; }, 0),
+    };
+  });
 }
 
-function renderSplitPanel(containerId, totalId, drafts, isFlagged) {
+function renderSplitPanel(containerId, totalId, buckets, allDrafts) {
   var container = document.getElementById(containerId);
   var totalEl = document.getElementById(totalId);
 
-  if (!drafts.length) {
+  if (!allDrafts.length) {
     totalEl.textContent = '0 drafts';
     container.innerHTML = BUCKETS.map(function(b) {
       return '<div class="split-bucket zero">' +
@@ -279,22 +271,18 @@ function renderSplitPanel(containerId, totalId, drafts, isFlagged) {
     return;
   }
 
-  var bucketData = BUCKETS.map(function(b) {
-    var rows = drafts.filter(function(r) { return r.instockValue >= b.min && r.instockValue < b.max; });
-    return { label: b.label, min: b.min, max: b.max, rows: rows,
-      count: rows.length,
-      total: rows.reduce(function(s, r) { return s + r.instockValue; }, 0) };
-  });
+  var grandTotal = allDrafts.length;
+  var grandValue = allDrafts.reduce(function(s, r) { return s + r.instockValue; }, 0);
+  totalEl.textContent = grandTotal + ' draft' + (grandTotal !== 1 ? 's' : '') +
+    ' · $' + grandValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' shippable';
 
-  var grandTotal = drafts.length;
-  var grandValue = drafts.reduce(function(s, r) { return s + r.instockValue; }, 0);
-  totalEl.textContent = grandTotal + ' draft' + (grandTotal !== 1 ? 's' : '') + ' · $' + grandValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' shippable';
+  // Determine which store array this is for the onclick
+  var isFlagged = containerId === 'flaggedBuckets';
 
-  container.innerHTML = bucketData.map(function(b, i) {
+  container.innerHTML = buckets.map(function(b, i) {
     var isZero = b.count === 0;
-    var clickable = !isZero ? ' style="cursor:pointer"' : '';
-    var onclick = !isZero ? ' onclick="exportSplitBucket(' + JSON.stringify(b.rows.map(function(r){return r.name;})) + ',\'' + esc(b.label) + (isFlagged?'-flagged':'') + '\')"' : '';
-    return '<div class="split-bucket' + (isZero ? ' zero' : '') + '"' + clickable + onclick + '>' +
+    var onclickAttr = isZero ? '' : ' onclick="exportBucket(\'' + (isFlagged ? 'flagged' : 'clean') + '\',' + i + ')"';
+    return '<div class="split-bucket' + (isZero ? ' zero' : '') + '"' + onclickAttr + '>' +
       '<div class="split-threshold">' + esc(b.label) + '</div>' +
       '<div class="split-count' + (isZero ? ' zero' : '') + '">' + b.count + '</div>' +
       (isZero
@@ -306,22 +294,23 @@ function renderSplitPanel(containerId, totalId, drafts, isFlagged) {
   }).join('');
 }
 
+function exportBucket(panel, bucketIdx) {
+  var buckets = panel === 'clean' ? cleanBucketRows : flaggedBucketRows;
+  var bucket = buckets[bucketIdx];
+  if (!bucket || !bucket.rows.length) return;
+  var label = panel + '-' + bucket.label.replace(/[^a-z0-9]/gi, '-').toLowerCase();
+  doExport(bucket.rows, 'split-' + label);
+}
+
 function exportByStatus(statuses, filename) {
   var rows = allDrafts.filter(function(r) { return statuses.indexOf(r.status) !== -1; });
   if (!rows.length) return;
   doExport(rows, filename);
 }
 
-function exportSplitBucket(names, label) {
-  var nameSet = new Set(names);
-  var rows = allDrafts.filter(function(r) { return nameSet.has(r.name); });
-  if (!rows.length) return;
-  doExport(rows, 'split-' + label.replace(/[^a-z0-9]/gi, '-').toLowerCase());
-}
-
 function doExport(rows, filename) {
-  var lines = [['Draft #', 'Email', 'Status', 'Order Value', 'In-Stock Value', 'Age (days)', 'Ship Date'].map(csvEsc).join(',')];
   var now = Date.now();
+  var lines = [['Draft #', 'Email', 'Status', 'Order Value', 'In-Stock Value', 'Age (days)', 'Ship Date'].map(csvEsc).join(',')];
   rows.forEach(function(r) {
     var age = Math.floor((now - new Date(r.createdAt).getTime()) / 864e5);
     lines.push([r.name, r.email, r.status, r.totalPrice.toFixed(2), r.instockValue.toFixed(2), age, r.shipDate || ''].map(csvEsc).join(','));
@@ -333,6 +322,16 @@ function doExport(rows, filename) {
   a.download = filename + '-' + new Date().toISOString().slice(0, 10) + '.csv';
   a.click();
   URL.revokeObjectURL(url);
+}
+
+function setKpiCard(valId, hintId, cardId, count) {
+  document.getElementById(valId).textContent = count.toLocaleString();
+  if (count === 0) {
+    document.getElementById(hintId).textContent = 'None';
+    document.getElementById(hintId).classList.remove('action');
+    document.getElementById(cardId).classList.remove('clickable');
+    document.getElementById(cardId).style.cursor = 'default';
+  }
 }
 
 function csvEsc(v) {
