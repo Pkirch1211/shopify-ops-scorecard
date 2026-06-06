@@ -222,7 +222,7 @@ function render(data) {
 
   document.getElementById('kpiTotal').textContent = data.total.toLocaleString();
   setKpiCard('kpiReview',     'kpiReviewHint', 'kpiReviewCard', sc['needs-review'] || 0);
-  var lowStockDrafts = allDrafts.filter(function(r) { return (r.tags || []).map(function(t){return t.toLowerCase();}).indexOf('low-supply') !== -1; });
+  var lowStockDrafts = allDrafts.filter(function(r) { var t = (r.tags || []).map(function(t){return t.toLowerCase();}); return t.indexOf('low-supply') !== -1 && t.indexOf('instock-ready') !== -1; });
   document.getElementById('kpiLowStock').textContent = lowStockDrafts.length.toLocaleString();
   if (lowStockDrafts.length === 0) {
     document.getElementById('kpiLowStockHint').textContent = 'None';
@@ -310,7 +310,7 @@ function exportBucket(panel, bucketIdx) {
 }
 
 function exportLowStock() {
-  var rows = allDrafts.filter(function(r) { return (r.tags || []).map(function(t){return t.toLowerCase();}).indexOf('low-supply') !== -1; });
+  var rows = allDrafts.filter(function(r) { var t = (r.tags || []).map(function(t){return t.toLowerCase();}); return t.indexOf('low-supply') !== -1 && t.indexOf('instock-ready') !== -1; });
   if (!rows.length) return;
   doExport(rows, 'low-supply');
 }
