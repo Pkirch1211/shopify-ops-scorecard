@@ -116,10 +116,10 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
         <div class="kpi-value warn" id="kpiReview">-</div>
         <div class="kpi-hint action" id="kpiReviewHint">Click to export CSV</div>
       </div>
-      <div class="kpi-card clickable" id="kpiOOSCard" onclick="exportByStatus(['out-of-stock'],'out-of-stock')">
-        <div class="kpi-label">Out of Stock</div>
-        <div class="kpi-value danger" id="kpiOOS">-</div>
-        <div class="kpi-hint action" id="kpiOOSHint">Click to export CSV</div>
+      <div class="kpi-card clickable" id="kpiLowStockCard" onclick="exportLowStock()">
+        <div class="kpi-label">Low Stock</div>
+        <div class="kpi-value warn" id="kpiLowStock">-</div>
+        <div class="kpi-hint action" id="kpiLowStockHint">Click to export CSV</div>
       </div>
       <div class="kpi-card clickable" id="kpiNpiCard" onclick="exportByStatus(['npi-item','delayed-ship-date'],'npi-delayed')">
         <div class="kpi-label">NPI / Delayed</div>
@@ -222,7 +222,14 @@ function render(data) {
 
   document.getElementById('kpiTotal').textContent = data.total.toLocaleString();
   setKpiCard('kpiReview',     'kpiReviewHint', 'kpiReviewCard', sc['needs-review'] || 0);
-  setKpiCard('kpiOOS',        'kpiOOSHint',    'kpiOOSCard',    sc['out-of-stock'] || 0);
+  var lowStockDrafts = allDrafts.filter(function(r) { return (r.tags || []).map(function(t){return t.toLowerCase();}).indexOf('low-stock') !== -1; });
+  document.getElementById('kpiLowStock').textContent = lowStockDrafts.length.toLocaleString();
+  if (lowStockDrafts.length === 0) {
+    document.getElementById('kpiLowStockHint').textContent = 'None';
+    document.getElementById('kpiLowStockHint').classList.remove('action');
+    document.getElementById('kpiLowStockCard').classList.remove('clickable');
+    document.getElementById('kpiLowStockCard').style.cursor = 'default';
+  }
   setKpiCard('kpiNpiDelayed', 'kpiNpiHint',    'kpiNpiCard',    (sc['npi-item'] || 0) + (sc['delayed-ship-date'] || 0));
   document.getElementById('kpiReady').textContent = (sc['instock-ready'] || 0).toLocaleString();
 
@@ -300,6 +307,12 @@ function exportBucket(panel, bucketIdx) {
   if (!bucket || !bucket.rows.length) return;
   var label = panel + '-' + bucket.label.replace(/[^a-z0-9]/gi, '-').toLowerCase();
   doExport(bucket.rows, 'split-' + label);
+}
+
+function exportLowStock() {
+  var rows = allDrafts.filter(function(r) { return (r.tags || []).map(function(t){return t.toLowerCase();}).indexOf('low-stock') !== -1; });
+  if (!rows.length) return;
+  doExport(rows, 'low-stock');
 }
 
 function exportByStatus(statuses, filename) {
