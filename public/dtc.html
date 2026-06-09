@@ -3,7 +3,6 @@
 <head>
 <meta charset="UTF-8">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>DTC Fulfillment — LifeLines</title>
 <style>
@@ -38,12 +37,13 @@ main{padding:24px 28px 48px;max-width:1500px;margin:0 auto}
 .section-dot{width:6px;height:6px;border-radius:50%;background:var(--dtc);flex-shrink:0}
 .section-title{font-size:10px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
 .section-line{flex:1;height:1px;background:var(--border)}
-.kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--border);border-radius:3px;overflow:hidden;background:var(--border);gap:1px;box-shadow:var(--shadow)}
+.kpi-grid{display:grid;grid-template-columns:repeat(5,1fr);border:1px solid var(--border);border-radius:3px;overflow:hidden;background:var(--border);gap:1px;box-shadow:var(--shadow)}
 .kpi-card{background:var(--surface);padding:18px 20px}
 .kpi-label{font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
 .kpi-value{font-size:32px;font-weight:700;color:var(--text);line-height:1}
 .kpi-value.warn{color:var(--warn)}
 .kpi-value.danger{color:var(--danger)}
+.kpi-value.resolved{color:var(--green)}
 .kpi-hint{font-size:10px;color:var(--dim);margin-top:8px}
 .filter-bar{display:flex;gap:6px;margin-bottom:12px;align-items:center;flex-wrap:wrap}
 .filter-btn{font-size:10px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;padding:5px 12px;border-radius:2px;border:1px solid var(--border2);background:var(--surface);color:var(--muted);cursor:pointer;transition:all .12s}
@@ -137,6 +137,7 @@ tbody tr.expanded:hover{background:var(--dtc-light)}
       <div class="kpi-card"><div class="kpi-label">No Tracking</div><div class="kpi-value warn" id="kpiNoTracking">-</div><div class="kpi-hint">Fulfillments without tracking #</div></div>
       <div class="kpi-card"><div class="kpi-label">Avg Days Stale</div><div class="kpi-value" id="kpiAvgDays">-</div><div class="kpi-hint">Across all stale fulfillments</div></div>
       <div class="kpi-card"><div class="kpi-label">Oldest</div><div class="kpi-value warn" id="kpiOldest">-</div><div class="kpi-hint">Days since oldest fulfillment</div></div>
+      <div class="kpi-card"><div class="kpi-label">Resolved</div><div class="kpi-value resolved" id="kpiResolved">-</div><div class="kpi-hint">Tagged resolved, hidden from table</div></div>
     </div>
     <div class="section-header" style="margin-top:28px"><span class="section-dot"></span><span class="section-title">Stale Fulfillments</span><div class="section-line"></div></div>
     <div class="toolbar">
@@ -201,6 +202,7 @@ function render(data){
   document.getElementById('kpiNoTracking').textContent=noTracking.toLocaleString();
   document.getElementById('kpiAvgDays').textContent=avgDays+'d';
   document.getElementById('kpiOldest').textContent=oldest+'d';
+  document.getElementById('kpiResolved').textContent=(data.resolvedCount||0).toLocaleString();
   applyFilters();
 }
 
