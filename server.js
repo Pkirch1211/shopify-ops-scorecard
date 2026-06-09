@@ -474,7 +474,7 @@ async function syncStaleFulfillments(store, token) {
         display_status = EXCLUDED.display_status, has_tracking = EXCLUDED.has_tracking,
         tracking_json = EXCLUDED.tracking_json, latest_event_json = EXCLUDED.latest_event_json,
         all_events_json = EXCLUDED.all_events_json, days_since_fulfilled = EXCLUDED.days_since_fulfilled,
-        synced_at = NOW()
+        tags = EXCLUDED.tags, synced_at = NOW()
     `, params);
   }
 
@@ -692,7 +692,17 @@ app.post("/api/care-scorecard", async (req, res) => {
 app.post("/api/dtc-stale", async (req, res) => {
   try {
     const result = await db.query(`SELECT * FROM stale_fulfillments ORDER BY days_since_fulfilled DESC`);
-    const rows = result.rows.map(r => ({
+
+    const allDbRows = result.rows;
+
+    // Split into resolved vs active based on the "resolved" Shopify order tag
+    const activeDbRows = allDbRows.filter(r => {
+      const tags = (r.tags || '').toLowerCase().split(',').map(t => t.trim());
+      return !tags.includes('resolved');
+    });
+    const resolvedCount = allDbRows.length - activeDbRows.length;
+
+    const rows = activeDbRows.map(r => ({
       orderName: r.order_name, orderId: r.order_id, orderCreatedAt: r.order_created_at,
       email: r.email, customerName: r.customer_name, shippingAddress: r.shipping_address,
       orderTotal: r.order_total, fulfillmentId: r.fulfillment_id, fulfilledAt: r.fulfilled_at,
@@ -702,7 +712,8 @@ app.post("/api/dtc-stale", async (req, res) => {
       latestEvent: r.latest_event_json ? JSON.parse(r.latest_event_json) : null,
       allEvents: r.all_events_json ? JSON.parse(r.all_events_json) : [],
     }));
-    res.json({ rows, total: rows.length, fromDB: true });
+
+    res.json({ rows, total: rows.length, resolvedCount, fromDB: true });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
