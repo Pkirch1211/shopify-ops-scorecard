@@ -121,10 +121,10 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
         <div class="kpi-value warn" id="kpiLowStock">-</div>
         <div class="kpi-hint action" id="kpiLowStockHint">Click to export CSV</div>
       </div>
-      <div class="kpi-card clickable" id="kpiNpiCard" onclick="exportByStatus(['npi-item','delayed-ship-date'],'npi-delayed')">
-        <div class="kpi-label">NPI / Delayed</div>
-        <div class="kpi-value warn" id="kpiNpiDelayed">-</div>
-        <div class="kpi-hint action" id="kpiNpiHint">Click to export CSV</div>
+      <div class="kpi-card clickable" id="kpiInvShortageCard" onclick="exportInvShortage()">
+        <div class="kpi-label">Inventory Shortage</div>
+        <div class="kpi-value warn" id="kpiInvShortage">-</div>
+        <div class="kpi-hint action" id="kpiInvShortageHint">Click to export CSV</div>
       </div>
       <div class="kpi-card">
         <div class="kpi-label">Ready to Release</div>
@@ -230,7 +230,14 @@ function render(data) {
     document.getElementById('kpiLowStockCard').classList.remove('clickable');
     document.getElementById('kpiLowStockCard').style.cursor = 'default';
   }
-  setKpiCard('kpiNpiDelayed', 'kpiNpiHint',    'kpiNpiCard',    (sc['npi-item'] || 0) + (sc['delayed-ship-date'] || 0));
+  var invShortageDrafts = allDrafts.filter(function(r) { return (r.tags || []).map(function(t){return t.toLowerCase();}).indexOf('inventory-shortage') !== -1; });
+  document.getElementById('kpiInvShortage').textContent = invShortageDrafts.length.toLocaleString();
+  if (invShortageDrafts.length === 0) {
+    document.getElementById('kpiInvShortageHint').textContent = 'None';
+    document.getElementById('kpiInvShortageHint').classList.remove('action');
+    document.getElementById('kpiInvShortageCard').classList.remove('clickable');
+    document.getElementById('kpiInvShortageCard').style.cursor = 'default';
+  }
   document.getElementById('kpiReady').textContent = (sc['instock-ready'] || 0).toLocaleString();
 
   // Left panel: OOS + delayed drafts (by priority order these have no excluded SKUs)
@@ -307,6 +314,12 @@ function exportBucket(panel, bucketIdx) {
   if (!bucket || !bucket.rows.length) return;
   var label = panel + '-' + bucket.label.replace(/[^a-z0-9]/gi, '-').toLowerCase();
   doExport(bucket.rows, 'split-' + label);
+}
+
+function exportInvShortage() {
+  var rows = allDrafts.filter(function(r) { return (r.tags || []).map(function(t){return t.toLowerCase();}).indexOf('inventory-shortage') !== -1; });
+  if (!rows.length) return;
+  doExport(rows, 'inventory-shortage');
 }
 
 function exportLowStock() {
