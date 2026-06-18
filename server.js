@@ -256,7 +256,7 @@ query DraftOrders($first: Int!, $after: String, $query: String!) {
 }`;
 
 // ── SKU Holds config ────────────────────────────────────────────────────────
-const HOLD_CUSTOMER_NAME = "HOLD DO NOT SHIP INVENTORY HOLD";
+const HOLD_CUSTOMER_NAME = "HOLD DO NOT SHIP";
 
 const SKU_HOLDS_QUERY = `
 query HoldOrders($first: Int!, $after: String, $query: String!) {
