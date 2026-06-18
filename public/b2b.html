@@ -156,6 +156,7 @@ tbody tr:hover{background:var(--bg)}
     <div class="two-col" style="margin-top:28px">
       <div>
         <div class="section-header"><span class="section-dot"></span><span class="section-title">SKU Holds</span><div class="section-line"></div><span class="count-label" id="holdsSummary"></span></div>
+        <div id="holdsError" style="display:none" class="error-banner"></div>
         <div class="table-toolbar">
           <input class="search-input" type="text" placeholder="Search SKU or description..." oninput="filterHolds(this.value)">
           <span>
@@ -206,7 +207,10 @@ function clearTimers(){if(refreshTimer)clearTimeout(refreshTimer);if(countdownTi
 function updateCountdown(){var r=Math.max(0,nextRefreshAt-Date.now());var m=Math.floor(r/60000);var s=Math.floor((r%60000)/1000);document.getElementById('nextRefresh').textContent='Next refresh in '+m+':'+(s<10?'0':'')+s;}
 
 var isManualRefresh = false;
-async function runFetch(){clearTimers();setStatus('fetching');if(!hasData)show('emptyState');hideError();try{var results=await Promise.all([fetch('/api/b2b-drafts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})}),fetch('/api/sku-holds',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})})]);var res=results[0],res2=results[1];var data=await res.json();if(!res.ok)throw new Error(data.error||'Server error');hasData=true;render(data);try{var holdsData=await res2.json();if(res2.ok)renderHolds(holdsData);else console.error('SKU holds error:',holdsData.error);}catch(e){console.error('SKU holds error:',e.message);}setStatus('live');scheduleRefresh();}catch(err){showError(err.message);setStatus('error');if(!hasData)show('emptyState');scheduleRefresh();}}
+async function runFetch(){clearTimers();setStatus('fetching');if(!hasData)show('emptyState');hideError();try{var results=await Promise.all([fetch('/api/b2b-drafts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})}),fetch('/api/sku-holds',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})})]);var res=results[0],res2=results[1];var data=await res.json();if(!res.ok)throw new Error(data.error||'Server error');hasData=true;render(data);try{var holdsData=await res2.json();if(res2.ok){hideHoldsError();renderHolds(holdsData);}else{showHoldsError(holdsData.error||'Server error');}}catch(e){showHoldsError(e.message);}setStatus('live');scheduleRefresh();}catch(err){showError(err.message);setStatus('error');if(!hasData)show('emptyState');scheduleRefresh();}}
+
+function showHoldsError(msg){var el=document.getElementById('holdsError');el.textContent='SKU Holds error: '+msg;el.style.display='block';document.getElementById('holdsTableWrap').style.display='none';document.getElementById('holdsEmpty').style.display='none';}
+function hideHoldsError(){document.getElementById('holdsError').style.display='none';}
 
 function render(data){
   show('dashboard');
@@ -239,7 +243,14 @@ function renderHolds(data){
   allHolds=data.holds||[];
   document.getElementById('kpiHolds').textContent=allHolds.length.toLocaleString();
   document.getElementById('kpiHoldsHint').textContent=(data.totalUnitsOnHold||0).toLocaleString()+' total units';
-  document.getElementById('holdsSummary').textContent=allHolds.length+' SKUs · '+(data.totalUnitsOnHold||0).toLocaleString()+' units across '+(data.ordersFound||0)+' orders';
+  var dbg=data.debug;
+  if(dbg && dbg.customerFound===false){
+    showHoldsError('Hold customer not found by email lookup. Check HOLD_CUSTOMER_EMAIL in server.js.');
+    return;
+  }
+  var summary=allHolds.length+' SKUs · '+(data.totalUnitsOnHold||0).toLocaleString()+' units across '+(data.ordersFound||0)+' orders';
+  if(dbg && dbg.customerFound) summary+=' (matched: '+dbg.customerName+')';
+  document.getElementById('holdsSummary').textContent=summary;
   renderHoldsRows(allHolds);
 }
 
