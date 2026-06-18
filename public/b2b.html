@@ -89,6 +89,7 @@ tbody tr:hover{background:var(--bg)}
 .hold-sku{font-family:var(--mono);font-size:11px;color:var(--text)}
 .hold-desc{color:var(--muted);font-size:11px;margin-top:2px}
 .hold-qty{font-weight:600;color:var(--warn)}
+.hold-orders{color:var(--dim);font-size:10px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:340px}
 .holds-empty{padding:40px;text-align:center;font-family:var(--sans);font-size:11px;color:var(--green)}
 @media(max-width:960px){.two-col{grid-template-columns:1fr}.kpi-grid{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:640px){
@@ -249,7 +250,7 @@ function renderHoldsRows(rows){
   document.getElementById('holdsCount').textContent=rows.length+' SKUs';
   if(!rows.length){tbody.innerHTML='';wrap.style.display='none';empty.style.display='block';return;}
   wrap.style.display='';empty.style.display='none';
-  tbody.innerHTML=rows.map(function(r){return'<tr><td><div class="hold-sku">'+esc(r.sku)+'</div><div class="hold-desc">'+esc(r.description)+'</div></td><td class="hold-qty">'+r.quantity.toLocaleString()+'</td><td style="color:var(--muted)">'+r.orderCount+'</td></tr>';}).join('');
+  tbody.innerHTML=rows.map(function(r){var orders=[...new Set(r.orders||[])];var ordersTxt=orders.slice(0,4).join(', ')+(orders.length>4?' +'+(orders.length-4)+' more':'');return'<tr><td><div class="hold-sku">'+esc(r.sku)+'</div><div class="hold-desc">'+esc(r.description)+'</div>'+(orders.length?'<div class="hold-orders">'+esc(ordersTxt)+'</div>':'')+'</td><td class="hold-qty">'+r.quantity.toLocaleString()+'</td><td style="color:var(--muted)">'+r.orderCount+'</td></tr>';}).join('');
 }
 
 function filterHolds(q){var filtered=q?allHolds.filter(function(r){return r.sku.toLowerCase().includes(q.toLowerCase())||r.description.toLowerCase().includes(q.toLowerCase());}):allHolds;renderHoldsRows(filtered);}
@@ -258,8 +259,8 @@ function sortHolds(col,th){if(holdsSortCol===col)holdsSortDir*=-1;else{holdsSort
 
 function exportHolds(){
   if(!allHolds.length)return;
-  var rows=[['SKU','Description','Qty On Hold','# Orders'].map(csvEsc).join(',')];
-  allHolds.forEach(function(r){rows.push([r.sku,r.description,r.quantity,r.orderCount].map(csvEsc).join(','));});
+  var rows=[['SKU','Description','Qty On Hold','# Orders','Order Numbers'].map(csvEsc).join(',')];
+  allHolds.forEach(function(r){rows.push([r.sku,r.description,r.quantity,r.orderCount,(r.orders||[]).join('; ')].map(csvEsc).join(','));});
   var blob=new Blob([rows.join('\n')],{type:'text/csv'});
   var url=URL.createObjectURL(blob);
   var a=document.createElement('a');a.href=url;a.download='sku-holds-'+new Date().toISOString().slice(0,10)+'.csv';a.click();URL.revokeObjectURL(url);
