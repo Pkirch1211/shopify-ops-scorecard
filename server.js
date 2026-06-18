@@ -1013,6 +1013,13 @@ app.post("/api/draft-health", async (req, res) => {
       if (!isNaN(shipDate) && shipDate > new Date()) return "delayed-ship-date";
     }
 
+    // A draft can be tagged instock-ready by the automation and STILL be blocked
+    // from actually shipping if low-supply or inventory-shortage was also applied
+    // (e.g. partial inventory covers the order but not safely/fully). These must
+    // not count as "truly" ready, or they get double-counted against Low Stock /
+    // Inventory Shortage on the dashboard.
+    const isSupplyBlocked = tags.includes("low-supply") || tags.includes("inventory-shortage");
+    if (isReady && isSupplyBlocked) return "supply-blocked";
     if (isReady) return "instock-ready";
     return "out-of-stock";
   }
@@ -1049,7 +1056,7 @@ app.post("/api/draft-health", async (req, res) => {
       }
     }
 
-    const STATUS_ORDER = ["needs-review","out-of-stock","npi-item","excluded-sku","delayed-ship-date","excluded-customer","instock-ready"];
+    const STATUS_ORDER = ["needs-review","out-of-stock","npi-item","excluded-sku","delayed-ship-date","excluded-customer","supply-blocked","instock-ready"];
 
     const rows = drafts.map(draft => {
       const lines = (draft.lineItems?.edges || []).map(e => e.node);
