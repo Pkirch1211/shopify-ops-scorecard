@@ -108,6 +108,22 @@ tbody tr.expanded:hover{background:var(--dtc-light)}
 .toolbar{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
 .result-count{font-size:10px;color:var(--muted);margin-left:auto}
 @media(max-width:900px){.expand-grid{grid-template-columns:1fr}.kpi-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:640px){
+  header{grid-template-columns:1fr;position:static}
+  .header-brand{padding:10px 16px}
+  .header-title{padding:10px 16px;border-right:none;border-bottom:1px solid var(--border)}
+  .header-right{flex-direction:column;align-items:flex-start;gap:8px;padding:10px 16px}
+  nav{flex-wrap:wrap;gap:4px}
+  .nav-link{font-size:9px;padding:5px 9px}
+  .controls-bar{flex-wrap:wrap;padding:10px 16px;gap:6px}
+  .next-refresh{margin-left:0}
+  main{padding:14px 14px 32px}
+  .kpi-grid{grid-template-columns:repeat(2,1fr)}
+  .kpi-card{padding:12px 14px}
+  .kpi-value{font-size:24px}
+  .search-input{width:100%}
+  th,td{padding:8px 10px}
+}
 </style>
 </head>
 <body>
