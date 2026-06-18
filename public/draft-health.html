@@ -73,6 +73,24 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
 .split-hint{font-size:10px;color:var(--dim);margin-top:3px}
 .click-hint{font-size:9px;color:var(--green);margin-top:4px}
 @media(max-width:960px){.kpi-grid{grid-template-columns:repeat(3,1fr)}.split-buckets{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:640px){
+  header{grid-template-columns:1fr;position:static}
+  .header-brand{padding:10px 16px}
+  .header-title{padding:10px 16px;border-right:none;border-bottom:1px solid var(--border)}
+  .header-right{flex-direction:column;align-items:flex-start;gap:8px;padding:10px 16px}
+  nav{flex-wrap:wrap;gap:4px}
+  .nav-link{font-size:9px;padding:5px 9px}
+  .controls-bar{flex-wrap:wrap;padding:10px 16px;gap:6px}
+  .next-refresh{margin-left:0}
+  main{padding:14px 14px 32px}
+  .kpi-grid{grid-template-columns:repeat(2,1fr)}
+  .split-buckets{grid-template-columns:1fr}
+  .kpi-card{padding:12px 14px}
+  .kpi-value{font-size:24px}
+  .table-wrap{overflow-x:auto}
+  table{min-width:480px}
+  th,td{padding:8px 10px}
+}
 </style>
 </head>
 <body>
