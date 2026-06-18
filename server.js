@@ -258,24 +258,31 @@ query DraftOrders($first: Int!, $after: String, $query: String!) {
 // ── SKU Holds config ────────────────────────────────────────────────────────
 const HOLD_CUSTOMER_NAME = "HOLD DO NOT SHIP";
 
-const SKU_HOLDS_QUERY = `
-query HoldOrders($first: Int!, $after: String, $query: String!) {
-  orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT) {
-    pageInfo { hasNextPage endCursor }
-    edges {
-      node {
-        id name createdAt email
-        customer { displayName }
-        purchasingEntity {
-          __typename
-          ... on PurchasingCompany {
-            company { name }
-          }
-        }
-        lineItems(first: 100) {
-          edges {
-            node {
-              sku title variantTitle quantity unfulfilledQuantity
+// Look up the hold Company by exact name — far more reliable than free-text
+// searching across every order in the store for a name match.
+const COMPANY_LOOKUP_QUERY = `
+query FindCompany($query: String!) {
+  companies(first: 5, query: $query) {
+    edges { node { id name } }
+  }
+}`;
+
+// Pull unfulfilled orders directly off the Company object. Every order
+// returned here truly belongs to that company — no client-side name
+// matching needed, and it's far cheaper than scanning all store orders.
+const COMPANY_ORDERS_QUERY = `
+query CompanyOrders($id: ID!, $first: Int!, $after: String, $query: String!) {
+  company(id: $id) {
+    orders(first: $first, after: $after, query: $query) {
+      pageInfo { hasNextPage endCursor }
+      edges {
+        node {
+          id name createdAt email
+          lineItems(first: 100) {
+            edges {
+              node {
+                sku title variantTitle quantity unfulfilledQuantity
+              }
             }
           }
         }
@@ -846,29 +853,24 @@ app.post("/api/sku-holds", async (req, res) => {
     if (!forceRefresh && skuHoldsCache && Date.now() - skuHoldsCacheTime < SKU_HOLDS_TTL) {
       orders = skuHoldsCache;
     } else {
-      // Don't pre-filter by customer name in the search query — Shopify's free-text
-      // order search doesn't reliably match B2B company names. Pull all unfulfilled
-      // orders and match the company precisely below instead.
-      orders = await gqlAll(b2bStore, b2bToken, SKU_HOLDS_QUERY,
-        { first: 250, query: "fulfillment_status:unfulfilled" },
-        d => d.orders.edges, d => d.orders.pageInfo, 120000);
+      const lookup = await gql(b2bStore, b2bToken, COMPANY_LOOKUP_QUERY, { query: `name:'${HOLD_CUSTOMER_NAME}'` });
+      const candidates = lookup.companies?.edges || [];
+      const holdNameLower = HOLD_CUSTOMER_NAME.toLowerCase();
+      const match = candidates.find(e => (e.node.name || "").toLowerCase() === holdNameLower) || candidates[0];
+
+      if (!match) {
+        orders = [];
+      } else {
+        orders = await gqlAll(b2bStore, b2bToken, COMPANY_ORDERS_QUERY,
+          { id: match.node.id, first: 250, query: "fulfillment_status:unfulfilled" },
+          d => d.company.orders.edges, d => d.company.orders.pageInfo, 120000);
+      }
       skuHoldsCache = orders;
       skuHoldsCacheTime = Date.now();
     }
 
-    // Match against the B2B company name (orders placed by a Company resolve
-    // purchasingEntity to PurchasingCompany) with a fallback to the plain
-    // customer display name for non-B2B test orders.
-    const holdNameLower = HOLD_CUSTOMER_NAME.toLowerCase();
-    const holdOrders = orders.filter(o => {
-      const companyName = o.purchasingEntity?.__typename === "PurchasingCompany"
-        ? (o.purchasingEntity.company?.name || "") : "";
-      const customerName = o.customer?.displayName || "";
-      return companyName.toLowerCase() === holdNameLower || customerName.toLowerCase() === holdNameLower;
-    });
-
     const skuMap = {};
-    for (const order of holdOrders) {
+    for (const order of orders) {
       for (const edge of order.lineItems?.edges || []) {
         const li = edge.node;
         const qty = (li.unfulfilledQuantity ?? li.quantity) || 0;
@@ -888,7 +890,7 @@ app.post("/api/sku-holds", async (req, res) => {
 
     res.json({
       asOf: new Date().toISOString(),
-      ordersFound: holdOrders.length,
+      ordersFound: orders.length,
       totalSkus: holds.length,
       totalUnitsOnHold,
       holds,
