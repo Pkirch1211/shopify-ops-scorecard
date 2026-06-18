@@ -255,6 +255,29 @@ query DraftOrders($first: Int!, $after: String, $query: String!) {
   }
 }`;
 
+// ── SKU Holds config ────────────────────────────────────────────────────────
+const HOLD_CUSTOMER_NAME = "HOLD DO NOT SHIP INVENTORY HOLD";
+
+const SKU_HOLDS_QUERY = `
+query HoldOrders($first: Int!, $after: String, $query: String!) {
+  orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT) {
+    pageInfo { hasNextPage endCursor }
+    edges {
+      node {
+        id name createdAt email
+        customer { displayName }
+        lineItems(first: 100) {
+          edges {
+            node {
+              sku title variantTitle quantity unfulfilledQuantity
+            }
+          }
+        }
+      }
+    }
+  }
+}`;
+
 const DTC_STALE_QUERY = `
 query StaleFulfillments($first: Int!, $after: String, $query: String!) {
   orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT, reverse: true) {
@@ -339,8 +362,11 @@ let b2bDraftsCache = null;
 let b2bDraftsCacheTime = 0;
 let dtcStaleCache = null;
 let dtcStaleCacheTime = 0;
+let skuHoldsCache = null;
+let skuHoldsCacheTime = 0;
 const B2B_CACHE_TTL = 5 * 60 * 1000;
 const DTC_STALE_TTL = 5 * 60 * 1000;
+const SKU_HOLDS_TTL = 5 * 60 * 1000;
 
 // ── Sync logic ────────────────────────────────────────────────────────────────
 let syncInProgress = false;
@@ -797,6 +823,62 @@ app.post("/api/b2b-drafts", async (req, res) => {
     }));
 
     res.json({ totalDrafts: drafts.length, needsReviewCount: needsReview.length, needsReviewExport, byCustomer, oosItems });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── SKU Holds endpoint ─────────────────────────────────────────────────────────
+app.post("/api/sku-holds", async (req, res) => {
+  const { b2bStore, b2bToken } = CREDS;
+  if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
+
+  try {
+    const forceRefresh = req.body.refresh === true;
+    let orders;
+    if (!forceRefresh && skuHoldsCache && Date.now() - skuHoldsCacheTime < SKU_HOLDS_TTL) {
+      orders = skuHoldsCache;
+    } else {
+      const searchQuery = `"${HOLD_CUSTOMER_NAME}" fulfillment_status:unfulfilled`;
+      orders = await gqlAll(b2bStore, b2bToken, SKU_HOLDS_QUERY,
+        { first: 250, query: searchQuery },
+        d => d.orders.edges, d => d.orders.pageInfo, 120000);
+      skuHoldsCache = orders;
+      skuHoldsCacheTime = Date.now();
+    }
+
+    // Confirm exact customer match client-side (the search above is a free-text
+    // pre-filter; this guards against partial/loose text matches from Shopify).
+    const holdNameLower = HOLD_CUSTOMER_NAME.toLowerCase();
+    const holdOrders = orders.filter(o => (o.customer?.displayName || "").toLowerCase() === holdNameLower);
+
+    const skuMap = {};
+    for (const order of holdOrders) {
+      for (const edge of order.lineItems?.edges || []) {
+        const li = edge.node;
+        const qty = (li.unfulfilledQuantity ?? li.quantity) || 0;
+        if (qty <= 0) continue;
+        const sku = li.sku || "—";
+        const description = (li.variantTitle && li.variantTitle !== "Default Title")
+          ? `${li.title} - ${li.variantTitle}` : (li.title || "—");
+        if (!skuMap[sku]) skuMap[sku] = { sku, description, quantity: 0, orderCount: 0, orders: [] };
+        skuMap[sku].quantity += qty;
+        skuMap[sku].orderCount++;
+        skuMap[sku].orders.push(order.name);
+      }
+    }
+
+    const holds = Object.values(skuMap).sort((a, b) => b.quantity - a.quantity);
+    const totalUnitsOnHold = holds.reduce((s, h) => s + h.quantity, 0);
+
+    res.json({
+      asOf: new Date().toISOString(),
+      ordersFound: holdOrders.length,
+      totalSkus: holds.length,
+      totalUnitsOnHold,
+      holds,
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
