@@ -266,6 +266,12 @@ query HoldOrders($first: Int!, $after: String, $query: String!) {
       node {
         id name createdAt email
         customer { displayName }
+        purchasingEntity {
+          __typename
+          ... on PurchasingCompany {
+            company { name }
+          }
+        }
         lineItems(first: 100) {
           edges {
             node {
@@ -840,18 +846,26 @@ app.post("/api/sku-holds", async (req, res) => {
     if (!forceRefresh && skuHoldsCache && Date.now() - skuHoldsCacheTime < SKU_HOLDS_TTL) {
       orders = skuHoldsCache;
     } else {
-      const searchQuery = `"${HOLD_CUSTOMER_NAME}" fulfillment_status:unfulfilled`;
+      // Don't pre-filter by customer name in the search query — Shopify's free-text
+      // order search doesn't reliably match B2B company names. Pull all unfulfilled
+      // orders and match the company precisely below instead.
       orders = await gqlAll(b2bStore, b2bToken, SKU_HOLDS_QUERY,
-        { first: 250, query: searchQuery },
+        { first: 250, query: "fulfillment_status:unfulfilled" },
         d => d.orders.edges, d => d.orders.pageInfo, 120000);
       skuHoldsCache = orders;
       skuHoldsCacheTime = Date.now();
     }
 
-    // Confirm exact customer match client-side (the search above is a free-text
-    // pre-filter; this guards against partial/loose text matches from Shopify).
+    // Match against the B2B company name (orders placed by a Company resolve
+    // purchasingEntity to PurchasingCompany) with a fallback to the plain
+    // customer display name for non-B2B test orders.
     const holdNameLower = HOLD_CUSTOMER_NAME.toLowerCase();
-    const holdOrders = orders.filter(o => (o.customer?.displayName || "").toLowerCase() === holdNameLower);
+    const holdOrders = orders.filter(o => {
+      const companyName = o.purchasingEntity?.__typename === "PurchasingCompany"
+        ? (o.purchasingEntity.company?.name || "") : "";
+      const customerName = o.customer?.displayName || "";
+      return companyName.toLowerCase() === holdNameLower || customerName.toLowerCase() === holdNameLower;
+    });
 
     const skuMap = {};
     for (const order of holdOrders) {
