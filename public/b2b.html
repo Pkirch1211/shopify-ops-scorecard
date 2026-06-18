@@ -86,7 +86,30 @@ tbody tr:hover{background:var(--bg)}
 .export-btn{font-size:10px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;padding:4px 10px;border-radius:2px;border:1px solid var(--border2);background:var(--surface);color:var(--muted);cursor:pointer;transition:all .12s;float:right}
 .export-btn:hover{color:var(--green);border-color:var(--green)}
 .oos-empty{padding:40px;text-align:center;font-family:var(--sans);font-size:11px;color:var(--green)}
+.hold-sku{font-family:var(--mono);font-size:11px;color:var(--text)}
+.hold-desc{color:var(--muted);font-size:11px;margin-top:2px}
+.hold-qty{font-weight:600;color:var(--warn)}
+.holds-empty{padding:40px;text-align:center;font-family:var(--sans);font-size:11px;color:var(--green)}
 @media(max-width:960px){.two-col{grid-template-columns:1fr}.kpi-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:640px){
+  header{grid-template-columns:1fr;position:static}
+  .header-brand{padding:10px 16px}
+  .header-title{padding:10px 16px;border-right:none;border-bottom:1px solid var(--border)}
+  .header-right{flex-direction:column;align-items:flex-start;gap:8px;padding:10px 16px}
+  nav{flex-wrap:wrap;gap:4px}
+  .nav-link{font-size:9px;padding:5px 9px}
+  .controls-bar{flex-wrap:wrap;padding:10px 16px;gap:6px}
+  .next-refresh{margin-left:0}
+  main{padding:14px 14px 32px}
+  .kpi-grid{grid-template-columns:repeat(2,1fr)}
+  .kpi-card{padding:12px 14px}
+  .kpi-value{font-size:24px}
+  .table-wrap{overflow-x:auto}
+  table{min-width:480px}
+  th,td{padding:8px 10px}
+  .table-toolbar{flex-wrap:wrap;gap:8px}
+  .search-input{width:100%}
+}
 </style>
 </head>
 <body>
@@ -164,12 +187,35 @@ tbody tr:hover{background:var(--bg)}
         <div id="oosEmpty" style="display:none" class="oos-empty">&#10003; No out-of-stock items in open drafts</div>
       </div>
     </div>
+    <div style="margin-top:28px">
+      <div class="section-header"><span class="section-dot"></span><span class="section-title">SKU Holds</span><div class="section-line"></div><span class="count-label" id="holdsSummary"></span></div>
+      <div class="table-toolbar">
+        <input class="search-input" type="text" placeholder="Search SKU or description..." oninput="filterHolds(this.value)">
+        <span>
+          <span class="count-label" id="holdsCount"></span>
+          <button class="export-btn" onclick="exportHolds()">&#8595; CSV</button>
+        </span>
+      </div>
+      <div class="table-wrap" id="holdsTableWrap">
+        <table>
+          <thead><tr>
+            <th>SKU / Description</th>
+            <th class="sortable sorted" onclick="sortHolds('quantity',this)" data-col="quantity">Qty On Hold <span class="sort-icon">&#8595;</span></th>
+            <th class="sortable" onclick="sortHolds('orderCount',this)" data-col="orderCount"># Orders <span class="sort-icon">&#8597;</span></th>
+          </tr></thead>
+          <tbody id="holdsBody"></tbody>
+        </table>
+      </div>
+      <div id="holdsEmpty" style="display:none" class="holds-empty">&#10003; No inventory currently on hold</div>
+    </div>
   </div>
 </main>
 <script>
 const REFRESH_MS=5*60*1000;
 let allCustomers=[],allOOS=[],exportData=[];
+let allHolds=[];
 let customerSortCol='draftCount',customerSortDir=-1,oosSortCol='draftCount',oosSortDir=-1;
+let holdsSortCol='quantity',holdsSortDir=-1;
 let refreshTimer=null,countdownTimer=null,nextRefreshAt=null,hasData=false;
 
 function scheduleRefresh(){clearTimers();nextRefreshAt=Date.now()+REFRESH_MS;refreshTimer=setTimeout(function(){runFetch();},REFRESH_MS);countdownTimer=setInterval(updateCountdown,1000);updateCountdown();}
@@ -177,7 +223,7 @@ function clearTimers(){if(refreshTimer)clearTimeout(refreshTimer);if(countdownTi
 function updateCountdown(){var r=Math.max(0,nextRefreshAt-Date.now());var m=Math.floor(r/60000);var s=Math.floor((r%60000)/1000);document.getElementById('nextRefresh').textContent='Next refresh in '+m+':'+(s<10?'0':'')+s;}
 
 var isManualRefresh = false;
-async function runFetch(){clearTimers();setStatus('fetching');if(!hasData)show('emptyState');hideError();try{var res=await fetch('/api/b2b-drafts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});var data=await res.json();if(!res.ok)throw new Error(data.error||'Server error');hasData=true;render(data);setStatus('live');scheduleRefresh();}catch(err){showError(err.message);setStatus('error');if(!hasData)show('emptyState');scheduleRefresh();}}
+async function runFetch(){clearTimers();setStatus('fetching');if(!hasData)show('emptyState');hideError();try{var results=await Promise.all([fetch('/api/b2b-drafts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})}),fetch('/api/sku-holds',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})})]);var res=results[0],res2=results[1];var data=await res.json();if(!res.ok)throw new Error(data.error||'Server error');hasData=true;render(data);try{var holdsData=await res2.json();if(res2.ok)renderHolds(holdsData);else console.error('SKU holds error:',holdsData.error);}catch(e){console.error('SKU holds error:',e.message);}setStatus('live');scheduleRefresh();}catch(err){showError(err.message);setStatus('error');if(!hasData)show('emptyState');scheduleRefresh();}}
 
 function render(data){
   show('dashboard');
@@ -240,6 +286,35 @@ function renderOOS(rows){
 }
 
 function sortOOS(col,th){if(oosSortCol===col)oosSortDir*=-1;else{oosSortCol=col;oosSortDir=-1;}th.closest('thead').querySelectorAll('th[data-col]').forEach(function(t){t.classList.remove('sorted');t.querySelector('.sort-icon').innerHTML='&#8597;';});th.classList.add('sorted');th.querySelector('.sort-icon').innerHTML=oosSortDir===-1?'&#8595;':'&#8593;';allOOS.sort(function(a,b){return oosSortDir*(b[col]-a[col]);});renderOOS(allOOS);}
+
+function renderHolds(data){
+  allHolds=data.holds||[];
+  document.getElementById('holdsSummary').textContent=allHolds.length+' SKUs · '+(data.totalUnitsOnHold||0).toLocaleString()+' units on hold across '+(data.ordersFound||0)+' orders';
+  renderHoldsRows(allHolds);
+}
+
+function renderHoldsRows(rows){
+  var tbody=document.getElementById('holdsBody');
+  var wrap=document.getElementById('holdsTableWrap');
+  var empty=document.getElementById('holdsEmpty');
+  document.getElementById('holdsCount').textContent=rows.length+' SKUs';
+  if(!rows.length){tbody.innerHTML='';wrap.style.display='none';empty.style.display='block';return;}
+  wrap.style.display='';empty.style.display='none';
+  tbody.innerHTML=rows.map(function(r){return'<tr><td><div class="hold-sku">'+esc(r.sku)+'</div><div class="hold-desc">'+esc(r.description)+'</div></td><td class="hold-qty">'+r.quantity.toLocaleString()+'</td><td style="color:var(--muted)">'+r.orderCount+'</td></tr>';}).join('');
+}
+
+function filterHolds(q){var filtered=q?allHolds.filter(function(r){return r.sku.toLowerCase().includes(q.toLowerCase())||r.description.toLowerCase().includes(q.toLowerCase());}):allHolds;renderHoldsRows(filtered);}
+
+function sortHolds(col,th){if(holdsSortCol===col)holdsSortDir*=-1;else{holdsSortCol=col;holdsSortDir=-1;}th.closest('thead').querySelectorAll('th[data-col]').forEach(function(t){t.classList.remove('sorted');t.querySelector('.sort-icon').innerHTML='&#8597;';});th.classList.add('sorted');th.querySelector('.sort-icon').innerHTML=holdsSortDir===-1?'&#8595;':'&#8593;';allHolds.sort(function(a,b){return holdsSortDir*(b[col]-a[col]);});renderHoldsRows(allHolds);}
+
+function exportHolds(){
+  if(!allHolds.length)return;
+  var rows=[['SKU','Description','Qty On Hold','# Orders'].map(csvEsc).join(',')];
+  allHolds.forEach(function(r){rows.push([r.sku,r.description,r.quantity,r.orderCount].map(csvEsc).join(','));});
+  var blob=new Blob([rows.join('\n')],{type:'text/csv'});
+  var url=URL.createObjectURL(blob);
+  var a=document.createElement('a');a.href=url;a.download='sku-holds-'+new Date().toISOString().slice(0,10)+'.csv';a.click();URL.revokeObjectURL(url);
+}
 
 function exportNeedsReview(){
   if(!exportData.length)return;
