@@ -107,6 +107,23 @@ tbody tr.combined-row{background:var(--green-light)}
 .spinner{width:16px;height:16px;border:2px solid var(--border2);border-top-color:var(--green);border-radius:50%;animation:spin .7s linear infinite}
 .error-banner{background:#f5e0e0;border:1px solid #d49696;color:var(--danger);font-family:var(--mono);font-size:11px;padding:10px 16px;border-radius:2px;margin-bottom:16px;display:none}
 @media(max-width:900px){.kpi-grid{grid-template-columns:repeat(3,1fr)}.charts-grid{grid-template-columns:1fr}.chart-card.full{grid-column:span 1}}
+@media(max-width:640px){
+  header{grid-template-columns:1fr;position:static}
+  .header-brand{padding:10px 16px}
+  .header-title{padding:10px 16px;border-right:none;border-bottom:1px solid var(--border)}
+  .header-right{flex-direction:column;align-items:flex-start;gap:8px;padding:10px 16px}
+  nav{flex-wrap:wrap;gap:4px}
+  .nav-link{font-size:9px;padding:5px 9px}
+  .controls-bar{flex-wrap:wrap;padding:10px 16px;gap:6px}
+  .next-refresh{margin-left:0}
+  main{padding:14px 14px 32px}
+  .kpi-grid{grid-template-columns:repeat(2,1fr)}
+  .kpi-card{padding:12px 14px}
+  .kpi-value{font-size:24px}
+  .table-wrap{overflow-x:auto}
+  table{min-width:480px}
+  th,td{padding:8px 10px}
+}
 </style>
 </head>
 <body>
