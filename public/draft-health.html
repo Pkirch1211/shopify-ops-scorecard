@@ -144,10 +144,10 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
         <div class="kpi-value warn" id="kpiInvShortage">-</div>
         <div class="kpi-hint action" id="kpiInvShortageHint">Click to export CSV</div>
       </div>
-      <div class="kpi-card">
+      <div class="kpi-card clickable" id="kpiReadyCard" onclick="exportByStatus(['instock-ready'],'ready-to-release')">
         <div class="kpi-label">Ready to Release</div>
         <div class="kpi-value ok" id="kpiReady">-</div>
-        <div class="kpi-hint">instock-ready, no blockers</div>
+        <div class="kpi-hint action" id="kpiReadyHint">Click to export CSV</div>
       </div>
     </div>
 
@@ -256,7 +256,7 @@ function render(data) {
     document.getElementById('kpiInvShortageCard').classList.remove('clickable');
     document.getElementById('kpiInvShortageCard').style.cursor = 'default';
   }
-  document.getElementById('kpiReady').textContent = (sc['instock-ready'] || 0).toLocaleString();
+  setKpiCard('kpiReady', 'kpiReadyHint', 'kpiReadyCard', sc['instock-ready'] || 0);
 
   // Left panel: OOS + delayed drafts (by priority order these have no excluded SKUs)
   var cleanDrafts = allDrafts.filter(function(r) {
