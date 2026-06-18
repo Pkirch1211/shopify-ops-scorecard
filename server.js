@@ -257,23 +257,25 @@ query DraftOrders($first: Int!, $after: String, $query: String!) {
 
 // ── SKU Holds config ────────────────────────────────────────────────────────
 const HOLD_CUSTOMER_NAME = "HOLD DO NOT SHIP";
+const HOLD_CUSTOMER_EMAIL = "hold@lifelines.com";
 
-// Look up the hold Company by exact name — far more reliable than free-text
-// searching across every order in the store for a name match.
-const COMPANY_LOOKUP_QUERY = `
-query FindCompany($query: String!) {
-  companies(first: 5, query: $query) {
-    edges { node { id name } }
+// Look up the hold Customer by exact email. This avoids the Company/
+// CompanyLocation GraphQL objects entirely, which require a special
+// read_companies scope (B2B/Plus-gated) that this token may not have.
+// read_customers + read_orders are standard scopes virtually every app has.
+const CUSTOMER_LOOKUP_QUERY = `
+query FindCustomer($query: String!) {
+  customers(first: 5, query: $query) {
+    edges { node { id displayName email } }
   }
 }`;
 
-// Pull unfulfilled orders directly off the Company object. Every order
-// returned here truly belongs to that company — no client-side name
-// matching needed, and it's far cheaper than scanning all store orders.
-const COMPANY_ORDERS_QUERY = `
-query CompanyOrders($id: ID!, $first: Int!, $after: String, $query: String!) {
-  company(id: $id) {
-    orders(first: $first, after: $after, query: $query) {
+// Pull unfulfilled orders directly off the Customer object. Every order
+// returned here truly belongs to that customer — no name matching needed.
+const CUSTOMER_ORDERS_QUERY = `
+query CustomerOrders($id: ID!, $first: Int!, $after: String, $query: String!) {
+  customer(id: $id) {
+    orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT) {
       pageInfo { hasNextPage endCursor }
       edges {
         node {
@@ -849,23 +851,25 @@ app.post("/api/sku-holds", async (req, res) => {
 
   try {
     const forceRefresh = req.body.refresh === true;
-    let orders;
+    let orders, debug;
     if (!forceRefresh && skuHoldsCache && Date.now() - skuHoldsCacheTime < SKU_HOLDS_TTL) {
-      orders = skuHoldsCache;
+      orders = skuHoldsCache.orders;
+      debug = skuHoldsCache.debug;
     } else {
-      const lookup = await gql(b2bStore, b2bToken, COMPANY_LOOKUP_QUERY, { query: `name:'${HOLD_CUSTOMER_NAME}'` });
-      const candidates = lookup.companies?.edges || [];
-      const holdNameLower = HOLD_CUSTOMER_NAME.toLowerCase();
-      const match = candidates.find(e => (e.node.name || "").toLowerCase() === holdNameLower) || candidates[0];
+      const lookup = await gql(b2bStore, b2bToken, CUSTOMER_LOOKUP_QUERY, { query: `email:${HOLD_CUSTOMER_EMAIL}` });
+      const candidates = lookup.customers?.edges || [];
+      const match = candidates[0];
 
       if (!match) {
         orders = [];
+        debug = { customerFound: false, candidatesReturned: candidates.length };
       } else {
-        orders = await gqlAll(b2bStore, b2bToken, COMPANY_ORDERS_QUERY,
+        orders = await gqlAll(b2bStore, b2bToken, CUSTOMER_ORDERS_QUERY,
           { id: match.node.id, first: 250, query: "fulfillment_status:unfulfilled" },
-          d => d.company.orders.edges, d => d.company.orders.pageInfo, 120000);
+          d => d.customer.orders.edges, d => d.customer.orders.pageInfo, 120000);
+        debug = { customerFound: true, customerId: match.node.id, customerName: match.node.displayName, customerEmail: match.node.email };
       }
-      skuHoldsCache = orders;
+      skuHoldsCache = { orders, debug };
       skuHoldsCacheTime = Date.now();
     }
 
@@ -894,6 +898,7 @@ app.post("/api/sku-holds", async (req, res) => {
       totalSkus: holds.length,
       totalUnitsOnHold,
       holds,
+      debug,
     });
   } catch (err) {
     console.error(err);
