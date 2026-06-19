@@ -256,35 +256,23 @@ query DraftOrders($first: Int!, $after: String, $query: String!) {
 }`;
 
 // ── SKU Holds config ────────────────────────────────────────────────────────
-const HOLD_CUSTOMER_NAME = "HOLD DO NOT SHIP";
 const HOLD_CUSTOMER_EMAIL = "hold@lifelines.com";
 
-// Look up the hold Customer by exact email. This avoids the Company/
-// CompanyLocation GraphQL objects entirely, which require a special
-// read_companies scope (B2B/Plus-gated) that this token may not have.
-// read_customers + read_orders are standard scopes virtually every app has.
-const CUSTOMER_LOOKUP_QUERY = `
-query FindCustomer($query: String!) {
-  customers(first: 5, query: $query) {
-    edges { node { id displayName email } }
-  }
-}`;
-
-// Pull unfulfilled orders directly off the Customer object. Every order
-// returned here truly belongs to that customer — no name matching needed.
-const CUSTOMER_ORDERS_QUERY = `
-query CustomerOrders($id: ID!, $first: Int!, $after: String, $query: String!) {
-  customer(id: $id) {
-    orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT) {
-      pageInfo { hasNextPage endCursor }
-      edges {
-        node {
-          id name createdAt email
-          lineItems(first: 100) {
-            edges {
-              node {
-                sku title variantTitle quantity unfulfilledQuantity
-              }
+// Search orders directly by email — this uses the same root `orders` query
+// and scalar `email` field every other endpoint in this app already reads
+// successfully, so it needs no extra scope (unlike the customers/Company
+// objects, which returned "Access denied" — this token lacks read_customers).
+const SKU_HOLDS_QUERY = `
+query HoldOrders($first: Int!, $after: String, $query: String!) {
+  orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT) {
+    pageInfo { hasNextPage endCursor }
+    edges {
+      node {
+        id name createdAt email
+        lineItems(first: 100) {
+          edges {
+            node {
+              sku title variantTitle quantity unfulfilledQuantity
             }
           }
         }
@@ -856,19 +844,12 @@ app.post("/api/sku-holds", async (req, res) => {
       orders = skuHoldsCache.orders;
       debug = skuHoldsCache.debug;
     } else {
-      const lookup = await gql(b2bStore, b2bToken, CUSTOMER_LOOKUP_QUERY, { query: `email:${HOLD_CUSTOMER_EMAIL}` });
-      const candidates = lookup.customers?.edges || [];
-      const match = candidates[0];
-
-      if (!match) {
-        orders = [];
-        debug = { customerFound: false, candidatesReturned: candidates.length };
-      } else {
-        orders = await gqlAll(b2bStore, b2bToken, CUSTOMER_ORDERS_QUERY,
-          { id: match.node.id, first: 250, query: "fulfillment_status:unfulfilled" },
-          d => d.customer.orders.edges, d => d.customer.orders.pageInfo, 120000);
-        debug = { customerFound: true, customerId: match.node.id, customerName: match.node.displayName, customerEmail: match.node.email };
-      }
+      const allMatches = await gqlAll(b2bStore, b2bToken, SKU_HOLDS_QUERY,
+        { first: 250, query: `email:${HOLD_CUSTOMER_EMAIL} fulfillment_status:unfulfilled` },
+        d => d.orders.edges, d => d.orders.pageInfo, 120000);
+      // Defensive double-check since the search above is still a query-string match.
+      orders = allMatches.filter(o => (o.email || "").toLowerCase() === HOLD_CUSTOMER_EMAIL);
+      debug = { searchMatches: allMatches.length, afterEmailFilter: orders.length };
       skuHoldsCache = { orders, debug };
       skuHoldsCacheTime = Date.now();
     }
