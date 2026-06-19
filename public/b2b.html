@@ -243,13 +243,7 @@ function renderHolds(data){
   allHolds=data.holds||[];
   document.getElementById('kpiHolds').textContent=allHolds.length.toLocaleString();
   document.getElementById('kpiHoldsHint').textContent=(data.totalUnitsOnHold||0).toLocaleString()+' total units';
-  var dbg=data.debug;
-  if(dbg && dbg.customerFound===false){
-    showHoldsError('Hold customer not found by email lookup. Check HOLD_CUSTOMER_EMAIL in server.js.');
-    return;
-  }
   var summary=allHolds.length+' SKUs · '+(data.totalUnitsOnHold||0).toLocaleString()+' units across '+(data.ordersFound||0)+' orders';
-  if(dbg && dbg.customerFound) summary+=' (matched: '+dbg.customerName+')';
   document.getElementById('holdsSummary').textContent=summary;
   renderHoldsRows(allHolds);
 }
