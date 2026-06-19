@@ -268,7 +268,7 @@ query HoldOrders($first: Int!, $after: String, $query: String!) {
     pageInfo { hasNextPage endCursor }
     edges {
       node {
-        id name createdAt email
+        id name createdAt email cancelledAt
         lineItems(first: 100) {
           edges {
             node {
@@ -845,11 +845,12 @@ app.post("/api/sku-holds", async (req, res) => {
       debug = skuHoldsCache.debug;
     } else {
       const allMatches = await gqlAll(b2bStore, b2bToken, SKU_HOLDS_QUERY,
-        { first: 250, query: `email:${HOLD_CUSTOMER_EMAIL} fulfillment_status:unfulfilled` },
+        { first: 250, query: `email:${HOLD_CUSTOMER_EMAIL} fulfillment_status:unfulfilled status:open` },
         d => d.orders.edges, d => d.orders.pageInfo, 120000);
-      // Defensive double-check since the search above is still a query-string match.
-      orders = allMatches.filter(o => (o.email || "").toLowerCase() === HOLD_CUSTOMER_EMAIL);
-      debug = { searchMatches: allMatches.length, afterEmailFilter: orders.length };
+      // Defensive double-check: confirm email match and exclude any cancelled
+      // orders that might slip through the status:open filter.
+      orders = allMatches.filter(o => (o.email || "").toLowerCase() === HOLD_CUSTOMER_EMAIL && !o.cancelledAt);
+      debug = { searchMatches: allMatches.length, afterFilters: orders.length };
       skuHoldsCache = { orders, debug };
       skuHoldsCacheTime = Date.now();
     }
