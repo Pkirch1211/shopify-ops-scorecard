@@ -997,7 +997,15 @@ app.post("/api/draft-health", async (req, res) => {
     if (hasNpi) return "npi-item";
 
     const hasExcludedSku = lines.some(li => EXCLUDED_SKUS.has(li.sku));
-    if (hasExcludedSku) return "excluded-sku";
+    if (hasExcludedSku) {
+      // A draft can carry a manually-excluded SKU (launch gate) while ALSO
+      // already being tagged instock-ready by the automation — meaning
+      // inventory has landed and every line, excluded SKU included, is ready
+      // to ship. Without this split, that draft silently disappears into the
+      // generic excluded-sku bucket with no signal that it's actually ready.
+      if (tags.includes("instock-ready")) return "excluded-sku-ready";
+      return "excluded-sku";
+    }
 
     const isReady = tags.includes("instock-ready");
     if (!isReady) {
@@ -1059,7 +1067,7 @@ app.post("/api/draft-health", async (req, res) => {
       }
     }
 
-    const STATUS_ORDER = ["needs-review","out-of-stock","npi-item","excluded-sku","delayed-ship-date","excluded-customer","supply-blocked","instock-ready"];
+    const STATUS_ORDER = ["needs-review","out-of-stock","npi-item","excluded-sku-ready","excluded-sku","delayed-ship-date","excluded-customer","supply-blocked","instock-ready"];
 
     const rows = drafts.map(draft => {
       const lines = (draft.lineItems?.edges || []).map(e => e.node);
