@@ -283,9 +283,11 @@ function render(data) {
   }
   setKpiCard('kpiReady', 'kpiReadyHint', 'kpiReadyCard', sc['instock-ready'] || 0);
 
-  // Left panel: OOS + delayed drafts (by priority order these have no excluded SKUs)
+  // Left panel: out-of-stock drafts with leftover in-stock value (split opportunity
+  // today). delayed-ship-date drafts are intentionally excluded — they're not
+  // shippable right now regardless of inventory, so they're not a "split today" case.
   var cleanDrafts = allDrafts.filter(function(r) {
-    return (r.status === 'out-of-stock' || r.status === 'delayed-ship-date') && r.instockValue > 0;
+    return r.status === 'out-of-stock' && r.instockValue > 0;
   });
 
   // Right panel: excluded-sku drafts that have in-stock value (the seasonal hold scenario).
