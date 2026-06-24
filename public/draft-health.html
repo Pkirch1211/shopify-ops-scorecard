@@ -173,26 +173,6 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
 
     <div class="section-header" style="margin-top:28px">
       <span class="section-dot"></span>
-      <span class="section-title">Excluded SKU — Already Ready</span>
-      <div class="section-line"></div>
-    </div>
-    <div class="callout-panel" id="excludedReadyPanel">
-      <div class="callout-header">
-        <div class="callout-title-wrap">
-          <span class="callout-title">Tagged Instock-Ready, Held by Exclusion List</span>
-          <span class="callout-sub">These drafts contain a SKU on the manual launch-gate exclusion list, but Shopify has already tagged the draft <strong>instock-ready</strong> — inventory has landed and they're safe to release if you remove the exclusion.</span>
-        </div>
-        <div class="callout-count-wrap">
-          <span class="callout-count" id="excludedReadyCount">0</span>
-          <button class="callout-export-btn" id="excludedReadyExportBtn" onclick="exportByStatus(['excluded-sku-ready'],'excluded-sku-ready')" style="display:none">Export CSV</button>
-        </div>
-      </div>
-      <div id="excludedReadyEmpty" class="callout-empty">None right now — nothing on the exclusion list is tagged instock-ready.</div>
-      <div id="excludedReadyRows" class="callout-row-wrap" style="display:none"></div>
-    </div>
-
-    <div class="section-header" style="margin-top:28px">
-      <span class="section-dot"></span>
       <span class="section-title">Partial Split Opportunity</span>
       <div class="section-line"></div>
     </div>
@@ -303,18 +283,12 @@ function render(data) {
   }
   setKpiCard('kpiReady', 'kpiReadyHint', 'kpiReadyCard', sc['instock-ready'] || 0);
 
-  // Excluded SKU — Already Ready callout
-  var excludedReadyDrafts = allDrafts.filter(function(r) { return r.status === 'excluded-sku-ready'; });
-  renderExcludedReadyCallout(excludedReadyDrafts);
-
   // Left panel: OOS + delayed drafts (by priority order these have no excluded SKUs)
   var cleanDrafts = allDrafts.filter(function(r) {
     return (r.status === 'out-of-stock' || r.status === 'delayed-ship-date') && r.instockValue > 0;
   });
 
   // Right panel: excluded-sku drafts that have in-stock value (the seasonal hold scenario).
-  // Note: excluded-sku-ready drafts are intentionally excluded from here — they have
-  // their own callout above since the whole draft (not just non-excluded lines) is ready.
   var flaggedDrafts = allDrafts.filter(function(r) {
     return r.status === 'excluded-sku' && r.instockValue > 0;
   });
@@ -324,39 +298,6 @@ function render(data) {
 
   renderSplitPanel('cleanBuckets', 'cleanTotal', cleanBucketRows, cleanDrafts);
   renderSplitPanel('flaggedBuckets', 'flaggedTotal', flaggedBucketRows, flaggedDrafts);
-}
-
-function renderExcludedReadyCallout(rows) {
-  var countEl = document.getElementById('excludedReadyCount');
-  var emptyEl = document.getElementById('excludedReadyEmpty');
-  var rowsEl = document.getElementById('excludedReadyRows');
-  var btnEl = document.getElementById('excludedReadyExportBtn');
-
-  countEl.textContent = rows.length;
-
-  if (!rows.length) {
-    emptyEl.style.display = 'block';
-    rowsEl.style.display = 'none';
-    btnEl.style.display = 'none';
-    return;
-  }
-
-  emptyEl.style.display = 'none';
-  btnEl.style.display = 'inline-block';
-  rowsEl.style.display = 'block';
-
-  var now = Date.now();
-  var html = '<div class="callout-row callout-row-head"><span>Draft #</span><span>Customer</span><span>Age</span><span>Value</span></div>';
-  rows.forEach(function(r) {
-    var age = Math.floor((now - new Date(r.createdAt).getTime()) / 864e5);
-    html += '<div class="callout-row">' +
-      '<span class="draft-name">' + esc(r.name) + '</span>' +
-      '<span class="draft-email">' + esc(r.email) + '</span>' +
-      '<span>' + age + 'd</span>' +
-      '<span class="draft-value">$' + r.totalPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '</span>' +
-      '</div>';
-  });
-  rowsEl.innerHTML = html;
 }
 
 function buildBuckets(drafts) {
