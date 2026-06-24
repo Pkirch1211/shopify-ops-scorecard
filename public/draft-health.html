@@ -72,6 +72,23 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
 .split-value span{color:var(--green);font-weight:500}
 .split-hint{font-size:10px;color:var(--dim);margin-top:3px}
 .click-hint{font-size:9px;color:var(--green);margin-top:4px}
+.callout-panel{border:1px solid var(--warn);border-radius:3px;overflow:hidden;box-shadow:var(--shadow);margin-bottom:16px;background:var(--surface)}
+.callout-header{padding:14px 16px;background:#f3ead9;border-bottom:1px solid var(--warn);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.callout-title-wrap{display:flex;flex-direction:column;gap:3px}
+.callout-title{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--warn)}
+.callout-sub{font-size:11px;color:var(--muted);line-height:1.5;max-width:560px}
+.callout-count-wrap{display:flex;align-items:center;gap:12px;flex-shrink:0}
+.callout-count{font-size:28px;font-weight:700;color:var(--warn);line-height:1}
+.callout-export-btn{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#fff;background:var(--warn);border:none;padding:8px 14px;border-radius:2px;cursor:pointer;transition:opacity .12s}
+.callout-export-btn:hover{opacity:.85}
+.callout-empty{padding:14px 16px;font-size:11px;color:var(--dim)}
+.callout-row-wrap{max-height:220px;overflow-y:auto;border-top:1px solid var(--border)}
+.callout-row{display:grid;grid-template-columns:90px 1fr 90px 90px;gap:10px;padding:8px 16px;font-size:11px;border-bottom:1px solid var(--border)}
+.callout-row:last-child{border-bottom:none}
+.callout-row-head{font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);background:var(--surface2)}
+.callout-row .draft-name{font-weight:600}
+.callout-row .draft-email{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.callout-row .draft-value{text-align:right;color:var(--green);font-weight:500}
 @media(max-width:960px){.kpi-grid{grid-template-columns:repeat(3,1fr)}.split-buckets{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:640px){
   header{grid-template-columns:1fr;position:static}
@@ -90,6 +107,8 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
   .table-wrap{overflow-x:auto}
   table{min-width:480px}
   th,td{padding:8px 10px}
+  .callout-row{grid-template-columns:70px 1fr 70px;font-size:10px}
+  .callout-row .draft-value{display:none}
 }
 </style>
 </head>
@@ -132,6 +151,7 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
       <div class="kpi-card clickable" id="kpiReviewCard" onclick="exportByStatus(['needs-review'],'needs-review')">
         <div class="kpi-label">Needs Review</div>
         <div class="kpi-value warn" id="kpiReview">-</div>
+        <div class="kpi-hint" id="kpiReviewCustomers"></div>
         <div class="kpi-hint action" id="kpiReviewHint">Click to export CSV</div>
       </div>
       <div class="kpi-card clickable" id="kpiLowStockCard" onclick="exportLowStock()">
@@ -149,6 +169,26 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
         <div class="kpi-value ok" id="kpiReady">-</div>
         <div class="kpi-hint action" id="kpiReadyHint">Click to export CSV</div>
       </div>
+    </div>
+
+    <div class="section-header" style="margin-top:28px">
+      <span class="section-dot"></span>
+      <span class="section-title">Excluded SKU — Already Ready</span>
+      <div class="section-line"></div>
+    </div>
+    <div class="callout-panel" id="excludedReadyPanel">
+      <div class="callout-header">
+        <div class="callout-title-wrap">
+          <span class="callout-title">Tagged Instock-Ready, Held by Exclusion List</span>
+          <span class="callout-sub">These drafts contain a SKU on the manual launch-gate exclusion list, but Shopify has already tagged the draft <strong>instock-ready</strong> — inventory has landed and they're safe to release if you remove the exclusion.</span>
+        </div>
+        <div class="callout-count-wrap">
+          <span class="callout-count" id="excludedReadyCount">0</span>
+          <button class="callout-export-btn" id="excludedReadyExportBtn" onclick="exportByStatus(['excluded-sku-ready'],'excluded-sku-ready')" style="display:none">Export CSV</button>
+        </div>
+      </div>
+      <div id="excludedReadyEmpty" class="callout-empty">None right now — nothing on the exclusion list is tagged instock-ready.</div>
+      <div id="excludedReadyRows" class="callout-row-wrap" style="display:none"></div>
     </div>
 
     <div class="section-header" style="margin-top:28px">
@@ -240,6 +280,11 @@ function render(data) {
 
   document.getElementById('kpiTotal').textContent = data.total.toLocaleString();
   setKpiCard('kpiReview',     'kpiReviewHint', 'kpiReviewCard', sc['needs-review'] || 0);
+  var needsReviewDrafts = allDrafts.filter(function(r) { return r.status === 'needs-review'; });
+  var needsReviewCustomers = new Set(needsReviewDrafts.map(function(r) { return (r.email || '—').toLowerCase(); }));
+  document.getElementById('kpiReviewCustomers').textContent = needsReviewDrafts.length
+    ? needsReviewCustomers.size + ' unique customer' + (needsReviewCustomers.size !== 1 ? 's' : '')
+    : '';
   var lowStockDrafts = allDrafts.filter(function(r) { var t = (r.tags || []).map(function(t){return t.toLowerCase();}); return t.indexOf('low-supply') !== -1 && t.indexOf('instock-ready') !== -1; });
   document.getElementById('kpiLowStock').textContent = lowStockDrafts.length.toLocaleString();
   if (lowStockDrafts.length === 0) {
@@ -258,12 +303,18 @@ function render(data) {
   }
   setKpiCard('kpiReady', 'kpiReadyHint', 'kpiReadyCard', sc['instock-ready'] || 0);
 
+  // Excluded SKU — Already Ready callout
+  var excludedReadyDrafts = allDrafts.filter(function(r) { return r.status === 'excluded-sku-ready'; });
+  renderExcludedReadyCallout(excludedReadyDrafts);
+
   // Left panel: OOS + delayed drafts (by priority order these have no excluded SKUs)
   var cleanDrafts = allDrafts.filter(function(r) {
     return (r.status === 'out-of-stock' || r.status === 'delayed-ship-date') && r.instockValue > 0;
   });
 
-  // Right panel: excluded-sku drafts that have in-stock value (the seasonal hold scenario)
+  // Right panel: excluded-sku drafts that have in-stock value (the seasonal hold scenario).
+  // Note: excluded-sku-ready drafts are intentionally excluded from here — they have
+  // their own callout above since the whole draft (not just non-excluded lines) is ready.
   var flaggedDrafts = allDrafts.filter(function(r) {
     return r.status === 'excluded-sku' && r.instockValue > 0;
   });
@@ -273,6 +324,39 @@ function render(data) {
 
   renderSplitPanel('cleanBuckets', 'cleanTotal', cleanBucketRows, cleanDrafts);
   renderSplitPanel('flaggedBuckets', 'flaggedTotal', flaggedBucketRows, flaggedDrafts);
+}
+
+function renderExcludedReadyCallout(rows) {
+  var countEl = document.getElementById('excludedReadyCount');
+  var emptyEl = document.getElementById('excludedReadyEmpty');
+  var rowsEl = document.getElementById('excludedReadyRows');
+  var btnEl = document.getElementById('excludedReadyExportBtn');
+
+  countEl.textContent = rows.length;
+
+  if (!rows.length) {
+    emptyEl.style.display = 'block';
+    rowsEl.style.display = 'none';
+    btnEl.style.display = 'none';
+    return;
+  }
+
+  emptyEl.style.display = 'none';
+  btnEl.style.display = 'inline-block';
+  rowsEl.style.display = 'block';
+
+  var now = Date.now();
+  var html = '<div class="callout-row callout-row-head"><span>Draft #</span><span>Customer</span><span>Age</span><span>Value</span></div>';
+  rows.forEach(function(r) {
+    var age = Math.floor((now - new Date(r.createdAt).getTime()) / 864e5);
+    html += '<div class="callout-row">' +
+      '<span class="draft-name">' + esc(r.name) + '</span>' +
+      '<span class="draft-email">' + esc(r.email) + '</span>' +
+      '<span>' + age + 'd</span>' +
+      '<span class="draft-value">$' + r.totalPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '</span>' +
+      '</div>';
+  });
+  rowsEl.innerHTML = html;
 }
 
 function buildBuckets(drafts) {
