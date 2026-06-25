@@ -1186,7 +1186,7 @@ app.post("/api/delivery-trend", async (req, res) => {
     const result = await db.query(`
       SELECT store, TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') AS month,
         AVG(fulfillment_hours) AS avg_fulfillment, AVG(delivery_hours) AS avg_delivery,
-        COUNT(*) AS orders
+        COUNT(*) AS orders, SUM(units) AS units
       FROM orders
       WHERE created_at >= NOW() - INTERVAL '9 months' AND fulfillment_hours IS NOT NULL
       GROUP BY store, DATE_TRUNC('month', created_at)
@@ -1200,6 +1200,7 @@ app.post("/api/delivery-trend", async (req, res) => {
         avgFulfillmentHours: parseFloat(row.avg_fulfillment) || null,
         avgDeliveryHours: parseFloat(row.avg_delivery) || null,
         orders: parseInt(row.orders),
+        units: parseInt(row.units) || 0,
       });
     }
     res.json({ byStore });
