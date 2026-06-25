@@ -367,9 +367,14 @@ let dtcStaleCache = null;
 let dtcStaleCacheTime = 0;
 let skuHoldsCache = null;
 let skuHoldsCacheTime = 0;
+let excludedSkusCache = null;
+let excludedSkusCacheTime = 0;
 const B2B_CACHE_TTL = 5 * 60 * 1000;
 const DTC_STALE_TTL = 5 * 60 * 1000;
 const SKU_HOLDS_TTL = 5 * 60 * 1000;
+const EXCLUDED_SKUS_SNAPSHOT_TTL = 5 * 60 * 1000;
+const EXCLUDED_SKUS_SNAPSHOT_URL =
+  "https://raw.githubusercontent.com/Pkirch1211/release-instock-orders/main/excluded_skus.json";
 
 // ── Sync logic ────────────────────────────────────────────────────────────────
 let syncInProgress = false;
@@ -884,6 +889,45 @@ app.post("/api/sku-holds", async (req, res) => {
     });
   } catch (err) {
     console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Excluded SKUs snapshot ─────────────────────────────────────────────────────
+// Reads the JSON file published by release-instock-orders.py (via its
+// GitHub Actions workflow) so the dashboard can show what's currently on
+// the manual exclusion list, with product titles, without needing Shopify
+// credentials or a database write from the Python side.
+app.get("/api/excluded-skus", async (req, res) => {
+  try {
+    const forceRefresh = req.query.refresh === "true";
+    if (!forceRefresh && excludedSkusCache && Date.now() - excludedSkusCacheTime < EXCLUDED_SKUS_SNAPSHOT_TTL) {
+      return res.json(excludedSkusCache);
+    }
+
+    const ghRes = await fetch(EXCLUDED_SKUS_SNAPSHOT_URL, {
+      headers: { "Cache-Control": "no-cache" },
+    });
+    if (!ghRes.ok) throw new Error(`GitHub fetch HTTP ${ghRes.status}`);
+    const snapshot = await ghRes.json();
+
+    const payload = {
+      generatedAt: snapshot.generated_at || null,
+      count: snapshot.count ?? (snapshot.skus || []).length,
+      skus: (snapshot.skus || []).map(s => ({ sku: s.sku, title: s.title || s.sku })),
+    };
+
+    excludedSkusCache = payload;
+    excludedSkusCacheTime = Date.now();
+    res.json(payload);
+  } catch (err) {
+    console.error(err);
+    // Serve a stale cache rather than a hard error if GitHub is unreachable —
+    // reference data that's a few minutes old is still useful; an error
+    // banner for a transient fetch hiccup is not.
+    if (excludedSkusCache) {
+      return res.json(excludedSkusCache);
+    }
     res.status(500).json({ error: err.message });
   }
 });
