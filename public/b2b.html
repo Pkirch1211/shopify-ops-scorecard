@@ -8,7 +8,7 @@
 <title>B2B Order Process — LifeLines</title>
 <style>
 @import url('https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=swap');
-:root{--bg:#f0f0eb;--surface:#f7f7f3;--surface2:#e8e8e3;--border:#d4d4cc;--border2:#c8c8c0;--text:#2a2a28;--muted:#6b6b64;--dim:#9a9a92;--green:#4a6741;--green-bg:#4a6741;--green-light:#e8ede7;--dtc:#3d5c8a;--b2b:#4a6741;--warn:#8a5c2a;--danger:#8a2a2a;--mono:'IBM Plex Mono',monospace;--sans:'IBM Plex Sans',sans-serif;--shadow:0 1px 3px rgba(0,0,0,0.07)}
+:root{--bg:#f0f0eb;--surface:#f7f7f3;--surface2:#e8e8e3;--border:#d4d4cc;--border2:#c8c8c0;--text:#2a2a28;--muted:#6b6b64;--dim:#9a9a92;--green:#4a6741;--green-bg:#4a6741;--green-light:#e8ede7;--dtc:#3d5c8a;--b2b:#4a6741;--warn:#8a5c2a;--danger:#8a2a2a;--sans:'Satoshi',sans-serif;--shadow:0 1px 3px rgba(0,0,0,0.07)}
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;min-height:100vh}
 header{position:sticky;top:0;z-index:100;display:grid;grid-template-columns:auto 1fr auto;align-items:stretch;border-bottom:2px solid var(--border);background:var(--surface)}
@@ -81,12 +81,12 @@ tbody tr:hover{background:var(--bg)}
 .state-title{font-family:var(--sans);font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--text)}
 .state-sub{font-size:13px;color:var(--muted);max-width:340px;line-height:1.6}
 .spinner{width:16px;height:16px;border:2px solid var(--border2);border-top-color:var(--green);border-radius:50%;animation:spin .7s linear infinite}
-.error-banner{background:#f5e0e0;border:1px solid #d49696;color:var(--danger);font-family:var(--sans);font-size:11px;padding:10px 16px;border-radius:2px;margin-bottom:16px;display:none}
+.error-banner{background:#f5e0e0;border:1px solid #d49696;color:#8a2a2a;font-family:var(--sans);font-size:11px;padding:10px 16px;border-radius:2px;margin-bottom:16px;display:none}
 .fetch-time{font-family:var(--sans);font-size:10px;color:var(--dim)}
 .export-btn{font-size:10px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;padding:4px 10px;border-radius:2px;border:1px solid var(--border2);background:var(--surface);color:var(--muted);cursor:pointer;transition:all .12s;float:right}
 .export-btn:hover{color:var(--green);border-color:var(--green)}
 .oos-empty{padding:40px;text-align:center;font-family:var(--sans);font-size:11px;color:var(--green)}
-.hold-sku{font-family:var(--mono);font-size:11px;color:var(--text)}
+.hold-sku{font-size:11px;font-weight:600;color:var(--text)}
 .hold-desc{color:var(--muted);font-size:11px;margin-top:2px}
 .hold-qty{font-weight:600;color:var(--warn)}
 .hold-orders{color:var(--dim);font-size:10px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:340px}
