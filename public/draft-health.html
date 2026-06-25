@@ -72,6 +72,29 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
 .split-value span{color:var(--green);font-weight:500}
 .split-hint{font-size:10px;color:var(--dim);margin-top:3px}
 .click-hint{font-size:9px;color:var(--green);margin-top:4px}
+.ref-panel{border:1px solid var(--border);border-radius:3px;overflow:hidden;box-shadow:var(--shadow);margin-bottom:16px;background:var(--surface)}
+.ref-panel-header{padding:12px 16px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none}
+.ref-panel-header:hover{background:#eeeee9}
+.ref-panel-title-wrap{display:flex;align-items:center;gap:8px}
+.ref-panel-title{font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.ref-panel-count{font-size:10px;color:var(--dim)}
+.ref-panel-chevron{font-size:10px;color:var(--dim);transition:transform .15s}
+.ref-panel.open .ref-panel-chevron{transform:rotate(90deg)}
+.ref-panel-body{display:none;border-top:1px solid var(--border)}
+.ref-panel.open .ref-panel-body{display:block}
+.ref-panel-meta{font-size:10px;color:var(--dim);padding:8px 16px;background:var(--surface2);border-bottom:1px solid var(--border)}
+.ref-table-wrap{max-height:280px;overflow-y:auto}
+.ref-table{width:100%;border-collapse:collapse;font-size:11px}
+.ref-table th{position:sticky;top:0;background:var(--surface2);text-align:left;font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:8px 16px;border-bottom:1px solid var(--border)}
+.ref-table td{padding:7px 16px;border-bottom:1px solid var(--border)}
+.ref-table tr:last-child td{border-bottom:none}
+.ref-table .ref-sku{font-weight:600;white-space:nowrap}
+.ref-table .ref-title{color:var(--muted)}
+.ref-empty-state{padding:16px;font-size:11px;color:var(--dim)}
+@media(max-width:640px){
+  .ref-table{font-size:10px}
+  .ref-table th,.ref-table td{padding:6px 10px}
+}
 .callout-panel{border:1px solid var(--warn);border-radius:3px;overflow:hidden;box-shadow:var(--shadow);margin-bottom:16px;background:var(--surface)}
 .callout-header{padding:14px 16px;background:#f3ead9;border-bottom:1px solid var(--warn);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .callout-title-wrap{display:flex;flex-direction:column;gap:3px}
@@ -168,6 +191,26 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
         <div class="kpi-label">Ready to Release</div>
         <div class="kpi-value ok" id="kpiReady">-</div>
         <div class="kpi-hint action" id="kpiReadyHint">Click to export CSV</div>
+      </div>
+    </div>
+
+    <div class="ref-panel" id="excludedSkusPanel">
+      <div class="ref-panel-header" onclick="toggleExcludedSkusPanel()">
+        <div class="ref-panel-title-wrap">
+          <span class="ref-panel-chevron">&#9656;</span>
+          <span class="ref-panel-title">Excluded SKUs</span>
+          <span class="ref-panel-count" id="excludedSkusCount">(—)</span>
+        </div>
+      </div>
+      <div class="ref-panel-body">
+        <div class="ref-panel-meta" id="excludedSkusMeta">—</div>
+        <div class="ref-table-wrap">
+          <table class="ref-table">
+            <thead><tr><th>SKU</th><th>Product</th></tr></thead>
+            <tbody id="excludedSkusRows"></tbody>
+          </table>
+        </div>
+        <div class="ref-empty-state" id="excludedSkusEmpty" style="display:none">No excluded SKUs right now.</div>
       </div>
     </div>
 
@@ -424,6 +467,58 @@ function show(id) {
 function showError(msg) { var el = document.getElementById('errorBanner'); el.textContent = 'Error: ' + msg; el.style.display = 'block'; }
 function hideError() { document.getElementById('errorBanner').style.display = 'none'; }
 function esc(s) { if (!s) return ''; return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+
+function toggleExcludedSkusPanel() {
+  var panel = document.getElementById('excludedSkusPanel');
+  var wasOpen = panel.classList.contains('open');
+  panel.classList.toggle('open');
+  // Lazy-load on first expand only — no need to fetch if the user never opens it.
+  if (!wasOpen && !panel.dataset.loaded) {
+    panel.dataset.loaded = '1';
+    loadExcludedSkus();
+  }
+}
+
+async function loadExcludedSkus() {
+  var countEl = document.getElementById('excludedSkusCount');
+  var metaEl = document.getElementById('excludedSkusMeta');
+  var rowsEl = document.getElementById('excludedSkusRows');
+  var emptyEl = document.getElementById('excludedSkusEmpty');
+
+  metaEl.textContent = 'Loading…';
+
+  try {
+    // Reads the snapshot published by release-instock-orders.py
+    // (see EXCLUDED_SKUS_EXPORT_PATH) once that file is being committed
+    // somewhere this endpoint can reach.
+    var res = await fetch('/api/excluded-skus');
+    var data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Server error');
+
+    var skus = data.skus || [];
+    countEl.textContent = '(' + skus.length + ')';
+
+    if (!skus.length) {
+      rowsEl.innerHTML = '';
+      emptyEl.style.display = 'block';
+      metaEl.textContent = data.generatedAt ? 'Updated ' + new Date(data.generatedAt).toLocaleString() : '';
+      return;
+    }
+
+    emptyEl.style.display = 'none';
+    metaEl.textContent = (data.generatedAt ? 'Updated ' + new Date(data.generatedAt).toLocaleString() : '') +
+      ' · synced from release-instock-orders.py';
+
+    rowsEl.innerHTML = skus.map(function(s) {
+      return '<tr><td class="ref-sku">' + esc(s.sku) + '</td><td class="ref-title">' + esc(s.title || s.sku) + '</td></tr>';
+    }).join('');
+  } catch (err) {
+    countEl.textContent = '';
+    metaEl.textContent = 'Could not load excluded SKU list: ' + err.message;
+    rowsEl.innerHTML = '';
+    emptyEl.style.display = 'none';
+  }
+}
 
 runFetch();
 </script>
