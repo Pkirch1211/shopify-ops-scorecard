@@ -1188,7 +1188,7 @@ app.post("/api/delivery-trend", async (req, res) => {
         AVG(fulfillment_hours) AS avg_fulfillment, AVG(delivery_hours) AS avg_delivery,
         COUNT(*) AS orders, SUM(units) AS units
       FROM orders
-      WHERE created_at >= NOW() - INTERVAL '9 months' AND fulfillment_hours IS NOT NULL
+      WHERE created_at >= NOW() - INTERVAL '9 months'
       GROUP BY store, DATE_TRUNC('month', created_at)
       ORDER BY DATE_TRUNC('month', created_at)
     `);
