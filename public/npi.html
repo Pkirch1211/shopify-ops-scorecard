@@ -50,7 +50,6 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
 .launch-stat{display:flex;flex-direction:column;gap:3px}
 .launch-stat-label{font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
 .launch-stat-val{font-size:18px;font-weight:700;color:var(--text)}
-/* Detail panel — below the grid */
 .detail-panel{background:var(--surface);border:1px solid var(--npi);border-radius:3px;box-shadow:var(--shadow);overflow:hidden}
 .detail-panel-header{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;background:var(--npi-light);border-bottom:1px solid #d4b896}
 .detail-panel-title{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--npi)}
@@ -126,7 +125,6 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
     <div class="section-header" style="margin-top:28px"><span class="section-dot"></span><span class="section-title">By Launch Month</span><div class="section-line"></div></div>
     <div class="launch-grid" id="launchGrid"></div>
 
-    <!-- Detail panel renders below the grid on card click -->
     <div id="launchDetail" style="display:none;margin-top:24px">
       <div class="section-header">
         <span class="section-dot"></span>
@@ -194,7 +192,6 @@ function render(data) {
   var totalUnits = allLaunches.reduce(function(s,l){ return s + l.totalUnits; }, 0);
   document.getElementById('kpiUnits').textContent = totalUnits.toLocaleString();
   renderLaunches(allLaunches);
-  // Reset detail panel on re-render
   activeIdx = null;
   document.getElementById('launchDetail').style.display = 'none';
 }
@@ -226,7 +223,6 @@ function toggleLaunch(idx) {
   var cards = document.querySelectorAll('.launch-card');
   var panel = document.getElementById('launchDetail');
 
-  // Clicking the active card closes the panel
   if (activeIdx === idx) {
     activeIdx = null;
     cards.forEach(function(c){ c.classList.remove('expanded'); });
