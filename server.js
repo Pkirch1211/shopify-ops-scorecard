@@ -996,13 +996,21 @@ app.post("/api/draft-health", async (req, res) => {
     );
     if (hasNpi) return "npi-item";
 
-    // Computed early so the excluded-sku branch below can defer to it — a
-    // draft tagged instock-ready can still have a future ship date (it's
-    // correctly scheduled, not actually urgent), and that should win over
-    // surfacing it in the "ready right now" excluded-sku callout.
+    // Computed early so the excluded-sku branch below can defer to it.
+    // IMPORTANT: this mirrors release-instock-orders.py's ship_date_allows_release()
+    // exactly — the script releases a draft as long as its ship date is within
+    // 7 days from today (today+1 through today+7 still count as releasable),
+    // not just ship dates that have already arrived. Treating any future date
+    // as "delayed" (as this used to) hid drafts the script was correctly about
+    // to release, undercounting Ready to Release.
     const shipDateVal = draft.metafield?.value;
     const shipDate = shipDateVal ? new Date(shipDateVal) : null;
-    const hasFutureShipDate = shipDate && !isNaN(shipDate) && shipDate > new Date();
+    const today = new Date();
+    let hasFutureShipDate = false;
+    if (shipDate && !isNaN(shipDate)) {
+      const daysUntil = Math.ceil((shipDate - today) / 86400000);
+      hasFutureShipDate = daysUntil > 7;
+    }
 
     const hasExcludedSku = lines.some(li => EXCLUDED_SKUS.has(li.sku));
     if (hasExcludedSku) {
