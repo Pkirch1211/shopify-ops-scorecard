@@ -72,6 +72,12 @@ const CREDS = {
   b2bToken: process.env.B2B_TOKEN,
 };
 
+// Shopify supports each stable API version for ~12 months. Centralized here
+// so bumping it quarterly is a one-line change instead of a repo-wide grep —
+// this was previously hardcoded separately in both gql() and restFetchAll(),
+// and had drifted all the way back to 2024-01 before this fix.
+const SHOPIFY_API_VERSION = process.env.SHOPIFY_API_VERSION || "2026-07";
+
 // ── Database ──────────────────────────────────────────────────────────────────
 const db = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
 
@@ -135,7 +141,7 @@ async function gql(store, token, query, variables = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000);
   try {
-    const res = await fetch(`https://${store}/admin/api/2024-01/graphql.json`, {
+    const res = await fetch(`https://${store}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
       method: "POST",
       headers: { "X-Shopify-Access-Token": token, "Content-Type": "application/json" },
       body: JSON.stringify({ query, variables }),
@@ -178,7 +184,7 @@ async function gqlAll(store, token, query, variables, getEdges, getPageInfo, dea
 
 // ── REST (inventory only) ─────────────────────────────────────────────────────
 async function restFetchAll(store, token, endpoint, key) {
-  let results = [], url = `https://${store}/admin/api/2024-01${endpoint}`, pages = 0;
+  let results = [], url = `https://${store}/admin/api/${SHOPIFY_API_VERSION}${endpoint}`, pages = 0;
   while (url && pages < 20) {
     const res = await fetch(url, { headers: { "X-Shopify-Access-Token": token } });
     if (!res.ok) throw new Error(`REST ${res.status}`);
