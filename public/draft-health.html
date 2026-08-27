@@ -181,27 +181,32 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
       <div class="kpi-card">
         <div class="kpi-label">Total Open Drafts</div>
         <div class="kpi-value" id="kpiTotal">-</div>
+        <div class="kpi-hint" id="kpiTotalValue"></div>
         <div class="kpi-hint">All statuses</div>
       </div>
       <div class="kpi-card clickable" id="kpiReviewCard" onclick="exportByStatus(['needs-review'],'needs-review')">
         <div class="kpi-label">Needs Review</div>
         <div class="kpi-value warn" id="kpiReview">-</div>
+        <div class="kpi-hint" id="kpiReviewValue"></div>
         <div class="kpi-hint" id="kpiReviewCustomers"></div>
         <div class="kpi-hint action" id="kpiReviewHint">Click to export CSV</div>
       </div>
       <div class="kpi-card clickable" id="kpiLowStockCard" onclick="exportLowStock()">
         <div class="kpi-label">Low Stock</div>
         <div class="kpi-value warn" id="kpiLowStock">-</div>
+        <div class="kpi-hint" id="kpiLowStockValue"></div>
         <div class="kpi-hint action" id="kpiLowStockHint">Click to export CSV</div>
       </div>
       <div class="kpi-card clickable" id="kpiInvShortageCard" onclick="exportInvShortage()">
         <div class="kpi-label">Inventory Shortage</div>
         <div class="kpi-value warn" id="kpiInvShortage">-</div>
+        <div class="kpi-hint" id="kpiInvShortageValue"></div>
         <div class="kpi-hint action" id="kpiInvShortageHint">Click to export CSV</div>
       </div>
       <div class="kpi-card clickable" id="kpiReadyCard" onclick="exportByStatus(['instock-ready'],'ready-to-release')">
         <div class="kpi-label">Ready to Release</div>
         <div class="kpi-value ok" id="kpiReady">-</div>
+        <div class="kpi-hint" id="kpiReadyValue"></div>
         <div class="kpi-hint action" id="kpiReadyHint">Click to export CSV</div>
       </div>
     </div>
@@ -256,6 +261,7 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
 <script>
 const REFRESH_MS = 5 * 60 * 1000;
 let allDrafts = [];
+function fmtMoney(v) { return '$' + Math.round(v || 0).toLocaleString('en-US'); }
 let refreshTimer = null, countdownTimer = null, nextRefreshAt = null, hasData = false;
 
 function scheduleRefresh() {
@@ -303,30 +309,42 @@ function render(data) {
   document.getElementById('fetchTime').textContent = 'Updated ' + t;
   document.getElementById('refreshLabel').textContent = 'Updated ' + t;
 
+  var sumValue = function(rows) { return rows.reduce(function(s, r) { return s + (r.totalPrice || 0); }, 0); };
+
   document.getElementById('kpiTotal').textContent = data.total.toLocaleString();
+  document.getElementById('kpiTotalValue').textContent = fmtMoney(sumValue(allDrafts)) + ' net';
+
   setKpiCard('kpiReview',     'kpiReviewHint', 'kpiReviewCard', sc['needs-review'] || 0);
   var needsReviewDrafts = allDrafts.filter(function(r) { return r.status === 'needs-review'; });
+  document.getElementById('kpiReviewValue').textContent = needsReviewDrafts.length ? fmtMoney(sumValue(needsReviewDrafts)) + ' net' : '';
   var needsReviewCustomers = new Set(needsReviewDrafts.map(function(r) { return (r.email || '—').toLowerCase(); }));
   document.getElementById('kpiReviewCustomers').textContent = needsReviewDrafts.length
     ? needsReviewCustomers.size + ' unique customer' + (needsReviewCustomers.size !== 1 ? 's' : '')
     : '';
+
   var lowStockDrafts = allDrafts.filter(function(r) { var t = (r.tags || []).map(function(t){return t.toLowerCase();}); return t.indexOf('low-supply') !== -1 && t.indexOf('instock-ready') !== -1; });
   document.getElementById('kpiLowStock').textContent = lowStockDrafts.length.toLocaleString();
+  document.getElementById('kpiLowStockValue').textContent = lowStockDrafts.length ? fmtMoney(sumValue(lowStockDrafts)) + ' net' : '';
   if (lowStockDrafts.length === 0) {
     document.getElementById('kpiLowStockHint').textContent = 'None';
     document.getElementById('kpiLowStockHint').classList.remove('action');
     document.getElementById('kpiLowStockCard').classList.remove('clickable');
     document.getElementById('kpiLowStockCard').style.cursor = 'default';
   }
+
   var invShortageDrafts = allDrafts.filter(function(r) { return (r.tags || []).map(function(t){return t.toLowerCase();}).indexOf('inventory-shortage') !== -1; });
   document.getElementById('kpiInvShortage').textContent = invShortageDrafts.length.toLocaleString();
+  document.getElementById('kpiInvShortageValue').textContent = invShortageDrafts.length ? fmtMoney(sumValue(invShortageDrafts)) + ' net' : '';
   if (invShortageDrafts.length === 0) {
     document.getElementById('kpiInvShortageHint').textContent = 'None';
     document.getElementById('kpiInvShortageHint').classList.remove('action');
     document.getElementById('kpiInvShortageCard').classList.remove('clickable');
     document.getElementById('kpiInvShortageCard').style.cursor = 'default';
   }
+
+  var readyDrafts = allDrafts.filter(function(r) { return r.status === 'instock-ready'; });
   setKpiCard('kpiReady', 'kpiReadyHint', 'kpiReadyCard', sc['instock-ready'] || 0);
+  document.getElementById('kpiReadyValue').textContent = readyDrafts.length ? fmtMoney(sumValue(readyDrafts)) + ' net' : '';
 
   renderFunnel();
 }
@@ -354,11 +372,13 @@ function renderFunnel() {
   var html = stages.map(function(s, i) {
     var rows = s.rows || stageRows(s.key);
     var count = rows.length;
+    var value = rows.reduce(function(s2, r) { return s2 + (r.totalPrice || 0); }, 0);
     var clickable = count > 0;
     var onclick = clickable ? ' onclick="exportPipelineStage(\'' + s.key + '\')"' : '';
     var card = '<div class="funnel-card' + (clickable ? ' clickable' : '') + '"' + onclick + '>' +
       '<div class="funnel-label">' + esc(s.label) + '</div>' +
       '<div class="funnel-value' + (s.cls ? ' ' + s.cls : '') + '">' + count.toLocaleString() + '</div>' +
+      '<div class="funnel-hint">' + (count ? fmtMoney(value) + ' net' : '') + '</div>' +
       '<div class="funnel-hint' + (clickable ? ' action' : '') + '">' + (clickable ? 'Click to export' : 'None') + '</div>' +
       '</div>';
     return card + (i < stages.length - 1 ? '<div class="funnel-arrow">&#8594;</div>' : '');
@@ -379,24 +399,23 @@ function renderFunnel() {
 
 function renderStageBuckets(containerId, totalId, defs, kind) {
   var allRows = defs.reduce(function(acc, d) { return acc.concat(stageRows(d.key)); }, []);
-  var totalValue = allRows.reduce(function(s, r) { return s + r.totalPrice; }, 0);
+  var totalValue = allRows.reduce(function(s, r) { return s + (r.totalPrice || 0); }, 0);
   var noun = kind === 'held' ? 'held' : 'total';
   document.getElementById(totalId).textContent = allRows.length
-    ? allRows.length + ' draft' + (allRows.length !== 1 ? 's' : '') +
-      ' · $' + totalValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ' + noun
+    ? allRows.length + ' draft' + (allRows.length !== 1 ? 's' : '') + ' · ' + fmtMoney(totalValue) + ' ' + noun
     : '0 drafts';
 
   document.getElementById(containerId).innerHTML = defs.map(function(d) {
     var rows = stageRows(d.key);
     var isZero = rows.length === 0;
-    var value = rows.reduce(function(s, r) { return s + r.totalPrice; }, 0);
+    var value = rows.reduce(function(s, r) { return s + (r.totalPrice || 0); }, 0);
     var onclick = isZero ? '' : ' onclick="exportPipelineStage(\'' + d.key + '\')"';
     return '<div class="split-bucket' + (isZero ? ' zero' : '') + '"' + onclick + '>' +
       '<div class="split-threshold">' + esc(d.label) + '</div>' +
       '<div class="split-count' + (isZero ? ' zero' : '') + '">' + rows.length + '</div>' +
       (isZero
         ? '<div class="split-hint">No drafts</div>'
-        : '<div class="split-value">Value: <span>$' + value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '</span></div>' +
+        : '<div class="split-value">Value: <span>' + fmtMoney(value) + '</span></div>' +
           '<div class="click-hint">&#8595; Click to export</div>'
       ) +
       '</div>';
