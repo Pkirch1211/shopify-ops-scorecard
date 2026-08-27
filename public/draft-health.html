@@ -95,6 +95,18 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
   .ref-table{font-size:10px}
   .ref-table th,.ref-table td{padding:6px 10px}
 }
+.funnel-row{display:flex;align-items:stretch;border:1px solid var(--border);border-radius:3px;overflow:hidden;box-shadow:var(--shadow);background:var(--border)}
+.funnel-card{flex:1;background:var(--surface);padding:18px 20px;cursor:default}
+.funnel-card.clickable{cursor:pointer;transition:background .12s}
+.funnel-card.clickable:hover{background:#eeeee9}
+.funnel-arrow{display:flex;align-items:center;justify-content:center;width:30px;background:var(--surface2);color:var(--dim);font-size:14px;flex-shrink:0}
+.funnel-label{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+.funnel-value{font-size:28px;font-weight:700;color:var(--text);line-height:1}
+.funnel-value.warn{color:var(--warn)}
+.funnel-value.ok{color:var(--green)}
+.funnel-hint{font-size:10px;color:var(--dim);margin-top:8px}
+.funnel-hint.action{color:var(--green)}
+@media(max-width:900px){.funnel-row{flex-direction:column}.funnel-arrow{width:100%;height:20px}}
 .callout-panel{border:1px solid var(--warn);border-radius:3px;overflow:hidden;box-shadow:var(--shadow);margin-bottom:16px;background:var(--surface)}
 .callout-header{padding:14px 16px;background:#f3ead9;border-bottom:1px solid var(--warn);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .callout-title-wrap{display:flex;flex-direction:column;gap:3px}
@@ -216,25 +228,27 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
 
     <div class="section-header" style="margin-top:28px">
       <span class="section-dot"></span>
-      <span class="section-title">Partial Split Opportunity</span>
+      <span class="section-title">Order Split Pipeline</span>
       <div class="section-line"></div>
     </div>
-    <p style="font-size:11px;color:var(--muted);margin-bottom:16px">Value of shippable lines if split today. Click any bucket to export those drafts.</p>
+    <p style="font-size:11px;color:var(--muted);margin-bottom:16px">How open drafts are moving through split-tag evaluation (split0/split1). Click any stage to export.</p>
 
-    <div class="split-panel">
+    <div class="funnel-row" id="funnelRow"></div>
+
+    <div class="split-panel" style="margin-top:16px">
       <div class="split-panel-header">
-        <span class="split-panel-title clean">Without Excluded SKUs</span>
-        <span class="split-panel-sub" id="cleanTotal">—</span>
+        <span class="split-panel-title flagged">Held for Value</span>
+        <span class="split-panel-sub" id="heldTotal">—</span>
       </div>
-      <div class="split-buckets" id="cleanBuckets"></div>
+      <div class="split-buckets" id="heldBuckets"></div>
     </div>
 
     <div class="split-panel">
       <div class="split-panel-header">
-        <span class="split-panel-title flagged">With Excluded SKUs — Seasonal Hold</span>
-        <span class="split-panel-sub" id="flaggedTotal">—</span>
+        <span class="split-panel-title clean">Backorder Children (split1)</span>
+        <span class="split-panel-sub" id="childrenTotal">—</span>
       </div>
-      <div class="split-buckets" id="flaggedBuckets"></div>
+      <div class="split-buckets" id="childrenBuckets" style="grid-template-columns:repeat(2,1fr)"></div>
     </div>
 
   </div>
@@ -243,18 +257,6 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
 const REFRESH_MS = 5 * 60 * 1000;
 let allDrafts = [];
 let refreshTimer = null, countdownTimer = null, nextRefreshAt = null, hasData = false;
-
-// Bucket definitions — stored so export can reference by index safely
-const BUCKETS = [
-  { label: '< $20',    min: 0,   max: 20 },
-  { label: '$20–$50',  min: 20,  max: 50 },
-  { label: '$50–$100', min: 50,  max: 100 },
-  { label: '> $100',   min: 100, max: Infinity },
-];
-
-// Computed bucket rows stored here so onclick can reference by index — no JSON in HTML attrs
-var cleanBucketRows = [];
-var flaggedBucketRows = [];
 
 function scheduleRefresh() {
   clearTimers();
@@ -326,82 +328,87 @@ function render(data) {
   }
   setKpiCard('kpiReady', 'kpiReadyHint', 'kpiReadyCard', sc['instock-ready'] || 0);
 
-  // Left panel: out-of-stock drafts with leftover in-stock value (split opportunity
-  // today). delayed-ship-date drafts are intentionally excluded — they're not
-  // shippable right now regardless of inventory, so they're not a "split today" case.
-  var cleanDrafts = allDrafts.filter(function(r) {
-    return r.status === 'out-of-stock' && r.instockValue > 0;
-  });
-
-  // Right panel: excluded-sku drafts that have in-stock value (the seasonal hold scenario).
-  var flaggedDrafts = allDrafts.filter(function(r) {
-    return r.status === 'excluded-sku' && r.instockValue > 0;
-  });
-
-  cleanBucketRows = buildBuckets(cleanDrafts);
-  flaggedBucketRows = buildBuckets(flaggedDrafts);
-
-  renderSplitPanel('cleanBuckets', 'cleanTotal', cleanBucketRows, cleanDrafts);
-  renderSplitPanel('flaggedBuckets', 'flaggedTotal', flaggedBucketRows, flaggedDrafts);
+  renderFunnel();
 }
 
-function buildBuckets(drafts) {
-  return BUCKETS.map(function(b) {
-    var rows = drafts.filter(function(r) { return r.instockValue >= b.min && r.instockValue < b.max; });
-    return {
-      label: b.label,
-      rows: rows,
-      count: rows.length,
-      total: rows.reduce(function(s, r) { return s + r.instockValue; }, 0),
-    };
-  });
+// ── Split0/Split1 pipeline funnel ──────────────────────────────────────────
+// pipelineStage comes straight from the server, computed off raw tags:
+//   pending-eval | waiting-instock | ready-release
+//   held-instock-low | held-bo-low | held-both-low   (split0, held for value)
+//   split-remainder | split-clear                     (split1 children)
+var HELD_STAGES = ['held-instock-low', 'held-bo-low', 'held-both-low'];
+var CHILD_STAGES = ['split-remainder', 'split-clear'];
+
+function stageRows(stage) {
+  return allDrafts.filter(function(r) { return r.pipelineStage === stage; });
 }
 
-function renderSplitPanel(containerId, totalId, buckets, allDrafts) {
-  var container = document.getElementById(containerId);
-  var totalEl = document.getElementById(totalId);
+function renderFunnel() {
+  var stages = [
+    { key: 'pending-eval',    label: 'Pending Evaluation' },
+    { key: 'waiting-instock', label: 'Waiting on Instock' },
+    { key: 'held',            label: 'Held for Value', cls: 'warn', rows: allDrafts.filter(function(r){ return HELD_STAGES.indexOf(r.pipelineStage) !== -1; }) },
+    { key: 'ready-release',   label: 'Ready for Release', cls: 'ok' },
+  ];
 
-  if (!allDrafts.length) {
-    totalEl.textContent = '0 drafts';
-    container.innerHTML = BUCKETS.map(function(b) {
-      return '<div class="split-bucket zero">' +
-        '<div class="split-threshold">' + esc(b.label) + '</div>' +
-        '<div class="split-count zero">0</div>' +
-        '<div class="split-hint">No drafts</div>' +
-        '</div>';
-    }).join('');
-    return;
-  }
+  var html = stages.map(function(s, i) {
+    var rows = s.rows || stageRows(s.key);
+    var count = rows.length;
+    var clickable = count > 0;
+    var onclick = clickable ? ' onclick="exportPipelineStage(\'' + s.key + '\')"' : '';
+    var card = '<div class="funnel-card' + (clickable ? ' clickable' : '') + '"' + onclick + '>' +
+      '<div class="funnel-label">' + esc(s.label) + '</div>' +
+      '<div class="funnel-value' + (s.cls ? ' ' + s.cls : '') + '">' + count.toLocaleString() + '</div>' +
+      '<div class="funnel-hint' + (clickable ? ' action' : '') + '">' + (clickable ? 'Click to export' : 'None') + '</div>' +
+      '</div>';
+    return card + (i < stages.length - 1 ? '<div class="funnel-arrow">&#8594;</div>' : '');
+  }).join('');
+  document.getElementById('funnelRow').innerHTML = html;
 
-  var grandTotal = allDrafts.length;
-  var grandValue = allDrafts.reduce(function(s, r) { return s + r.instockValue; }, 0);
-  totalEl.textContent = grandTotal + ' draft' + (grandTotal !== 1 ? 's' : '') +
-    ' · $' + grandValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' shippable';
+  renderStageBuckets('heldBuckets', 'heldTotal', [
+    { key: 'held-instock-low', label: 'Instock Low (<$150)' },
+    { key: 'held-bo-low',      label: 'BO Low (<$75)' },
+    { key: 'held-both-low',    label: 'Both Low' },
+  ], 'held');
 
-  // Determine which store array this is for the onclick
-  var isFlagged = containerId === 'flaggedBuckets';
+  renderStageBuckets('childrenBuckets', 'childrenTotal', [
+    { key: 'split-remainder', label: 'Remainder (<$150)' },
+    { key: 'split-clear',     label: 'Clear (≥$150)' },
+  ], 'children');
+}
 
-  container.innerHTML = buckets.map(function(b, i) {
-    var isZero = b.count === 0;
-    var onclickAttr = isZero ? '' : ' onclick="exportBucket(\'' + (isFlagged ? 'flagged' : 'clean') + '\',' + i + ')"';
-    return '<div class="split-bucket' + (isZero ? ' zero' : '') + '"' + onclickAttr + '>' +
-      '<div class="split-threshold">' + esc(b.label) + '</div>' +
-      '<div class="split-count' + (isZero ? ' zero' : '') + '">' + b.count + '</div>' +
+function renderStageBuckets(containerId, totalId, defs, kind) {
+  var allRows = defs.reduce(function(acc, d) { return acc.concat(stageRows(d.key)); }, []);
+  var totalValue = allRows.reduce(function(s, r) { return s + r.totalPrice; }, 0);
+  var noun = kind === 'held' ? 'held' : 'total';
+  document.getElementById(totalId).textContent = allRows.length
+    ? allRows.length + ' draft' + (allRows.length !== 1 ? 's' : '') +
+      ' · $' + totalValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ' + noun
+    : '0 drafts';
+
+  document.getElementById(containerId).innerHTML = defs.map(function(d) {
+    var rows = stageRows(d.key);
+    var isZero = rows.length === 0;
+    var value = rows.reduce(function(s, r) { return s + r.totalPrice; }, 0);
+    var onclick = isZero ? '' : ' onclick="exportPipelineStage(\'' + d.key + '\')"';
+    return '<div class="split-bucket' + (isZero ? ' zero' : '') + '"' + onclick + '>' +
+      '<div class="split-threshold">' + esc(d.label) + '</div>' +
+      '<div class="split-count' + (isZero ? ' zero' : '') + '">' + rows.length + '</div>' +
       (isZero
         ? '<div class="split-hint">No drafts</div>'
-        : '<div class="split-value">Shippable: <span>$' + b.total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '</span></div>' +
+        : '<div class="split-value">Value: <span>$' + value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '</span></div>' +
           '<div class="click-hint">&#8595; Click to export</div>'
       ) +
       '</div>';
   }).join('');
 }
 
-function exportBucket(panel, bucketIdx) {
-  var buckets = panel === 'clean' ? cleanBucketRows : flaggedBucketRows;
-  var bucket = buckets[bucketIdx];
-  if (!bucket || !bucket.rows.length) return;
-  var label = panel + '-' + bucket.label.replace(/[^a-z0-9]/gi, '-').toLowerCase();
-  doExport(bucket.rows, 'split-' + label);
+function exportPipelineStage(stage) {
+  var rows = stage === 'held'
+    ? allDrafts.filter(function(r) { return HELD_STAGES.indexOf(r.pipelineStage) !== -1; })
+    : stageRows(stage);
+  if (!rows.length) return;
+  doExport(rows, 'pipeline-' + stage);
 }
 
 function exportInvShortage() {
