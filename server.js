@@ -1029,6 +1029,33 @@ app.post("/api/draft-health", async (req, res) => {
 
   const LAUNCH_RE = /^launch-[a-z]{3}-2026$/i;
 
+  // ── New split0/split1 pipeline classification ──────────────────────────
+  // Purely tag-driven — mirrors shopify-adjust-orders-2.py's tagging exactly.
+  // Independent of classifyDraft() below (legacy statuses are evaluated
+  // upstream of this pipeline and are mutually exclusive with it — a draft
+  // either gets caught by excluded-customer/needs-review/npi-item/excluded-sku,
+  // or it flows into split0/split1, never both).
+  function classifySplitStage(tags) {
+    const t = (tags || []).map(x => x.toLowerCase());
+    const has = tag => t.includes(tag);
+
+    if (has("split1")) {
+      if (has("split-remainder")) return "split-remainder";
+      if (has("split-150")) return "split-clear";
+      return null; // shouldn't happen per the tagging contract
+    }
+    if (has("split0")) {
+      if (has("instock-minvalue")) return "held-instock-low";
+      if (has("bo-minvalue")) return "held-bo-low";
+      if (has("order-minvalue")) return "held-both-low";
+      if (has("eval-done")) {
+        return has("instock-ready") ? "ready-release" : "waiting-instock";
+      }
+      return "pending-eval";
+    }
+    return null; // not part of the split pipeline at all
+  }
+
   function isExcludedCustomer(email, name) {
     const haystack = ((email || "") + " " + (name || "")).toLowerCase();
     return EXCLUDED_CUSTOMERS.some(excl => haystack.includes(excl));
@@ -1155,6 +1182,7 @@ app.post("/api/draft-health", async (req, res) => {
         createdAt: draft.createdAt,
         totalPrice: parseFloat(draft.totalPrice || 0),
         status,
+        pipelineStage: classifySplitStage(draft.tags || []),
         shipDate: draft.metafield?.value || null,
         instockValue: parseFloat(instockValue.toFixed(2)),
         tags: draft.tags || [],
