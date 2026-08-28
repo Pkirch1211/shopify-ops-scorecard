@@ -243,8 +243,8 @@ query DraftOrders($first: Int!, $after: String, $query: String!) {
       node {
         id name createdAt completedAt status email tags
         totalPrice subtotalPrice
-        shippingAddress { company name }
-        billingAddress { company name }
+        shippingAddress { company address1 address2 city province zip country }
+        billingAddress { company address1 address2 city province zip country }
         metafield(namespace: "b2b", key: "ship_date") { value }
         lineItems(first: 50) {
           edges {
@@ -1191,13 +1191,27 @@ app.post("/api/draft-health", async (req, res) => {
       const shipAddr = draft.shippingAddress || {};
       const billAddr = draft.billingAddress || {};
       const company = shipAddr.company || billAddr.company || "";
-      const customerName = shipAddr.name || billAddr.name || draft.email || "—";
+
+      // Consolidation matching: prefer the shipping address; only fall back
+      // to billing if there's no shipping address at all on the draft.
+      const addrSource = (shipAddr.address1 || shipAddr.city) ? shipAddr : billAddr;
+      const addressParts = [addrSource.address1, addrSource.address2, addrSource.city,
+        addrSource.province, addrSource.zip, addrSource.country]
+        .map(v => (v || "").trim())
+        .filter(Boolean);
+      const shipAddressLabel = addressParts.join(", ") || null;
+      // Normalized join key — null (rather than "") for drafts with no usable
+      // address on file, so they're never accidentally grouped with each other.
+      const addressKey = addressParts.length
+        ? addressParts.join("|").toLowerCase().replace(/\s+/g, " ")
+        : null;
 
       return {
         name: draft.name,
         email: draft.email || "—",
         company,
-        customerName,
+        shipAddress: shipAddressLabel,
+        addressKey,
         createdAt: draft.createdAt,
         totalPrice: parseFloat(draft.totalPrice || 0),
         status,
