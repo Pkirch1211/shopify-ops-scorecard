@@ -250,7 +250,7 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
         <span class="split-panel-title flagged">Held for Value</span>
         <span class="split-panel-sub" id="heldTotal">—</span>
       </div>
-      <div class="split-buckets" id="heldBuckets"></div>
+      <div class="split-buckets" id="heldBuckets" style="grid-template-columns:repeat(2,1fr)"></div>
     </div>
 
     <div class="split-panel">
@@ -393,7 +393,6 @@ function renderFunnel() {
 
   renderStageBuckets('heldBuckets', 'heldTotal', [
     { key: 'held-instock-low', label: 'Instock Low (<$150)' },
-    { key: 'held-bo-low',      label: 'BO Low (<$75)' },
     { key: 'held-both-low',    label: 'Both Low' },
   ], 'held');
 
