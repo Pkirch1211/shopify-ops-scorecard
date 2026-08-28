@@ -76,6 +76,9 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
 .split-value span{color:var(--green);font-weight:500}
 .split-hint{font-size:10px;color:var(--dim);margin-top:3px}
 .click-hint{font-size:9px;color:var(--green);margin-top:4px}
+.split-bar-track{background:var(--border);height:5px;border-radius:3px;overflow:hidden;margin-top:8px}
+.split-bar-fill{height:100%;background:var(--green);border-radius:3px}
+.split-bar-label{font-size:9px;color:var(--dim);margin-top:4px}
 .ref-panel{border:1px solid var(--border);border-radius:3px;overflow:hidden;box-shadow:var(--shadow);margin-bottom:16px;background:var(--surface)}
 .ref-panel-header{padding:12px 16px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none}
 .ref-panel-header:hover{background:#eeeee9}
@@ -414,14 +417,20 @@ function renderStageBuckets(containerId, totalId, defs, kind) {
     var rows = stageRows(d.key);
     var isZero = rows.length === 0;
     var value = rows.reduce(function(s, r) { return s + (r.totalPrice || 0); }, 0);
+    var instockValue = rows.reduce(function(s, r) { return s + (r.instockValue || 0); }, 0);
+    var pct = value > 0 ? (instockValue / value * 100) : 0;
     var onclick = isZero ? '' : ' onclick="exportPipelineStage(\'' + d.key + '\')"';
     var tintClass = d.tint ? ' ' + d.tint : '';
+    var barHtml = isZero ? '' :
+      '<div class="split-bar-track"><div class="split-bar-fill" style="width:' + Math.min(100, pct).toFixed(0) + '%"></div></div>' +
+      '<div class="split-bar-label">' + pct.toFixed(0) + '% instock of ' + fmtMoney(value) + '</div>';
     return '<div class="split-bucket' + (isZero ? ' zero' : '') + tintClass + '"' + onclick + '>' +
       '<div class="split-threshold">' + esc(d.label) + '</div>' +
       '<div class="split-count' + (isZero ? ' zero' : '') + '">' + rows.length + '</div>' +
       (isZero
         ? '<div class="split-hint">No drafts</div>'
         : '<div class="split-value">Value: <span>' + fmtMoney(value) + '</span></div>' +
+          barHtml +
           '<div class="click-hint">&#8595; Click to export</div>'
       ) +
       '</div>';
@@ -456,10 +465,10 @@ function exportByStatus(statuses, filename) {
 
 function doExport(rows, filename) {
   var now = Date.now();
-  var lines = [['Draft #', 'Email', 'Status', 'Order Value', 'In-Stock Value', 'Age (days)', 'Ship Date'].map(csvEsc).join(',')];
+  var lines = [['Draft #', 'Company', 'Customer Name', 'Email', 'Status', 'Order Value', 'In-Stock Value', 'Age (days)', 'Ship Date'].map(csvEsc).join(',')];
   rows.forEach(function(r) {
     var age = Math.floor((now - new Date(r.createdAt).getTime()) / 864e5);
-    lines.push([r.name, r.email, r.status, r.totalPrice.toFixed(2), r.instockValue.toFixed(2), age, r.shipDate || ''].map(csvEsc).join(','));
+    lines.push([r.name, r.company || '', r.customerName || '', r.email, r.status, r.totalPrice.toFixed(2), r.instockValue.toFixed(2), age, r.shipDate || ''].map(csvEsc).join(','));
   });
   var blob = new Blob([lines.join('\n')], { type: 'text/csv' });
   var url = URL.createObjectURL(blob);
