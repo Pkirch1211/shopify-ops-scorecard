@@ -261,7 +261,28 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
         <span class="split-panel-title clean">Backorder Children</span>
         <span class="split-panel-sub" id="childrenTotal">—</span>
       </div>
-      <div class="split-buckets" id="childrenBuckets" style="grid-template-columns:repeat(2,1fr)"></div>
+      <div class="split-buckets" id="childrenBuckets" style="grid-template-columns:repeat(3,1fr)"></div>
+    </div>
+
+    <div class="section-header" style="margin-top:28px">
+      <span class="section-dot"></span>
+      <span class="section-title">Consolidation Opportunities</span>
+      <div class="section-line"></div>
+    </div>
+    <p style="font-size:11px;color:var(--muted);margin-bottom:16px">Open drafts sharing an exact shipping address — candidates for combining into one shipment.</p>
+
+    <div class="callout-panel" id="addressCalloutPanel">
+      <div class="callout-header">
+        <div class="callout-title-wrap">
+          <div class="callout-title">Same-Address Drafts</div>
+          <div class="callout-sub" id="addressCalloutSub">—</div>
+        </div>
+        <div class="callout-count-wrap">
+          <div class="callout-count" id="addressCalloutCount">0</div>
+          <button class="callout-export-btn" id="addressExportBtn" onclick="exportSameAddress()">Export CSV</button>
+        </div>
+      </div>
+      <div class="callout-empty" id="addressCalloutEmpty" style="display:none">No open drafts currently share an exact shipping address.</div>
     </div>
 
   </div>
@@ -355,6 +376,7 @@ function render(data) {
   document.getElementById('kpiReadyValue').textContent = readyDrafts.length ? fmtMoney(sumValue(readyDrafts)) + ' net' : '';
 
   renderFunnel();
+  renderAddressGroups();
 }
 
 // ── Split pipeline funnel ───────────────────────────────────────────────────
@@ -364,9 +386,21 @@ function render(data) {
 //   split-remainder | split-clear                     (backorder children)
 var HELD_STAGES = ['held-instock-low', 'held-bo-low', 'held-both-low'];
 var CHILD_STAGES = ['split-remainder', 'split-clear'];
+var BACKORDER_HOLD_VALUE = 75; // mirrors MIN_BACKORDER_HOLD_VALUE in shopify-adjust-orders-2.py
 
 function stageRows(stage) {
   return allDrafts.filter(function(r) { return r.pipelineStage === stage; });
+}
+
+// getStageRows adds one derived (non-pipelineStage) bucket on top of stageRows:
+// split-remainder drafts whose CURRENT totalPrice has drifted below the $75
+// hold threshold since the split was evaluated (inventory/price changes after
+// the fact). It's a filtered subset of split-remainder, not a distinct stage.
+function getStageRows(key) {
+  if (key === 'split-remainder-under75') {
+    return stageRows('split-remainder').filter(function(r) { return (r.totalPrice || 0) < BACKORDER_HOLD_VALUE; });
+  }
+  return stageRows(key);
 }
 
 function renderFunnel() {
@@ -400,13 +434,15 @@ function renderFunnel() {
   ], 'held');
 
   renderStageBuckets('childrenBuckets', 'childrenTotal', [
-    { key: 'split-remainder', label: 'Remainder (<$150)', tint: 'tint-remainder' },
-    { key: 'split-clear',     label: 'Clear (≥$150)', tint: 'tint-clear' },
-  ], 'children');
+    { key: 'split-remainder',          label: 'Remainder (<$150)', tint: 'tint-remainder' },
+    { key: 'split-remainder-under75',  label: 'Remainder Under $75', tint: 'tint-remainder' },
+    { key: 'split-clear',              label: 'Clear (≥$150)', tint: 'tint-clear' },
+  ], 'children', ['split-remainder', 'split-clear']);
 }
 
-function renderStageBuckets(containerId, totalId, defs, kind) {
-  var allRows = defs.reduce(function(acc, d) { return acc.concat(stageRows(d.key)); }, []);
+function renderStageBuckets(containerId, totalId, defs, kind, totalKeys) {
+  var keysForTotal = totalKeys || defs.map(function(d) { return d.key; });
+  var allRows = keysForTotal.reduce(function(acc, k) { return acc.concat(getStageRows(k)); }, []);
   var totalValue = allRows.reduce(function(s, r) { return s + (r.totalPrice || 0); }, 0);
   var noun = kind === 'held' ? 'held' : 'total';
   document.getElementById(totalId).textContent = allRows.length
@@ -414,7 +450,7 @@ function renderStageBuckets(containerId, totalId, defs, kind) {
     : '0 drafts';
 
   document.getElementById(containerId).innerHTML = defs.map(function(d) {
-    var rows = stageRows(d.key);
+    var rows = getStageRows(d.key);
     var isZero = rows.length === 0;
     var value = rows.reduce(function(s, r) { return s + (r.totalPrice || 0); }, 0);
     var instockValue = rows.reduce(function(s, r) { return s + (r.instockValue || 0); }, 0);
@@ -440,9 +476,67 @@ function renderStageBuckets(containerId, totalId, defs, kind) {
 function exportPipelineStage(stage) {
   var rows = stage === 'held'
     ? allDrafts.filter(function(r) { return HELD_STAGES.indexOf(r.pipelineStage) !== -1; })
-    : stageRows(stage);
+    : getStageRows(stage);
   if (!rows.length) return;
   doExport(rows, 'pipeline-' + stage);
+}
+
+// ── Consolidation opportunities (same shipping address) ─────────────────────
+// Groups ALL open drafts (regardless of split-pipeline stage) by a normalized
+// shipping-address key computed server-side. Only groups with 2+ drafts are
+// surfaced — a single draft at an address isn't a consolidation opportunity.
+var addressGroupsCache = [];
+
+function computeAddressGroups() {
+  var groups = {};
+  allDrafts.forEach(function(r) {
+    if (!r.addressKey) return; // no usable shipping address on file
+    if (!groups[r.addressKey]) groups[r.addressKey] = { key: r.addressKey, label: r.shipAddress, rows: [] };
+    groups[r.addressKey].rows.push(r);
+  });
+  return Object.keys(groups).map(function(k) { return groups[k]; }).filter(function(g) { return g.rows.length > 1; });
+}
+
+function renderAddressGroups() {
+  addressGroupsCache = computeAddressGroups();
+  var groupCount = addressGroupsCache.length;
+  var draftCount = addressGroupsCache.reduce(function(s, g) { return s + g.rows.length; }, 0);
+  var totalValue = addressGroupsCache.reduce(function(s, g) {
+    return s + g.rows.reduce(function(s2, r) { return s2 + (r.totalPrice || 0); }, 0);
+  }, 0);
+
+  document.getElementById('addressCalloutCount').textContent = groupCount.toLocaleString();
+
+  if (groupCount === 0) {
+    document.getElementById('addressCalloutSub').textContent = 'No matches found.';
+    document.getElementById('addressCalloutEmpty').style.display = 'block';
+    document.getElementById('addressExportBtn').style.display = 'none';
+  } else {
+    document.getElementById('addressCalloutSub').textContent =
+      groupCount + ' location' + (groupCount !== 1 ? 's' : '') + ' · ' +
+      draftCount + ' draft' + (draftCount !== 1 ? 's' : '') + ' · ' + fmtMoney(totalValue) + ' combined';
+    document.getElementById('addressCalloutEmpty').style.display = 'none';
+    document.getElementById('addressExportBtn').style.display = '';
+  }
+}
+
+function exportSameAddress() {
+  if (!addressGroupsCache.length) return;
+  var now = Date.now();
+  var lines = [['Address Group', 'Ship Address', 'Draft #', 'Company', 'Email', 'Status', 'Order Value', 'Age (days)'].map(csvEsc).join(',')];
+  addressGroupsCache.forEach(function(g, gi) {
+    g.rows.forEach(function(r) {
+      var age = Math.floor((now - new Date(r.createdAt).getTime()) / 864e5);
+      lines.push([gi + 1, g.label || '', r.name, r.company || '', r.email, r.status, r.totalPrice.toFixed(2), age].map(csvEsc).join(','));
+    });
+  });
+  var blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'consolidation-opportunities-' + new Date().toISOString().slice(0, 10) + '.csv';
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 function exportInvShortage() {
@@ -465,10 +559,10 @@ function exportByStatus(statuses, filename) {
 
 function doExport(rows, filename) {
   var now = Date.now();
-  var lines = [['Draft #', 'Company', 'Customer Name', 'Email', 'Status', 'Order Value', 'In-Stock Value', 'Age (days)', 'Ship Date'].map(csvEsc).join(',')];
+  var lines = [['Draft #', 'Company', 'Email', 'Status', 'Order Value', 'In-Stock Value', 'Age (days)', 'Ship Date'].map(csvEsc).join(',')];
   rows.forEach(function(r) {
     var age = Math.floor((now - new Date(r.createdAt).getTime()) / 864e5);
-    lines.push([r.name, r.company || '', r.customerName || '', r.email, r.status, r.totalPrice.toFixed(2), r.instockValue.toFixed(2), age, r.shipDate || ''].map(csvEsc).join(','));
+    lines.push([r.name, r.company || '', r.email, r.status, r.totalPrice.toFixed(2), r.instockValue.toFixed(2), age, r.shipDate || ''].map(csvEsc).join(','));
   });
   var blob = new Blob([lines.join('\n')], { type: 'text/csv' });
   var url = URL.createObjectURL(blob);
