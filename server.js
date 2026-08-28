@@ -243,6 +243,8 @@ query DraftOrders($first: Int!, $after: String, $query: String!) {
       node {
         id name createdAt completedAt status email tags
         totalPrice subtotalPrice
+        shippingAddress { company name }
+        billingAddress { company name }
         metafield(namespace: "b2b", key: "ship_date") { value }
         lineItems(first: 50) {
           edges {
@@ -1029,43 +1031,6 @@ app.post("/api/draft-health", async (req, res) => {
 
   const LAUNCH_RE = /^launch-[a-z]{3}-2026$/i;
 
-  // ── New split0/split1 pipeline classification ──────────────────────────
-  // Purely tag-driven — mirrors shopify-adjust-orders-2.py / partial-instock-
-  // split-v2.py's tagging contract. Independent of classifyDraft() below
-  // (legacy statuses are evaluated upstream of this pipeline and are
-  // mutually exclusive with it — a draft either gets caught by
-  // excluded-customer/needs-review/npi-item/excluded-sku, or it flows into
-  // split0/split-generation, never both).
-  //
-  // IMPORTANT: partial-instock-split-v2.py applies split-150/split-remainder
-  // to EVERY backorder-descended draft regardless of how many generations
-  // deep it is (split1, split2, split3, ...) — those band tags are the only
-  // reliable, depth-independent signal for "this is a backorder child."
-  // The old check here gated on the literal "split1" tag first, which only
-  // matches first-generation children and silently drops every split2+
-  // draft from the dashboard (they never carry "split1" at all — see
-  // build_next_po_number / generation_tag_for in partial-instock-split-v2.py).
-  // Checking the band tags directly, with no generation-tag gate in front,
-  // fixes that reconciliation gap.
-  function classifySplitStage(tags) {
-    const t = (tags || []).map(x => x.toLowerCase());
-    const has = tag => t.includes(tag);
-
-    if (has("split-remainder") || has("split-150")) {
-      return has("split-remainder") ? "split-remainder" : "split-clear";
-    }
-    if (has("split0")) {
-      if (has("instock-minvalue")) return "held-instock-low";
-      if (has("bo-minvalue")) return "held-bo-low";
-      if (has("order-minvalue")) return "held-both-low";
-      if (has("eval-done")) {
-        return has("instock-ready") ? "ready-release" : "waiting-instock";
-      }
-      return "pending-eval";
-    }
-    return null; // not part of the split pipeline at all
-  }
-
   function isExcludedCustomer(email, name) {
     const haystack = ((email || "") + " " + (name || "")).toLowerCase();
     return EXCLUDED_CUSTOMERS.some(excl => haystack.includes(excl));
@@ -1186,13 +1151,19 @@ app.post("/api/draft-health", async (req, res) => {
         }
       }
 
+      const shipAddr = draft.shippingAddress || {};
+      const billAddr = draft.billingAddress || {};
+      const company = shipAddr.company || billAddr.company || "";
+      const customerName = shipAddr.name || billAddr.name || draft.email || "—";
+
       return {
         name: draft.name,
         email: draft.email || "—",
+        company,
+        customerName,
         createdAt: draft.createdAt,
         totalPrice: parseFloat(draft.totalPrice || 0),
         status,
-        pipelineStage: classifySplitStage(draft.tags || []),
         shipDate: draft.metafield?.value || null,
         instockValue: parseFloat(instockValue.toFixed(2)),
         tags: draft.tags || [],
