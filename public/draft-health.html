@@ -523,11 +523,11 @@ function renderAddressGroups() {
 function exportSameAddress() {
   if (!addressGroupsCache.length) return;
   var now = Date.now();
-  var lines = [['Address Group', 'Ship Address', 'Draft #', 'Company', 'Email', 'Status', 'Order Value', 'Age (days)'].map(csvEsc).join(',')];
+  var lines = [['Address Group', 'Ship Address', 'Draft #', 'PO Number', 'Company', 'Email', 'Status', 'Order Value', 'Age (days)'].map(csvEsc).join(',')];
   addressGroupsCache.forEach(function(g, gi) {
     g.rows.forEach(function(r) {
       var age = Math.floor((now - new Date(r.createdAt).getTime()) / 864e5);
-      lines.push([gi + 1, g.label || '', r.name, r.company || '', r.email, r.status, r.totalPrice.toFixed(2), age].map(csvEsc).join(','));
+      lines.push([gi + 1, g.label || '', r.name, r.poNumber || '', r.company || '', r.email, r.status, r.totalPrice.toFixed(2), age].map(csvEsc).join(','));
     });
   });
   var blob = new Blob([lines.join('\n')], { type: 'text/csv' });
