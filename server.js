@@ -243,6 +243,7 @@ query DraftOrders($first: Int!, $after: String, $query: String!) {
       node {
         id name createdAt completedAt status email tags
         totalPrice subtotalPrice
+        poNumber
         shippingAddress { company address1 address2 city province zip country }
         billingAddress { company address1 address2 city province zip country }
         metafield(namespace: "b2b", key: "ship_date") { value }
@@ -1210,6 +1211,7 @@ app.post("/api/draft-health", async (req, res) => {
         name: draft.name,
         email: draft.email || "—",
         company,
+        poNumber: draft.poNumber || "",
         shipAddress: shipAddressLabel,
         addressKey,
         createdAt: draft.createdAt,
