@@ -1233,6 +1233,7 @@ app.post("/api/draft-health", async (req, res) => {
       // Consolidation matching: prefer the shipping address; only fall back
       // to billing if there's no shipping address at all on the draft.
       const addrSource = (shipAddr.address1 || shipAddr.city) ? shipAddr : billAddr;
+      const addressSource = (shipAddr.address1 || shipAddr.city) ? "shipping" : (billAddr.address1 || billAddr.city) ? "billing" : null;
       const addressParts = [addrSource.address1, addrSource.address2, addrSource.city,
         addrSource.province, addrSource.zip, addrSource.country]
         .map(v => (v || "").trim())
@@ -1251,6 +1252,7 @@ app.post("/api/draft-health", async (req, res) => {
         poNumber: draft.poNumber || "",
         customerSpend12mo: customerSpendMap[(draft.email || "").toLowerCase()] || 0,
         shipAddress: shipAddressLabel,
+        addressSource,
         addressKey,
         createdAt: draft.createdAt,
         totalPrice: parseFloat(draft.totalPrice || 0),
