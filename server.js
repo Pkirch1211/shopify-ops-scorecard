@@ -228,7 +228,7 @@ query Orders($first: Int!, $after: String, $query: String!) {
     pageInfo { hasNextPage endCursor }
     edges {
       node {
-        id name createdAt updatedAt email
+        id name createdAt updatedAt email cancelledAt
         totalPriceSet { shopMoney { amount } }
         shippingAddress { firstName lastName }
         billingAddress { firstName lastName }
@@ -399,14 +399,29 @@ const EXCLUDED_SKUS_SNAPSHOT_URL =
 let syncInProgress = false;
 
 async function syncStore(store, token, label, since) {
+  // IMPORTANT: Shopify's orders search defaults to status:open when no status
+  // clause is given — closed/archived orders (the common case once an order
+  // is paid + fulfilled) silently drop out of results. That was undercounting
+  // every customer's synced order history, which fed directly into the B2B
+  // 12-month spend rollup (getB2BCustomerSpendMap) used for the under-$75
+  // segmentation. status:any restores full coverage; cancelled orders are
+  // explicitly filtered back out below since they shouldn't count as spend.
   const query = since
-    ? `updated_at:>=${since}`
-    : `created_at:>=${new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)}`;
+    ? `status:any updated_at:>=${since}`
+    : `status:any created_at:>=${new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)}`;
 
   console.log(`[sync] ${label}: fetching orders since ${since || "12mo ago"}`);
-  const orders = await gqlAll(store, token, ORDERS_QUERY, { first: 250, query },
+  const allOrders = await gqlAll(store, token, ORDERS_QUERY, { first: 250, query },
     d => d.orders.edges, d => d.orders.pageInfo, 600000);
-  console.log(`[sync] ${label}: got ${orders.length} orders`);
+  const cancelledIds = allOrders.filter(n => n.cancelledAt).map(n => n.id);
+  const orders = allOrders.filter(n => !n.cancelledAt);
+  console.log(`[sync] ${label}: got ${allOrders.length} orders (${cancelledIds.length} cancelled, excluded)`);
+
+  // Clean up any order that was previously synced as active and has since
+  // been cancelled, so it stops counting toward spend/flag totals.
+  if (cancelledIds.length) {
+    await db.query(`DELETE FROM orders WHERE id = ANY($1)`, [cancelledIds]);
+  }
   if (!orders.length) return 0;
 
   const BATCH = 50;
