@@ -103,6 +103,12 @@ async function initDB() {
     CREATE INDEX IF NOT EXISTS idx_orders_store_created ON orders(store, created_at);
     CREATE INDEX IF NOT EXISTS idx_orders_email ON orders(email);
     CREATE INDEX IF NOT EXISTS idx_orders_flagged ON orders(is_flagged) WHERE is_flagged = TRUE;
+  `);
+  // Added after the orders table already existed in production — CREATE TABLE
+  // IF NOT EXISTS above won't add columns to a table that's already there.
+  await db.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS order_total NUMERIC;`);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS idx_orders_store_email_created ON orders(store, email, created_at);
 
     CREATE TABLE IF NOT EXISTS sync_state (
       key TEXT PRIMARY KEY,
@@ -223,6 +229,7 @@ query Orders($first: Int!, $after: String, $query: String!) {
     edges {
       node {
         id name createdAt updatedAt email
+        totalPriceSet { shopMoney { amount } }
         shippingAddress { firstName lastName }
         billingAddress { firstName lastName }
         lineItems(first: 20) { edges { node { quantity } } }
@@ -356,6 +363,8 @@ function processOrderNode(node, store, draftCompletedAt) {
   }
 
   const isFlagged = flags.length > 0 && !EXCLUDED.has((node.email || "").toLowerCase());
+  const orderTotal = node.totalPriceSet?.shopMoney?.amount != null
+    ? parseFloat(node.totalPriceSet.shopMoney.amount) : null;
 
   return {
     id: node.id, store, order_number: node.name,
@@ -366,6 +375,7 @@ function processOrderNode(node, store, draftCompletedAt) {
     flag_types: flags.join(","),
     tracking_json: trackingInfo ? JSON.stringify(trackingInfo) : null,
     customer_name: customerName,
+    order_total: orderTotal,
   };
 }
 
@@ -407,26 +417,43 @@ async function syncStore(store, token, label, since) {
     let pi = 1;
     for (const node of batch) {
       const row = processOrderNode(node, label, null);
-      values.push(`($${pi},$${pi+1},$${pi+2},$${pi+3},$${pi+4},$${pi+5},$${pi+6},$${pi+7},$${pi+8},$${pi+9},$${pi+10},$${pi+11},$${pi+12},$${pi+13})`);
+      values.push(`($${pi},$${pi+1},$${pi+2},$${pi+3},$${pi+4},$${pi+5},$${pi+6},$${pi+7},$${pi+8},$${pi+9},$${pi+10},$${pi+11},$${pi+12},$${pi+13},$${pi+14})`);
       params.push(row.id, row.store, row.order_number, row.created_at, row.updated_at,
         row.email, row.units, row.fulfillment_hours, row.delivery_hours, row.processing_hours,
-        row.is_flagged, row.flag_types, row.tracking_json, row.customer_name);
-      pi += 14;
+        row.is_flagged, row.flag_types, row.tracking_json, row.customer_name, row.order_total);
+      pi += 15;
     }
     await db.query(`
       INSERT INTO orders (id, store, order_number, created_at, updated_at, email, units,
-        fulfillment_hours, delivery_hours, processing_hours, is_flagged, flag_types, tracking_json, customer_name)
+        fulfillment_hours, delivery_hours, processing_hours, is_flagged, flag_types, tracking_json, customer_name, order_total)
       VALUES ${values.join(",")}
       ON CONFLICT (id) DO UPDATE SET
         updated_at = EXCLUDED.updated_at, units = EXCLUDED.units,
         fulfillment_hours = EXCLUDED.fulfillment_hours, delivery_hours = EXCLUDED.delivery_hours,
         processing_hours = EXCLUDED.processing_hours, is_flagged = EXCLUDED.is_flagged,
         flag_types = EXCLUDED.flag_types, tracking_json = EXCLUDED.tracking_json,
-        customer_name = EXCLUDED.customer_name, synced_at = NOW()
+        customer_name = EXCLUDED.customer_name, order_total = EXCLUDED.order_total, synced_at = NOW()
     `, params);
     upserted += batch.length;
   }
   return upserted;
+}
+
+// Trailing-12-month spend per B2B customer, from the already-synced `orders`
+// table (store = 'B2B' only — DTC purchase history is a separate customer
+// base and deliberately excluded here per the sales team's ask). Keyed by
+// lowercased email so it matches draft.email case-insensitively.
+async function getB2BCustomerSpendMap() {
+  const res = await db.query(`
+    SELECT LOWER(email) AS email, SUM(order_total) AS total_spend
+    FROM orders
+    WHERE store = 'B2B' AND email IS NOT NULL AND order_total IS NOT NULL
+      AND created_at >= NOW() - INTERVAL '12 months'
+    GROUP BY LOWER(email)
+  `);
+  const map = {};
+  for (const r of res.rows) map[r.email] = parseFloat(r.total_spend) || 0;
+  return map;
 }
 
 async function buildDraftsMap(store, token, since, deadlineMs = 120000) {
@@ -1172,6 +1199,16 @@ app.post("/api/draft-health", async (req, res) => {
       }
     }
 
+    // Trailing-12-month B2B spend per customer, for the under-$75 backorder
+    // segmentation (sales wants to treat low-, mid-, and high-spend customers
+    // differently rather than treating every sub-$75 remainder the same).
+    let customerSpendMap = {};
+    try {
+      customerSpendMap = await getB2BCustomerSpendMap();
+    } catch (err) {
+      console.warn("[draft-health] customer spend lookup failed:", err.message);
+    }
+
     const STATUS_ORDER = ["needs-review","out-of-stock","npi-item","excluded-sku-ready","excluded-sku","delayed-ship-date","excluded-customer","supply-blocked","instock-ready"];
 
     const rows = drafts.map(draft => {
@@ -1212,6 +1249,7 @@ app.post("/api/draft-health", async (req, res) => {
         email: draft.email || "—",
         company,
         poNumber: draft.poNumber || "",
+        customerSpend12mo: customerSpendMap[(draft.email || "").toLowerCase()] || 0,
         shipAddress: shipAddressLabel,
         addressKey,
         createdAt: draft.createdAt,
