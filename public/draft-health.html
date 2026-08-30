@@ -510,19 +510,29 @@ function exportPipelineStage(stage) {
 }
 
 // ── Consolidation opportunities (same shipping address) ─────────────────────
-// Groups ALL open drafts (regardless of split-pipeline stage) by a normalized
+// Groups open drafts (regardless of split-pipeline stage) by a normalized
 // shipping-address key computed server-side. Only groups with 2+ drafts are
 // surfaced — a single draft at an address isn't a consolidation opportunity.
+//
+// excluded-customer drafts (Faire, TJX, Replacements Customer Care, Customer
+// Samples, etc. — see EXCLUDED_CUSTOMERS in server.js) are deliberately left
+// out: several of these are aggregators/marketplaces that route many
+// unrelated orders through one shared warehouse address, which isn't a real
+// "combine these shipments" opportunity and can otherwise balloon the count
+// whenever a batch of their orders comes in.
 var addressGroupsCache = [];
 
 function computeAddressGroups() {
   var groups = {};
   allDrafts.forEach(function(r) {
-    if (!r.addressKey) return; // no usable shipping address on file
+    if (!r.addressKey) return; // no usable shipping/billing address on file
+    if (r.status === 'excluded-customer') return; // aggregator/distributor account — not a real match
     if (!groups[r.addressKey]) groups[r.addressKey] = { key: r.addressKey, label: r.shipAddress, rows: [] };
     groups[r.addressKey].rows.push(r);
   });
-  return Object.keys(groups).map(function(k) { return groups[k]; }).filter(function(g) { return g.rows.length > 1; });
+  return Object.keys(groups).map(function(k) { return groups[k]; })
+    .filter(function(g) { return g.rows.length > 1; })
+    .sort(function(a, b) { return b.rows.length - a.rows.length; });
 }
 
 function renderAddressGroups() {
@@ -532,6 +542,7 @@ function renderAddressGroups() {
   var totalValue = addressGroupsCache.reduce(function(s, g) {
     return s + g.rows.reduce(function(s2, r) { return s2 + (r.totalPrice || 0); }, 0);
   }, 0);
+  var largest = addressGroupsCache.length ? addressGroupsCache[0].rows.length : 0;
 
   document.getElementById('addressCalloutCount').textContent = groupCount.toLocaleString();
 
@@ -542,7 +553,8 @@ function renderAddressGroups() {
   } else {
     document.getElementById('addressCalloutSub').textContent =
       groupCount + ' location' + (groupCount !== 1 ? 's' : '') + ' · ' +
-      draftCount + ' draft' + (draftCount !== 1 ? 's' : '') + ' · ' + fmtMoney(totalValue) + ' combined';
+      draftCount + ' draft' + (draftCount !== 1 ? 's' : '') + ' · ' + fmtMoney(totalValue) + ' combined' +
+      (largest > 4 ? ' · largest group: ' + largest + ' drafts' : '');
     document.getElementById('addressCalloutEmpty').style.display = 'none';
     document.getElementById('addressExportBtn').style.display = '';
   }
@@ -551,11 +563,11 @@ function renderAddressGroups() {
 function exportSameAddress() {
   if (!addressGroupsCache.length) return;
   var now = Date.now();
-  var lines = [['Address Group', 'Ship Address', 'Draft #', 'PO Number', 'Company', 'Email', 'Status', 'Order Value', 'Age (days)'].map(csvEsc).join(',')];
+  var lines = [['Address Group', 'Drafts At Address', 'Matched On', 'Ship Address', 'Draft #', 'PO Number', 'Company', 'Email', 'Status', 'Order Value', 'Age (days)'].map(csvEsc).join(',')];
   addressGroupsCache.forEach(function(g, gi) {
     g.rows.forEach(function(r) {
       var age = Math.floor((now - new Date(r.createdAt).getTime()) / 864e5);
-      lines.push([gi + 1, g.label || '', r.name, r.poNumber || '', r.company || '', r.email, r.status, r.totalPrice.toFixed(2), age].map(csvEsc).join(','));
+      lines.push([gi + 1, g.rows.length, r.addressSource || '', g.label || '', r.name, r.poNumber || '', r.company || '', r.email, r.status, r.totalPrice.toFixed(2), age].map(csvEsc).join(','));
     });
   });
   var blob = new Blob([lines.join('\n')], { type: 'text/csv' });
