@@ -413,14 +413,14 @@ function getStageRows(key) {
   if (key === 'split-remainder-under75') {
     return stageRows('split-remainder').filter(function(r) { return (r.totalPrice || 0) < BACKORDER_HOLD_VALUE; });
   }
-  if (key === 'remainder-under75-spend-gt5k') {
-    return getStageRows('split-remainder-under75').filter(function(r) { return (r.customerSpend12mo || 0) >= 5000; });
+  if (key === 'remainder-under75-spend-gte500') {
+    return getStageRows('split-remainder-under75').filter(function(r) { return (r.customerSpend12mo || 0) >= 500; });
   }
-  if (key === 'remainder-under75-spend-1k-5k') {
-    return getStageRows('split-remainder-under75').filter(function(r) { return (r.customerSpend12mo || 0) >= 1000 && (r.customerSpend12mo || 0) < 5000; });
+  if (key === 'remainder-under75-spend-250-500') {
+    return getStageRows('split-remainder-under75').filter(function(r) { return (r.customerSpend12mo || 0) >= 250 && (r.customerSpend12mo || 0) < 500; });
   }
-  if (key === 'remainder-under75-spend-lt1k') {
-    return getStageRows('split-remainder-under75').filter(function(r) { return (r.customerSpend12mo || 0) < 1000; });
+  if (key === 'remainder-under75-spend-lt250') {
+    return getStageRows('split-remainder-under75').filter(function(r) { return (r.customerSpend12mo || 0) < 250; });
   }
   return stageRows(key);
 }
@@ -462,10 +462,10 @@ function renderFunnel() {
   ], 'children', ['split-remainder', 'split-clear']);
 
   renderStageBuckets('spendBuckets', 'spendTotal', [
-    { key: 'remainder-under75-spend-gt5k',  label: '>$5k Spend' },
-    { key: 'remainder-under75-spend-1k-5k', label: '$1k–$5k Spend' },
-    { key: 'remainder-under75-spend-lt1k',  label: '<$1k Spend' },
-  ], 'spend', ['remainder-under75-spend-gt5k', 'remainder-under75-spend-1k-5k', 'remainder-under75-spend-lt1k']);
+    { key: 'remainder-under75-spend-gte500',  label: '$500+ Spend' },
+    { key: 'remainder-under75-spend-250-500', label: '$250–$500 Spend' },
+    { key: 'remainder-under75-spend-lt250',   label: '<$250 Spend' },
+  ], 'spend', ['remainder-under75-spend-gte500', 'remainder-under75-spend-250-500', 'remainder-under75-spend-lt250']);
 }
 
 function renderStageBuckets(containerId, totalId, defs, kind, totalKeys) {
