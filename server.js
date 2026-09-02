@@ -561,16 +561,50 @@ async function syncStore(store, token, label, since) {
 // table (store = 'B2B' only — DTC purchase history is a separate customer
 // base and deliberately excluded here per the sales team's ask). Keyed by
 // lowercased email so it matches draft.email case-insensitively.
+//
+// SAFEGUARD: order_total was added via ALTER TABLE ... ADD COLUMN, which does
+// NOT backfill existing rows — they land as NULL and are excluded from the
+// SUM below by design (a NULL shouldn't silently count as $0 of spend). If a
+// large fraction of a customer's order history predates this column and was
+// never re-synced (e.g. an old, untouched order whose updated_at never
+// re-entered an incremental sync window), spend for that customer will read
+// artificially low. This logs a warning so that failure mode is visible
+// instead of silently under-counting spend forever. It does not change the
+// returned map or any behavior — it only reports on data coverage.
 async function getB2BCustomerSpendMap() {
-  const res = await db.query(`
-    SELECT LOWER(email) AS email, SUM(order_total) AS total_spend
-    FROM orders
-    WHERE store = 'B2B' AND email IS NOT NULL AND order_total IS NOT NULL
-      AND created_at >= NOW() - INTERVAL '12 months'
-    GROUP BY LOWER(email)
-  `);
+  const [sumRes, coverageRes] = await Promise.all([
+    db.query(`
+      SELECT LOWER(email) AS email, SUM(order_total) AS total_spend
+      FROM orders
+      WHERE store = 'B2B' AND email IS NOT NULL AND order_total IS NOT NULL
+        AND created_at >= NOW() - INTERVAL '12 months'
+      GROUP BY LOWER(email)
+    `),
+    db.query(`
+      SELECT COUNT(*) AS total, COUNT(order_total) AS with_total
+      FROM orders
+      WHERE store = 'B2B' AND email IS NOT NULL
+        AND created_at >= NOW() - INTERVAL '12 months'
+    `),
+  ]);
+
+  const totalRows = parseInt(coverageRes.rows[0]?.total || 0);
+  const withTotal = parseInt(coverageRes.rows[0]?.with_total || 0);
+  if (totalRows > 0) {
+    const missing = totalRows - withTotal;
+    const missingFraction = missing / totalRows;
+    if (missingFraction > 0.1) {
+      console.warn(
+        `[getB2BCustomerSpendMap] WARNING: ${missing}/${totalRows} B2B orders ` +
+        `(${(missingFraction * 100).toFixed(1)}%) in the trailing 12mo window have ` +
+        `NULL order_total and are excluded from spend totals — customer spend may be ` +
+        `undercounted. Run POST /api/trigger-backfill to re-sync and populate order_total.`
+      );
+    }
+  }
+
   const map = {};
-  for (const r of res.rows) map[r.email] = parseFloat(r.total_spend) || 0;
+  for (const r of sumRes.rows) map[r.email] = parseFloat(r.total_spend) || 0;
   return map;
 }
 
