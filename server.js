@@ -78,6 +78,59 @@ const CREDS = {
 // and had drifted all the way back to 2024-01 before this fix.
 const SHOPIFY_API_VERSION = process.env.SHOPIFY_API_VERSION || "2026-07";
 
+// ── Admin unlock (destructive-action gate) ─────────────────────────────────────
+// Separate from SITE_PASSWORD. NOTE: requireAuth above already exempts every
+// /api/* path from site-password checks, so this cookie/session is the only
+// real gate in front of the mutating endpoints below — it is not layered on
+// top of another check. Session is sliding: every authenticated call resets
+// the 30-minute window rather than expiring on a fixed clock.
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
+const ADMIN_COOKIE = "ops_admin";
+const ADMIN_SESSION_MS = 30 * 60 * 1000;
+const adminSessions = new Map(); // token -> expiresAt
+
+function getAdminToken(req) {
+  const cookies = req.headers.cookie || "";
+  return cookies.split(";").map(c => c.trim())
+    .find(c => c.startsWith(ADMIN_COOKIE + "="))?.split("=")[1];
+}
+
+function requireAdmin(req, res, next) {
+  const token = getAdminToken(req);
+  const expiresAt = token && adminSessions.get(token);
+  if (expiresAt && Date.now() < expiresAt) {
+    adminSessions.set(token, Date.now() + ADMIN_SESSION_MS); // sliding expiry
+    return next();
+  }
+  res.status(401).json({ error: "Admin unlock required." });
+}
+
+app.post("/api/admin/unlock", (req, res) => {
+  if (!ADMIN_PASSWORD) return res.status(400).json({ error: "Admin password not configured on server." });
+  if ((req.body.password || "") !== ADMIN_PASSWORD) {
+    return res.status(401).json({ error: "Incorrect admin password." });
+  }
+  const token = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  const expiresAt = Date.now() + ADMIN_SESSION_MS;
+  adminSessions.set(token, expiresAt);
+  res.setHeader("Set-Cookie", `${ADMIN_COOKIE}=${token}; Path=/; HttpOnly; Max-Age=${ADMIN_SESSION_MS / 1000}`);
+  res.json({ ok: true, expiresAt });
+});
+
+app.get("/api/admin/status", (req, res) => {
+  const token = getAdminToken(req);
+  const expiresAt = token && adminSessions.get(token);
+  const unlocked = !!(expiresAt && Date.now() < expiresAt);
+  res.json({ unlocked, expiresAt: unlocked ? expiresAt : null });
+});
+
+app.post("/api/admin/lock", (req, res) => {
+  const token = getAdminToken(req);
+  if (token) adminSessions.delete(token);
+  res.setHeader("Set-Cookie", `${ADMIN_COOKIE}=; Path=/; HttpOnly; Max-Age=0`);
+  res.json({ ok: true });
+});
+
 // ── Database ──────────────────────────────────────────────────────────────────
 const db = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
 
@@ -317,6 +370,56 @@ query StaleFulfillments($first: Int!, $after: String, $query: String!) {
     }
   }
 }`;
+
+// ── Draft order mutations (admin tools) ────────────────────────────────────────
+const MUTATION_DRAFT_UPDATE = `
+mutation DraftOrderUpdate($id: ID!, $input: DraftOrderInput!) {
+  draftOrderUpdate(id: $id, input: $input) {
+    draftOrder { id name }
+    userErrors { field message }
+  }
+}`;
+
+const MUTATION_DRAFT_DELETE = `
+mutation DraftOrderDelete($input: DraftOrderDeleteInput!) {
+  draftOrderDelete(input: $input) {
+    deletedId
+    userErrors { field message }
+  }
+}`;
+
+// Rebuilds a line item for a draftOrderUpdate call. Mirrors the behavior of
+// the local cleanup script (build_line_item_for_update in the Python
+// version): variant lines are re-sent as variantId + quantity only, with no
+// price override, so Shopify re-derives price from the variant same as the
+// existing script does. Custom (non-variant) line items are rare on these
+// B2B drafts but are preserved best-effort with their original price so
+// removing an unrelated SKU never silently reprices them. Currency is
+// assumed USD to match the B2B store — flag if that's ever not true.
+function buildLineItemInput(li) {
+  if (li.variant?.id) {
+    return { variantId: li.variant.id, quantity: li.quantity };
+  }
+  return {
+    title: li.title || "Custom item",
+    quantity: li.quantity,
+    originalUnitPriceWithCurrency: { amount: String(li.originalUnitPrice || "0"), currencyCode: "USD" },
+  };
+}
+
+// Always fetches live (bypasses cache) — both admin tools mutate Shopify, so
+// previews and executes must work off current data, not the 5-minute
+// dashboard cache. Also refreshes b2bDraftsCache as a side effect so the
+// dashboard doesn't show stale rows right after a mutation.
+async function fetchFreshOpenB2BDrafts() {
+  const { b2bStore, b2bToken } = CREDS;
+  const drafts = await gqlAll(b2bStore, b2bToken, DRAFT_ORDERS_QUERY,
+    { first: 250, query: "status:open" },
+    d => d.draftOrders.edges, d => d.draftOrders.pageInfo, 120000);
+  b2bDraftsCache = drafts;
+  b2bDraftsCacheTime = Date.now();
+  return drafts;
+}
 
 // ── Order processor (Shopify node -> DB row) ──────────────────────────────────
 function processOrderNode(node, store, draftCompletedAt) {
@@ -1261,6 +1364,7 @@ app.post("/api/draft-health", async (req, res) => {
         : null;
 
       return {
+        id: draft.id,
         name: draft.name,
         email: draft.email || "—",
         company,
@@ -1298,6 +1402,136 @@ app.post("/api/draft-health", async (req, res) => {
     for (const b of splitBuckets) b.totalInstockValue = parseFloat(b.totalInstockValue.toFixed(2));
 
     res.json({ total: rows.length, statusCounts, splitBuckets, rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Admin: Remove SKU from all open drafts ─────────────────────────────────────
+// Preview shows exactly what execute would do, computed off a fresh (not
+// cached) fetch so what the reviewer sees matches what actually happens a
+// moment later when they confirm.
+app.post("/api/admin/remove-sku/preview", requireAdmin, async (req, res) => {
+  const { b2bStore, b2bToken } = CREDS;
+  if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
+  const sku = (req.body.sku || "").trim();
+  if (!sku) return res.status(400).json({ error: "SKU required." });
+
+  try {
+    const drafts = await fetchFreshOpenB2BDrafts();
+    const skuLower = sku.toLowerCase();
+    const matches = [];
+    for (const d of drafts) {
+      const lines = (d.lineItems?.edges || []).map(e => e.node);
+      const matchingLines = lines.filter(li => (li.sku || "").trim().toLowerCase() === skuLower);
+      if (!matchingLines.length) continue;
+      const remainingLines = lines.filter(li => (li.sku || "").trim().toLowerCase() !== skuLower);
+      const removedQty = matchingLines.reduce((s, li) => s + (li.quantity || 0), 0);
+      matches.push({
+        id: d.id,
+        name: d.name,
+        email: d.email || "—",
+        totalPrice: parseFloat(d.totalPrice || 0),
+        removedQty,
+        remainingLineCount: remainingLines.length,
+        wouldDelete: remainingLines.length === 0,
+      });
+    }
+    res.json({ sku, matchCount: matches.length, drafts: matches });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/admin/remove-sku/execute", requireAdmin, async (req, res) => {
+  const { b2bStore, b2bToken } = CREDS;
+  if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
+  const sku = (req.body.sku || "").trim();
+  const draftIds = Array.isArray(req.body.draftIds) ? req.body.draftIds : [];
+  if (!sku || !draftIds.length) return res.status(400).json({ error: "sku and draftIds required." });
+
+  try {
+    // Re-fetch fresh and re-derive the SKU match server-side rather than
+    // trusting the client's draftIds list at face value — the only thing we
+    // trust from the client is *which* of the currently-matching drafts to
+    // include; whether a draft still matches is decided here.
+    const drafts = await fetchFreshOpenB2BDrafts();
+    const skuLower = sku.toLowerCase();
+    const idSet = new Set(draftIds);
+    const targets = drafts.filter(d => idSet.has(d.id) &&
+      (d.lineItems?.edges || []).some(e => (e.node.sku || "").trim().toLowerCase() === skuLower));
+
+    const results = { deleted: [], updated: [], failed: [] };
+
+    for (const d of targets) {
+      const lines = (d.lineItems?.edges || []).map(e => e.node);
+      const remainingLines = lines.filter(li => (li.sku || "").trim().toLowerCase() !== skuLower);
+      try {
+        if (remainingLines.length === 0) {
+          const delRes = await gql(b2bStore, b2bToken, MUTATION_DRAFT_DELETE, { input: { id: d.id } });
+          const errs = delRes.draftOrderDelete.userErrors;
+          if (errs?.length) throw new Error(errs.map(e => e.message).join("; "));
+          results.deleted.push(d.name);
+        } else {
+          const input = { lineItems: remainingLines.map(buildLineItemInput) };
+          const updRes = await gql(b2bStore, b2bToken, MUTATION_DRAFT_UPDATE, { id: d.id, input });
+          const errs = updRes.draftOrderUpdate.userErrors;
+          if (errs?.length) throw new Error(errs.map(e => e.message).join("; "));
+          results.updated.push(d.name);
+        }
+      } catch (err) {
+        results.failed.push({ name: d.name, error: err.message });
+      }
+    }
+
+    b2bDraftsCache = null; // force a fresh fetch on the dashboard's next load
+    res.json(results);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Admin: bulk-cancel small backorder remainders ──────────────────────────────
+// No separate preview endpoint — the dashboard already has the live
+// split-remainder rows loaded client-side with customerSpend12mo attached,
+// so the person previews by adjusting the spend threshold locally. Execute
+// re-fetches fresh and only deletes drafts that still carry the
+// split-remainder tag, so a draft that moved on (cleared, edited by someone
+// else) between page-load and confirm is skipped rather than deleted blind.
+app.post("/api/admin/bulk-cancel/execute", requireAdmin, async (req, res) => {
+  const { b2bStore, b2bToken } = CREDS;
+  if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
+  const draftIds = Array.isArray(req.body.draftIds) ? req.body.draftIds : [];
+  if (!draftIds.length) return res.status(400).json({ error: "draftIds required." });
+
+  try {
+    const drafts = await fetchFreshOpenB2BDrafts();
+    const idSet = new Set(draftIds);
+    const targets = drafts.filter(d => idSet.has(d.id) &&
+      (d.tags || []).map(t => t.toLowerCase()).includes("split-remainder"));
+    const targetIdSet = new Set(targets.map(d => d.id));
+
+    const results = { deleted: [], skipped: [], failed: [] };
+    for (const id of draftIds) {
+      if (!targetIdSet.has(id)) results.skipped.push(id);
+    }
+
+    for (const d of targets) {
+      try {
+        const delRes = await gql(b2bStore, b2bToken, MUTATION_DRAFT_DELETE, { input: { id: d.id } });
+        const errs = delRes.draftOrderDelete.userErrors;
+        if (errs?.length) throw new Error(errs.map(e => e.message).join("; "));
+        results.deleted.push(d.name);
+      } catch (err) {
+        results.failed.push({ name: d.name, error: err.message });
+      }
+    }
+
+    b2bDraftsCache = null;
+    res.json(results);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
