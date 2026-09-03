@@ -152,16 +152,19 @@ main{padding:14px 24px 28px;max-width:1400px;margin:0 auto}
 .admin-btn:hover{opacity:.85}
 .admin-btn.danger{background:var(--danger)}
 .admin-btn:disabled{opacity:.4;cursor:default}
-.admin-table-wrap{max-height:260px;overflow-y:auto;border:1px solid var(--border);border-radius:2px;margin-bottom:10px}
+.admin-btn.secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border2)}
+.admin-table-wrap{max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:2px;margin-bottom:10px}
 .admin-table{width:100%;border-collapse:collapse;font-size:11px}
 .admin-table th{position:sticky;top:0;background:var(--surface2);text-align:left;font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:7px 10px;border-bottom:1px solid var(--border)}
 .admin-table td{padding:6px 10px;border-bottom:1px solid var(--border)}
 .admin-table tr:last-child td{border-bottom:none}
+.admin-table tr.selected{background:var(--green-light)}
 .admin-badge{font-size:9px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:2px 6px;border-radius:2px;background:#f5e8e8;color:var(--danger)}
 .admin-result{font-size:11px;padding:10px;border-radius:2px;margin-top:8px}
 .admin-result.ok{background:var(--green-light);color:var(--green)}
 .admin-result.err{background:#f5e0e0;color:var(--danger)}
 .admin-empty{font-size:11px;color:var(--dim);padding:8px 0}
+.admin-select-count{font-size:11px;color:var(--muted)}
 @media(max-width:960px){.kpi-grid{grid-template-columns:repeat(3,1fr)}.split-buckets{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:640px){
   header{grid-template-columns:1fr;position:static}
@@ -376,24 +379,34 @@ main{padding:14px 24px 28px;max-width:1400px;margin:0 auto}
 
       <div class="admin-panel">
         <div class="admin-panel-header">
-          <div class="admin-panel-title">Bulk-Cancel Small Backorder Remainders</div>
-          <div class="admin-panel-sub">Cancels (deletes) split-remainder drafts under $75 for customers below the spend threshold below. Re-checks each draft's tags right before deleting, in case it moved on since this page loaded.</div>
+          <div class="admin-panel-title">Bulk-Cancel Backorder Remainders</div>
+          <div class="admin-panel-sub">Cancels (deletes) whichever split-remainder drafts you select below. Use the search box to find a specific draft, or the quick-select to grab everything under a spend/value threshold. Re-checks each draft's tags right before deleting, in case it moved on since this page loaded.</div>
         </div>
         <div class="admin-panel-body">
           <div class="admin-row">
-            <label style="font-size:11px;color:var(--muted)">Trailing 12mo B2B spend under $</label>
-            <input type="number" class="admin-input" id="spendThresholdInput" value="250" min="0" step="25" style="max-width:100px" oninput="updateBulkCancelPreview()">
+            <input type="text" class="admin-input" id="bulkCancelSearchInput" placeholder="Filter by draft # or email" oninput="renderBulkCancelTable()">
           </div>
-          <div id="bulkCancelPreviewWrap" style="display:none">
+          <div class="admin-row">
+            <label style="font-size:11px;color:var(--muted)">Quick-select: value &lt;$75 and spend under $</label>
+            <input type="number" class="admin-input" id="spendThresholdInput" value="250" min="0" step="25" style="max-width:100px">
+            <button class="admin-btn secondary" onclick="quickSelectByThreshold()">Apply</button>
+            <button class="admin-btn secondary" onclick="selectVisibleBulkCancelRows(true)">Select Visible</button>
+            <button class="admin-btn secondary" onclick="selectVisibleBulkCancelRows(false)">Clear Visible</button>
+            <button class="admin-btn secondary" onclick="clearAllBulkCancelSelection()">Clear All</button>
+          </div>
+          <div id="bulkCancelPreviewWrap">
+            <div class="admin-row" style="justify-content:space-between;margin-bottom:6px">
+              <span class="admin-select-count" id="bulkCancelSelectCount">0 selected</span>
+            </div>
             <div class="admin-table-wrap">
               <table class="admin-table">
                 <thead><tr><th></th><th>Draft #</th><th>Customer</th><th>12mo Spend</th><th>Order Value</th></tr></thead>
                 <tbody id="bulkCancelRows"></tbody>
               </table>
             </div>
-            <button class="admin-btn danger" id="bulkCancelExecuteBtn" onclick="executeBulkCancel()">Cancel Selected Drafts</button>
+            <button class="admin-btn danger" id="bulkCancelExecuteBtn" onclick="executeBulkCancel()" disabled>Cancel Selected Drafts (0)</button>
           </div>
-          <div id="bulkCancelEmpty" class="admin-empty">No matching drafts yet — adjust the threshold above.</div>
+          <div id="bulkCancelEmpty" class="admin-empty" style="display:none">No backorder-remainder drafts open right now.</div>
           <div id="bulkCancelResult"></div>
         </div>
       </div>
@@ -498,7 +511,7 @@ function render(data) {
   renderFunnel();
   renderAddressGroups();
   renderSalesSmallReady();
-  updateBulkCancelPreview();
+  refreshBulkCancelData();
 }
 
 // ── Split pipeline funnel ───────────────────────────────────────────────────
@@ -847,7 +860,6 @@ async function loadExcludedSkus() {
 // ── Admin tools ───────────────────────────────────────────────────────────
 var adminUnlocked = false;
 var skuPreviewData = [];
-var bulkCancelPreviewData = [];
 
 async function checkAdminStatus() {
   try {
@@ -865,7 +877,7 @@ function setAdminUnlocked(unlocked, expiresAt) {
     var mins = Math.max(0, Math.round((expiresAt - Date.now()) / 60000));
     document.getElementById('adminSessionLabel').textContent = 'Unlocked · session active ~' + mins + ' more min';
   }
-  if (unlocked) updateBulkCancelPreview();
+  if (unlocked) refreshBulkCancelData();
 }
 
 async function unlockAdmin() {
@@ -954,41 +966,122 @@ async function executeSkuRemoval() {
   }
 }
 
-// -- Bulk cancel tool --
-function updateBulkCancelPreview() {
+// -- Bulk cancel tool: full backorder-remainder list with manual, per-draft
+// selection. The spend/value threshold is a quick-select convenience, not a
+// filter on which rows are visible — every open split-remainder draft is
+// listed and can be checked individually, since a person may want to cancel
+// one specific draft that doesn't happen to match the auto-criteria. --
+var bulkCancelAllRows = [];      // every open split-remainder draft
+var bulkCancelSelected = new Set(); // selected draft ids (persists across re-renders/search)
+
+function refreshBulkCancelData() {
   if (!adminUnlocked) return;
-  var thresholdInput = document.getElementById('spendThresholdInput');
-  if (!thresholdInput) return;
-  var threshold = parseFloat(thresholdInput.value) || 0;
-  bulkCancelPreviewData = getStageRows('split-remainder-under75').filter(function(r) {
-    return (r.customerSpend12mo || 0) < threshold;
-  });
+  bulkCancelAllRows = stageRows('split-remainder').slice().sort(function(a, b) { return (a.totalPrice || 0) - (b.totalPrice || 0); });
+  // Drop selections for drafts that are no longer open/split-remainder
+  // (e.g. already released or cancelled since the last refresh).
+  var idSet = new Set(bulkCancelAllRows.map(function(r) { return r.id; }));
+  Array.from(bulkCancelSelected).forEach(function(id) { if (!idSet.has(id)) bulkCancelSelected.delete(id); });
+  renderBulkCancelTable();
+}
+
+function renderBulkCancelTable() {
   var wrap = document.getElementById('bulkCancelPreviewWrap');
   var emptyEl = document.getElementById('bulkCancelEmpty');
   var rowsEl = document.getElementById('bulkCancelRows');
-  if (!bulkCancelPreviewData.length) {
+  var searchInput = document.getElementById('bulkCancelSearchInput');
+  var q = searchInput ? searchInput.value.trim().toLowerCase() : '';
+
+  if (!bulkCancelAllRows.length) {
     wrap.style.display = 'none';
     emptyEl.style.display = 'block';
-    emptyEl.textContent = 'No matching drafts under that threshold.';
+    emptyEl.textContent = 'No backorder-remainder drafts open right now.';
+    updateBulkCancelSelectionUI();
     return;
   }
+
+  var filtered = q
+    ? bulkCancelAllRows.filter(function(r) {
+        return (r.name || '').toLowerCase().indexOf(q) !== -1 || (r.email || '').toLowerCase().indexOf(q) !== -1;
+      })
+    : bulkCancelAllRows;
+
+  if (!filtered.length) {
+    wrap.style.display = 'none';
+    emptyEl.style.display = 'block';
+    emptyEl.textContent = 'No drafts match that search.';
+    updateBulkCancelSelectionUI();
+    return;
+  }
+
   emptyEl.style.display = 'none';
   wrap.style.display = 'block';
-  rowsEl.innerHTML = bulkCancelPreviewData.map(function(r, i) {
-    return '<tr>' +
-      '<td><input type="checkbox" class="bulk-row-check" data-idx="' + i + '" checked></td>' +
+
+  rowsEl.innerHTML = filtered.map(function(r) {
+    var checked = bulkCancelSelected.has(r.id);
+    return '<tr class="' + (checked ? 'selected' : '') + '">' +
+      '<td><input type="checkbox" class="bulk-row-check" data-id="' + esc(r.id) + '"' + (checked ? ' checked' : '') + ' onchange="toggleBulkCancelRow(this)"></td>' +
       '<td>' + esc(r.name) + '</td>' +
       '<td>' + esc(r.email) + '</td>' +
       '<td>$' + (r.customerSpend12mo || 0).toFixed(2) + '</td>' +
       '<td>$' + r.totalPrice.toFixed(2) + '</td>' +
       '</tr>';
   }).join('');
-  document.getElementById('bulkCancelExecuteBtn').textContent = 'Cancel ' + bulkCancelPreviewData.length + ' Draft' + (bulkCancelPreviewData.length !== 1 ? 's' : '');
+
+  updateBulkCancelSelectionUI();
+}
+
+function toggleBulkCancelRow(checkbox) {
+  var id = checkbox.dataset.id;
+  if (checkbox.checked) bulkCancelSelected.add(id);
+  else bulkCancelSelected.delete(id);
+  checkbox.closest('tr').classList.toggle('selected', checkbox.checked);
+  updateBulkCancelSelectionUI();
+}
+
+// Applies only to the rows currently visible (post-search) — selecting or
+// clearing "visible" after typing a search only touches what's on screen.
+function selectVisibleBulkCancelRows(select) {
+  var checks = document.querySelectorAll('.bulk-row-check');
+  checks.forEach(function(c) {
+    c.checked = select;
+    if (select) bulkCancelSelected.add(c.dataset.id);
+    else bulkCancelSelected.delete(c.dataset.id);
+    c.closest('tr').classList.toggle('selected', select);
+  });
+  updateBulkCancelSelectionUI();
+}
+
+function clearAllBulkCancelSelection() {
+  bulkCancelSelected.clear();
+  renderBulkCancelTable();
+}
+
+// Quick-select: checks every draft under the $75 hold value AND under the
+// entered spend threshold — same criteria the dashboard's spend buckets use
+// — without unchecking anything already selected by hand.
+function quickSelectByThreshold() {
+  var threshold = parseFloat(document.getElementById('spendThresholdInput').value) || 0;
+  bulkCancelAllRows.forEach(function(r) {
+    if ((r.totalPrice || 0) < BACKORDER_HOLD_VALUE && (r.customerSpend12mo || 0) < threshold) {
+      bulkCancelSelected.add(r.id);
+    }
+  });
+  renderBulkCancelTable();
+}
+
+function updateBulkCancelSelectionUI() {
+  var n = bulkCancelSelected.size;
+  var countEl = document.getElementById('bulkCancelSelectCount');
+  if (countEl) countEl.textContent = n + ' selected';
+  var btn = document.getElementById('bulkCancelExecuteBtn');
+  if (btn) {
+    btn.textContent = 'Cancel Selected Drafts (' + n + ')';
+    btn.disabled = n === 0;
+  }
 }
 
 async function executeBulkCancel() {
-  var checks = document.querySelectorAll('.bulk-row-check:checked');
-  var draftIds = Array.prototype.map.call(checks, function(c) { return bulkCancelPreviewData[+c.dataset.idx].id; });
+  var draftIds = Array.from(bulkCancelSelected);
   var resultEl = document.getElementById('bulkCancelResult');
   if (!draftIds.length) return;
   var btn = document.getElementById('bulkCancelExecuteBtn');
@@ -1001,11 +1094,11 @@ async function executeBulkCancel() {
     resultEl.innerHTML = '<div class="admin-result ok">Cancelled ' + data.deleted.length +
       (data.skipped.length ? ', skipped ' + data.skipped.length + ' (no longer eligible)' : '') +
       (data.failed.length ? ', <b>' + data.failed.length + ' failed</b>' : '') + '.</div>';
-    updateBulkCancelPreview();
+    bulkCancelSelected.clear();
+    refreshBulkCancelData();
   } catch (err) {
     resultEl.innerHTML = '<div class="admin-result err">Error: ' + esc(err.message) + '</div>';
-  } finally {
-    btn.disabled = false;
+    updateBulkCancelSelectionUI();
   }
 }
 
