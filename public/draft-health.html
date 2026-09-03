@@ -241,12 +241,26 @@ main{padding:14px 24px 28px;max-width:1400px;margin:0 auto}
         <div class="kpi-hint" id="kpiInvShortageValue"></div>
         <div class="kpi-hint action" id="kpiInvShortageHint">Click to export CSV</div>
       </div>
-      <div class="kpi-card clickable" id="kpiReadyCard" onclick="exportByStatus(['instock-ready'],'ready-to-release')">
-        <div class="kpi-label">Ready to Release</div>
+      <div class="kpi-card clickable" id="kpiReadyCard" onclick="exportReadyToRelease()">
+        <div class="kpi-label">Ready to Release (&ge;$75)</div>
         <div class="kpi-value ok" id="kpiReady">-</div>
         <div class="kpi-hint" id="kpiReadyValue"></div>
         <div class="kpi-hint action" id="kpiReadyHint">Click to export CSV</div>
       </div>
+    </div>
+
+    <div class="callout-panel" id="salesSmallReadyPanel" style="border-color:var(--green)">
+      <div class="callout-header" style="background:var(--green-light);border-bottom-color:var(--green)">
+        <div class="callout-title-wrap">
+          <div class="callout-title" style="color:var(--green)">Ready to Release Under $75 — Sales Follow-up</div>
+          <div class="callout-sub" id="salesSmallReadySub">—</div>
+        </div>
+        <div class="callout-count-wrap">
+          <div class="callout-count" id="salesSmallReadyCount" style="color:var(--green)">0</div>
+          <button class="callout-export-btn" id="salesSmallReadyExportBtn" style="background:var(--green)" onclick="exportReadySmallValue()">Export CSV</button>
+        </div>
+      </div>
+      <div class="callout-empty" id="salesSmallReadyEmpty" style="display:none">No small in-stock-ready drafts right now.</div>
     </div>
 
     <div class="ref-panel" id="excludedSkusPanel">
@@ -279,14 +293,6 @@ main{padding:14px 24px 28px;max-width:1400px;margin:0 auto}
     <div class="funnel-row" id="funnelRow"></div>
 
     <div class="split-panel" style="margin-top:16px">
-      <div class="split-panel-header">
-        <span class="split-panel-title flagged">Held for Value</span>
-        <span class="split-panel-sub" id="heldTotal">—</span>
-      </div>
-      <div class="split-buckets" id="heldBuckets" style="grid-template-columns:repeat(2,1fr)"></div>
-    </div>
-
-    <div class="split-panel">
       <div class="split-panel-header">
         <span class="split-panel-title clean">Backorder Children</span>
         <span class="split-panel-sub" id="childrenTotal">—</span>
@@ -479,12 +485,19 @@ function render(data) {
     document.getElementById('kpiInvShortageCard').style.cursor = 'default';
   }
 
-  var readyDrafts = allDrafts.filter(function(r) { return r.status === 'instock-ready'; });
-  setKpiCard('kpiReady', 'kpiReadyHint', 'kpiReadyCard', sc['instock-ready'] || 0);
+  // Ready to Release now excludes anything under the $75 floor (same threshold
+  // used for backorder-remainder holds) — a fully in-stock $12 draft isn't a
+  // fulfillment priority, it's a sales follow-up candidate (see the callout
+  // panel below). sc['instock-ready'] from the server is the unfiltered
+  // count across ALL values, so this filters client-side using totalPrice
+  // rather than trusting that count directly.
+  var readyDrafts = allDrafts.filter(function(r) { return r.status === 'instock-ready' && (r.totalPrice || 0) >= BACKORDER_HOLD_VALUE; });
+  setKpiCard('kpiReady', 'kpiReadyHint', 'kpiReadyCard', readyDrafts.length);
   document.getElementById('kpiReadyValue').textContent = readyDrafts.length ? fmtMoney(sumValue(readyDrafts)) + ' net' : '';
 
   renderFunnel();
   renderAddressGroups();
+  renderSalesSmallReady();
   updateBulkCancelPreview();
 }
 
@@ -530,7 +543,6 @@ function renderFunnel() {
     { key: 'pending-eval',    label: 'Pending Evaluation' },
     { key: 'waiting-instock', label: 'Re-flagged Out of Stock', desc: 'Was fully in stock at evaluation, then sold out before release' },
     { key: 'held',            label: 'Held for Value', cls: 'warn', rows: allDrafts.filter(function(r){ return HELD_STAGES.indexOf(r.pipelineStage) !== -1; }) },
-    { key: 'ready-release',   label: 'Ready for Release', cls: 'ok' },
   ];
 
   var html = stages.map(function(s, i) {
@@ -549,11 +561,6 @@ function renderFunnel() {
     return card + (i < stages.length - 1 ? '<div class="funnel-arrow">&#8594;</div>' : '');
   }).join('');
   document.getElementById('funnelRow').innerHTML = html;
-
-  renderStageBuckets('heldBuckets', 'heldTotal', [
-    { key: 'held-instock-low', label: 'Instock Low (<$150)' },
-    { key: 'held-both-low',    label: 'Both Low' },
-  ], 'held');
 
   renderStageBuckets('childrenBuckets', 'childrenTotal', [
     { key: 'split-remainder',          label: 'Remainder (<$150)', tint: 'tint-remainder' },
@@ -677,6 +684,48 @@ function exportSameAddress() {
   a.download = 'consolidation-opportunities-' + new Date().toISOString().slice(0, 10) + '.csv';
   a.click();
   URL.revokeObjectURL(url);
+}
+
+// ── Ready to Release, under $75 (sales follow-up) ────────────────────────────
+// These are fully in-stock drafts that never got here through the split
+// pipeline (status 'instock-ready' from classifyDraft, not the tag-driven
+// pipelineStage) but are too small to prioritize as a fulfillment release —
+// same $75 floor as the backorder-remainder hold threshold. Surfaced
+// separately rather than silently dropped, since sales may want to reach
+// out (upsell, combine with a future order, etc.) rather than let it sit.
+function getReadySmallValueRows() {
+  return allDrafts.filter(function(r) { return r.status === 'instock-ready' && (r.totalPrice || 0) < BACKORDER_HOLD_VALUE; });
+}
+
+function renderSalesSmallReady() {
+  var rows = getReadySmallValueRows();
+  var count = rows.length;
+  var value = rows.reduce(function(s, r) { return s + (r.totalPrice || 0); }, 0);
+
+  document.getElementById('salesSmallReadyCount').textContent = count.toLocaleString();
+
+  if (count === 0) {
+    document.getElementById('salesSmallReadySub').textContent = 'No matches found.';
+    document.getElementById('salesSmallReadyEmpty').style.display = 'block';
+    document.getElementById('salesSmallReadyExportBtn').style.display = 'none';
+  } else {
+    document.getElementById('salesSmallReadySub').textContent =
+      count + ' draft' + (count !== 1 ? 's' : '') + ' · ' + fmtMoney(value) + ' total · fully in stock, below the $' + BACKORDER_HOLD_VALUE + ' release floor';
+    document.getElementById('salesSmallReadyEmpty').style.display = 'none';
+    document.getElementById('salesSmallReadyExportBtn').style.display = '';
+  }
+}
+
+function exportReadyToRelease() {
+  var rows = allDrafts.filter(function(r) { return r.status === 'instock-ready' && (r.totalPrice || 0) >= BACKORDER_HOLD_VALUE; });
+  if (!rows.length) return;
+  doExport(rows, 'ready-to-release');
+}
+
+function exportReadySmallValue() {
+  var rows = getReadySmallValueRows();
+  if (!rows.length) return;
+  doExport(rows, 'ready-release-under-75-sales');
 }
 
 function exportInvShortage() {
