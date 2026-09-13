@@ -219,11 +219,12 @@ main{padding:14px 24px 28px;max-width:1400px;margin:0 auto}
 
     <div class="section-header"><span class="section-dot"></span><span class="section-title">Overview</span><div class="section-line"></div></div>
     <div class="kpi-grid">
-      <div class="kpi-card">
+      <div class="kpi-card clickable" id="kpiTotalCard" onclick="exportAllDrafts()">
         <div class="kpi-label">Total Open Drafts</div>
         <div class="kpi-value" id="kpiTotal">-</div>
         <div class="kpi-hint" id="kpiTotalValue"></div>
         <div class="kpi-hint">All statuses</div>
+        <div class="kpi-hint action" id="kpiTotalHint">Click to export CSV</div>
       </div>
       <div class="kpi-card clickable" id="kpiReviewCard" onclick="exportByStatus(['needs-review'],'needs-review')">
         <div class="kpi-label">Needs Review</div>
@@ -469,6 +470,12 @@ function render(data) {
 
   document.getElementById('kpiTotal').textContent = data.total.toLocaleString();
   document.getElementById('kpiTotalValue').textContent = fmtMoney(sumValue(allDrafts)) + ' net';
+  if (data.total === 0) {
+    document.getElementById('kpiTotalHint').textContent = 'None';
+    document.getElementById('kpiTotalHint').classList.remove('action');
+    document.getElementById('kpiTotalCard').classList.remove('clickable');
+    document.getElementById('kpiTotalCard').style.cursor = 'default';
+  }
 
   setKpiCard('kpiReview',     'kpiReviewHint', 'kpiReviewCard', sc['needs-review'] || 0);
   var needsReviewDrafts = allDrafts.filter(function(r) { return r.status === 'needs-review'; });
@@ -757,6 +764,14 @@ function exportByStatus(statuses, filename) {
   var rows = allDrafts.filter(function(r) { return statuses.indexOf(r.status) !== -1; });
   if (!rows.length) return;
   doExport(rows, filename);
+}
+
+// Whole draft-orders section: every open draft on the page, regardless of
+// status/pipeline stage — same row shape and CSV columns as every other
+// export on this page (doExport), so it drops into the same workflow.
+function exportAllDrafts() {
+  if (!allDrafts.length) return;
+  doExport(allDrafts, 'all-open-drafts');
 }
 
 function doExport(rows, filename) {
