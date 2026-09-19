@@ -779,7 +779,7 @@ function exportByStatus(statuses, filename) {
 }
 
 // Whole draft-orders section: every open draft on the page, regardless of
-// status/pipeline stage — same row shape and columns as every other
+// status/pipeline stage — same row shape and CSV columns as every other
 // export on this page (doExport), so it drops into the same workflow.
 function exportAllDrafts() {
   if (!allDrafts.length) return;
