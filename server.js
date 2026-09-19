@@ -1369,12 +1369,19 @@ app.post("/api/draft-health", async (req, res) => {
 
       // Compute in-stock value: lines where inventory covers the quantity (or untracked)
       let instockValue = 0;
+      // fullyInStock: EVERY line is covered by inventory (or untracked) — the
+      // same per-line test as instockValue above. Independent of tags/status,
+      // so the dashboard's "Ready to Release Under $75" box can be defined by
+      // actual stock rather than by whichever tag/status the draft carries.
+      let fullyInStock = lines.length > 0;
       for (const li of lines) {
         const invId = li.variant?.inventoryItem?.id;
         const avail = invId ? (inventoryMap[invId] ?? null) : null;
         const tracked = !!invId;
         if (!tracked || (avail !== null && avail >= li.quantity)) {
           instockValue += parseFloat(li.originalUnitPrice || 0) * (li.quantity || 0);
+        } else {
+          fullyInStock = false;
         }
       }
 
@@ -1413,6 +1420,7 @@ app.post("/api/draft-health", async (req, res) => {
         pipelineStage: classifySplitStage(draft.tags || []),
         shipDate: draft.metafield?.value || null,
         instockValue: parseFloat(instockValue.toFixed(2)),
+        fullyInStock,
         tags: draft.tags || [],
       };
     }).sort((a, b) => STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status));
