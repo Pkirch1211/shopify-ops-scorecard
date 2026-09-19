@@ -719,14 +719,26 @@ function exportSameAddress() {
 }
 
 // ── Ready to Release, under $75 (sales follow-up) ────────────────────────────
-// These are fully in-stock drafts that never got here through the split
-// pipeline (status 'instock-ready' from classifyDraft, not the tag-driven
-// pipelineStage) but are too small to prioritize as a fulfillment release —
-// same $75 floor as the backorder-remainder hold threshold. Surfaced
-// separately rather than silently dropped, since sales may want to reach
-// out (upsell, combine with a future order, etc.) rather than let it sit.
+// Drafts under the $75 release floor that are FULLY IN STOCK, whatever tag or
+// status the server has filed them under (npi-item, out-of-stock fallback,
+// split-remainder, etc.) — "in stock" is decided by inventory, not by whether
+// the instock-ready tag happens to be present. Too small to prioritize as a
+// fulfillment release, so they're surfaced for sales follow-up (upsell,
+// combine with a future order, etc.) rather than left to sit.
+//   - fullyInStock comes from the server (every line covered by inventory).
+//     If the server hasn't been updated yet it falls back to the old
+//     'instock-ready' status so the page still works.
+//   - instockValue > 0 keeps out empty / no-priced-line drafts.
+//   - excluded-customer accounts (Faire, TJX, customer care, samples...) are
+//     never sales follow-ups.
+function isFullyInStock(r) {
+  return r.fullyInStock === undefined ? r.status === 'instock-ready' : r.fullyInStock === true;
+}
 function getReadySmallValueRows() {
-  return allDrafts.filter(function(r) { return r.status === 'instock-ready' && (r.totalPrice || 0) < BACKORDER_HOLD_VALUE; });
+  return allDrafts.filter(function(r) {
+    return isFullyInStock(r) && (r.instockValue || 0) > 0 &&
+      (r.totalPrice || 0) < BACKORDER_HOLD_VALUE && r.status !== 'excluded-customer';
+  });
 }
 
 function renderSalesSmallReady() {
