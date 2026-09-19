@@ -719,14 +719,18 @@ function exportSameAddress() {
 }
 
 // ── Ready to Release, under $75 (sales follow-up) ────────────────────────────
-// These are fully in-stock drafts that never got here through the split
-// pipeline (status 'instock-ready' from classifyDraft, not the tag-driven
-// pipelineStage) but are too small to prioritize as a fulfillment release —
-// same $75 floor as the backorder-remainder hold threshold. Surfaced
-// separately rather than silently dropped, since sales may want to reach
-// out (upsell, combine with a future order, etc.) rather than let it sit.
+// Any draft carrying the instock-ready tag whose value is under the $75 floor
+// belongs here, REGARDLESS of its server-computed status or pipeline stage
+// (held-for-value, supply-blocked, needs-review, etc.). It's matched on the raw
+// tag rather than r.status so a draft can't drop out of this list just because
+// the classifier filed it under another bucket. Too small to prioritize as a
+// fulfillment release, so it's surfaced for sales follow-up (upsell, combine
+// with a future order, etc.) rather than left to sit.
 function getReadySmallValueRows() {
-  return allDrafts.filter(function(r) { return r.status === 'instock-ready' && (r.totalPrice || 0) < BACKORDER_HOLD_VALUE; });
+  return allDrafts.filter(function(r) {
+    var tags = (r.tags || []).map(function(t) { return String(t).toLowerCase(); });
+    return tags.indexOf('instock-ready') !== -1 && (r.totalPrice || 0) < BACKORDER_HOLD_VALUE;
+  });
 }
 
 function renderSalesSmallReady() {
