@@ -814,10 +814,9 @@ function doExport(rows, filename) {
 // a CSV of the same columns so exporting never just breaks.
 var EXCELJS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js';
 var XLSX_FONT = 'Aptos Narrow';
-// Palette pulled from the dashboard CSS: --green header, tan (the remainder-tint
-// tan) for alternating rows, --border for the thin row dividers.
+// Palette pulled from the dashboard CSS: --green header, --border for the thin
+// row dividers.
 var XLSX_HEADER_FILL = 'FF4A6741';
-var XLSX_BAND_FILL = 'FFF5EFE0';
 var XLSX_BORDER = 'FFD4D4CC';
 var XLSX_MONEY_FMT = '_([$$-409]* #,##0_);_([$$-409]* \\(#,##0\\);_([$$-409]* "-"??_);_(@_)';
 var XLSX_DATE_FMT = 'mm-dd-yy';
@@ -894,19 +893,6 @@ function buildXlsxWorkbook(sheetName, columns, rows) {
   columns.forEach(function(c, i) {
     ws.getColumn(i + 1).width = Math.min(60, Math.max(8, widths[i] + 2));
   });
-
-  // Tan banding via conditional formatting (not static fills) so the stripes
-  // stay even after someone sorts or filters the sheet.
-  if (rows.length) {
-    ws.addConditionalFormatting({
-      ref: 'A2:' + ws.getColumn(columns.length).letter + (rows.length + 1),
-      rules: [{
-        type: 'expression',
-        formulae: ['MOD(ROW(),2)=0'],
-        style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: XLSX_BAND_FILL } } },
-      }],
-    });
-  }
 
   ws.views = [{ state: 'frozen', ySplit: 1 }];
   ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: rows.length + 1, column: columns.length } };
