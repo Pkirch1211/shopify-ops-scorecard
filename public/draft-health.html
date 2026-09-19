@@ -224,32 +224,32 @@ main{padding:14px 24px 28px;max-width:1400px;margin:0 auto}
         <div class="kpi-value" id="kpiTotal">-</div>
         <div class="kpi-hint" id="kpiTotalValue"></div>
         <div class="kpi-hint">All statuses</div>
-        <div class="kpi-hint action" id="kpiTotalHint">Click to export CSV</div>
+        <div class="kpi-hint action" id="kpiTotalHint">Click to export Excel</div>
       </div>
       <div class="kpi-card clickable" id="kpiReviewCard" onclick="exportByStatus(['needs-review'],'needs-review')">
         <div class="kpi-label">Needs Review</div>
         <div class="kpi-value warn" id="kpiReview">-</div>
         <div class="kpi-hint" id="kpiReviewValue"></div>
         <div class="kpi-hint" id="kpiReviewCustomers"></div>
-        <div class="kpi-hint action" id="kpiReviewHint">Click to export CSV</div>
+        <div class="kpi-hint action" id="kpiReviewHint">Click to export Excel</div>
       </div>
       <div class="kpi-card clickable" id="kpiLowStockCard" onclick="exportLowStock()">
         <div class="kpi-label">Low Stock</div>
         <div class="kpi-value warn" id="kpiLowStock">-</div>
         <div class="kpi-hint" id="kpiLowStockValue"></div>
-        <div class="kpi-hint action" id="kpiLowStockHint">Click to export CSV</div>
+        <div class="kpi-hint action" id="kpiLowStockHint">Click to export Excel</div>
       </div>
       <div class="kpi-card clickable" id="kpiInvShortageCard" onclick="exportInvShortage()">
         <div class="kpi-label">Inventory Shortage</div>
         <div class="kpi-value warn" id="kpiInvShortage">-</div>
         <div class="kpi-hint" id="kpiInvShortageValue"></div>
-        <div class="kpi-hint action" id="kpiInvShortageHint">Click to export CSV</div>
+        <div class="kpi-hint action" id="kpiInvShortageHint">Click to export Excel</div>
       </div>
       <div class="kpi-card clickable" id="kpiReadyCard" onclick="exportReadyToRelease()">
         <div class="kpi-label">Ready to Release (&ge;$75)</div>
         <div class="kpi-value ok" id="kpiReady">-</div>
         <div class="kpi-hint" id="kpiReadyValue"></div>
-        <div class="kpi-hint action" id="kpiReadyHint">Click to export CSV</div>
+        <div class="kpi-hint action" id="kpiReadyHint">Click to export Excel</div>
       </div>
     </div>
 
@@ -261,7 +261,7 @@ main{padding:14px 24px 28px;max-width:1400px;margin:0 auto}
         </div>
         <div class="callout-count-wrap">
           <div class="callout-count" id="salesSmallReadyCount" style="color:var(--green)">0</div>
-          <button class="callout-export-btn" id="salesSmallReadyExportBtn" style="background:var(--green)" onclick="exportReadySmallValue()">Export CSV</button>
+          <button class="callout-export-btn" id="salesSmallReadyExportBtn" style="background:var(--green)" onclick="exportReadySmallValue()">Export Excel</button>
         </div>
       </div>
       <div class="callout-empty" id="salesSmallReadyEmpty" style="display:none">No small in-stock-ready drafts right now.</div>
@@ -328,7 +328,7 @@ main{padding:14px 24px 28px;max-width:1400px;margin:0 auto}
         </div>
         <div class="callout-count-wrap">
           <div class="callout-count" id="addressCalloutCount">0</div>
-          <button class="callout-export-btn" id="addressExportBtn" onclick="exportSameAddress()">Export CSV</button>
+          <button class="callout-export-btn" id="addressExportBtn" onclick="exportSameAddress()">Export Excel</button>
         </div>
       </div>
       <div class="callout-empty" id="addressCalloutEmpty" style="display:none">No open drafts currently share an exact shipping address.</div>
@@ -450,6 +450,9 @@ async function runFetch() {
     render(data);
     setStatus('live');
     scheduleRefresh();
+    // Warm the Excel library in the background (no-op once loaded) so the
+    // first export click isn't waiting on a ~1MB download.
+    loadExcelJs().catch(function() {});
   } catch (err) {
     showError(err.message);
     setStatus('error');
@@ -687,23 +690,32 @@ function renderAddressGroups() {
   }
 }
 
+// Same-address export goes through the shared exportTable() helper like every
+// other export. Rows are flattened to one entry per draft, carrying its group
+// number / size / address label alongside the draft row itself.
+var ADDRESS_EXPORT_COLUMNS = [
+  { header: 'Address Group',     type: 'int',   get: function(x) { return x.group; } },
+  { header: 'Drafts At Address', type: 'int',   get: function(x) { return x.groupSize; } },
+  { header: 'Matched On',        type: 'text',  get: function(x) { return x.r.addressSource || ''; } },
+  { header: 'Ship Address',      type: 'text',  get: function(x) { return x.label || ''; } },
+  { header: 'Draft #',           type: 'text',  get: function(x) { return x.r.name; } },
+  { header: 'PO Number',         type: 'text',  get: function(x) { return x.r.poNumber || ''; } },
+  { header: 'Company',           type: 'text',  get: function(x) { return x.r.company || ''; } },
+  { header: 'Email',             type: 'text',  get: function(x) { return x.r.email; } },
+  { header: 'Status',            type: 'text',  get: function(x) { return x.r.status; } },
+  { header: 'Order Value',       type: 'money', get: function(x) { return x.r.totalPrice; } },
+  { header: 'Age (days)',        type: 'int',   get: function(x) { return draftAgeDays(x.r); } },
+];
+
 function exportSameAddress() {
   if (!addressGroupsCache.length) return;
-  var now = Date.now();
-  var lines = [['Address Group', 'Drafts At Address', 'Matched On', 'Ship Address', 'Draft #', 'PO Number', 'Company', 'Email', 'Status', 'Order Value', 'Age (days)'].map(csvEsc).join(',')];
+  var flat = [];
   addressGroupsCache.forEach(function(g, gi) {
     g.rows.forEach(function(r) {
-      var age = Math.floor((now - new Date(r.createdAt).getTime()) / 864e5);
-      lines.push([gi + 1, g.rows.length, r.addressSource || '', g.label || '', r.name, r.poNumber || '', r.company || '', r.email, r.status, r.totalPrice.toFixed(2), age].map(csvEsc).join(','));
+      flat.push({ group: gi + 1, groupSize: g.rows.length, label: g.label, r: r });
     });
   });
-  var blob = new Blob([lines.join('\n')], { type: 'text/csv' });
-  var url = URL.createObjectURL(blob);
-  var a = document.createElement('a');
-  a.href = url;
-  a.download = 'consolidation-opportunities-' + new Date().toISOString().slice(0, 10) + '.csv';
-  a.click();
-  URL.revokeObjectURL(url);
+  exportTable('consolidation-opportunities', ADDRESS_EXPORT_COLUMNS, flat);
 }
 
 // ── Ready to Release, under $75 (sales follow-up) ────────────────────────────
@@ -767,27 +779,178 @@ function exportByStatus(statuses, filename) {
 }
 
 // Whole draft-orders section: every open draft on the page, regardless of
-// status/pipeline stage — same row shape and CSV columns as every other
+// status/pipeline stage — same row shape and columns as every other
 // export on this page (doExport), so it drops into the same workflow.
 function exportAllDrafts() {
   if (!allDrafts.length) return;
   doExport(allDrafts, 'all-open-drafts');
 }
 
+// ── Export columns (standard draft row) ─────────────────────────────────────
+function draftAgeDays(r) {
+  return Math.floor((Date.now() - new Date(r.createdAt).getTime()) / 864e5);
+}
+
+var DRAFT_EXPORT_COLUMNS = [
+  { header: 'Draft #',        type: 'text',  get: function(r) { return r.name; } },
+  { header: 'Company',        type: 'text',  get: function(r) { return r.company || ''; } },
+  { header: 'Email',          type: 'text',  get: function(r) { return r.email; } },
+  { header: '12mo B2B Spend', type: 'money', get: function(r) { return r.customerSpend12mo || 0; } },
+  { header: 'Status',         type: 'text',  get: function(r) { return r.status; } },
+  { header: 'Order Value',    type: 'money', get: function(r) { return r.totalPrice; } },
+  { header: 'In-Stock Value', type: 'money', get: function(r) { return r.instockValue; } },
+  { header: 'Age (days)',     type: 'int',   get: function(r) { return draftAgeDays(r); } },
+  { header: 'Ship Date',      type: 'date',  get: function(r) { return r.shipDate || ''; } },
+];
+
 function doExport(rows, filename) {
-  var now = Date.now();
-  var lines = [['Draft #', 'Company', 'Email', '12mo B2B Spend', 'Status', 'Order Value', 'In-Stock Value', 'Age (days)', 'Ship Date'].map(csvEsc).join(',')];
-  rows.forEach(function(r) {
-    var age = Math.floor((now - new Date(r.createdAt).getTime()) / 864e5);
-    lines.push([r.name, r.company || '', r.email, (r.customerSpend12mo || 0).toFixed(2), r.status, r.totalPrice.toFixed(2), r.instockValue.toFixed(2), age, r.shipDate || ''].map(csvEsc).join(','));
+  exportTable(filename, DRAFT_EXPORT_COLUMNS, rows);
+}
+
+// ── Excel export helpers ─────────────────────────────────────────────────────
+// exportTable() is the single entry point for every export on this page.
+// Columns are defined once ({ header, type, get }) and written as .xlsx via
+// ExcelJS; if the library can't load (offline / CDN blocked) it falls back to
+// a CSV of the same columns so exporting never just breaks.
+var EXCELJS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js';
+var XLSX_FONT = 'Aptos Narrow';
+// Palette pulled from the dashboard CSS: --green header, tan (the remainder-tint
+// tan) for alternating rows, --border for the thin row dividers.
+var XLSX_HEADER_FILL = 'FF4A6741';
+var XLSX_BAND_FILL = 'FFF5EFE0';
+var XLSX_BORDER = 'FFD4D4CC';
+var XLSX_MONEY_FMT = '_([$$-409]* #,##0_);_([$$-409]* \\(#,##0\\);_([$$-409]* "-"??_);_(@_)';
+var XLSX_DATE_FMT = 'mm-dd-yy';
+var XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+var excelJsPromise = null;
+
+function loadExcelJs() {
+  if (window.ExcelJS) return Promise.resolve();
+  if (excelJsPromise) return excelJsPromise;
+  excelJsPromise = new Promise(function(resolve, reject) {
+    var s = document.createElement('script');
+    s.src = EXCELJS_URL;
+    s.onload = function() { resolve(); };
+    s.onerror = function() { excelJsPromise = null; reject(new Error('Could not load Excel library')); };
+    document.head.appendChild(s);
   });
-  var blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  return excelJsPromise;
+}
+
+// Ship dates come from the server as 'YYYY-MM-DD' strings. Convert to a real
+// date (UTC midnight, so Excel shows the same calendar day) so the column
+// sorts and filters as dates. Anything unparseable stays as text.
+function toExcelDate(v) {
+  if (!v) return null;
+  var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v));
+  return m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])) : null;
+}
+
+function xlsxCellValue(col, raw) {
+  if (col.type === 'money' || col.type === 'int') {
+    var n = Number(raw);
+    return (raw === null || raw === undefined || raw === '' || isNaN(n)) ? null : n;
+  }
+  if (col.type === 'date') {
+    return toExcelDate(raw) || (raw ? String(raw) : null);
+  }
+  return (raw === null || raw === undefined) ? '' : String(raw);
+}
+
+function buildXlsxWorkbook(sheetName, columns, rows) {
+  var wb = new ExcelJS.Workbook();
+  var safeName = String(sheetName).replace(/[\\\/\?\*\[\]:]/g, '-').slice(0, 31) || 'Export';
+  var ws = wb.addWorksheet(safeName);
+
+  // Header row: leave room for the autofilter dropdown arrow.
+  var widths = columns.map(function(c) { return c.header.length + 3; });
+  var headerRow = ws.addRow(columns.map(function(c) { return c.header; }));
+  headerRow.eachCell(function(cell) {
+    cell.font = { name: XLSX_FONT, size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: XLSX_HEADER_FILL } };
+  });
+
+  rows.forEach(function(r) {
+    var vals = columns.map(function(c, i) {
+      var v = xlsxCellValue(c, c.get(r));
+      var len = 0;
+      if (v === null) len = 0;
+      else if (c.type === 'money') len = Math.round(v).toLocaleString('en-US').length + 4;
+      else if (v instanceof Date) len = 10;
+      else len = String(v).length;
+      if (len > widths[i]) widths[i] = len;
+      return v;
+    });
+    var row = ws.addRow(vals);
+    columns.forEach(function(c, i) {
+      var cell = row.getCell(i + 1);
+      cell.font = { name: XLSX_FONT, size: 11 };
+      cell.border = { bottom: { style: 'thin', color: { argb: XLSX_BORDER } } };
+      if (c.type === 'money') cell.numFmt = XLSX_MONEY_FMT;
+      else if (c.type === 'date') cell.numFmt = XLSX_DATE_FMT;
+    });
+  });
+
+  columns.forEach(function(c, i) {
+    ws.getColumn(i + 1).width = Math.min(60, Math.max(8, widths[i] + 2));
+  });
+
+  // Tan banding via conditional formatting (not static fills) so the stripes
+  // stay even after someone sorts or filters the sheet.
+  if (rows.length) {
+    ws.addConditionalFormatting({
+      ref: 'A2:' + ws.getColumn(columns.length).letter + (rows.length + 1),
+      rules: [{
+        type: 'expression',
+        formulae: ['MOD(ROW(),2)=0'],
+        style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: XLSX_BAND_FILL } } },
+      }],
+    });
+  }
+
+  ws.views = [{ state: 'frozen', ySplit: 1 }];
+  ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: rows.length + 1, column: columns.length } };
+  return wb;
+}
+
+function downloadBlob(blob, fileName) {
   var url = URL.createObjectURL(blob);
   var a = document.createElement('a');
   a.href = url;
-  a.download = filename + '-' + new Date().toISOString().slice(0, 10) + '.csv';
+  a.download = fileName;
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  document.body.removeChild(a);
+  setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+}
+
+// CSV fallback. Prefixed with a UTF-8 BOM so Excel doesn't mangle apostrophes
+// and accented characters in company names.
+function downloadCsv(stampedName, columns, rows) {
+  var lines = [columns.map(function(c) { return csvEsc(c.header); }).join(',')];
+  rows.forEach(function(r) {
+    lines.push(columns.map(function(c) {
+      var raw = c.get(r);
+      if (c.type === 'money') {
+        var n = parseFloat(raw);
+        raw = isNaN(n) ? '' : n.toFixed(2);
+      }
+      return csvEsc(raw);
+    }).join(','));
+  });
+  downloadBlob(new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' }), stampedName + '.csv');
+}
+
+function exportTable(filename, columns, rows) {
+  var stamped = filename + '-' + new Date().toISOString().slice(0, 10);
+  loadExcelJs()
+    .then(function() { return buildXlsxWorkbook(filename, columns, rows).xlsx.writeBuffer(); })
+    .then(function(buf) { downloadBlob(new Blob([buf], { type: XLSX_MIME }), stamped + '.xlsx'); })
+    .catch(function(err) {
+      console.error('Excel export failed, falling back to CSV:', err);
+      downloadCsv(stamped, columns, rows);
+      showError('Excel export unavailable — downloaded a CSV instead.');
+    });
 }
 
 function setKpiCard(valId, hintId, cardId, count) {
