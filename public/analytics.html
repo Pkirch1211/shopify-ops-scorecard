@@ -220,6 +220,7 @@ var groupsStore = [];           // groups for detail toggling
 var hlIndex = -1, matches = [];
 var sortState = { key: null, dir: 'desc' };
 var runId = 0, runTimer = null;
+var fulPending = false, fulError = '';   // fulfilled history loads after the open numbers
 
 function $(id) { return document.getElementById(id); }
 function esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -295,7 +296,7 @@ async function loadDirectory() {
   try {
     var data = await api('/api/analytics/customers');
     directory = (data.customers || []).map(function(c) {
-      c.hay = (c.label + ' ' + (c.emails || []).join(' ')).toLowerCase();
+      c.hay = (c.label + ' ' + (c.members || []).join(' ') + ' ' + (c.emails || []).join(' ')).toLowerCase();
       c.ids.forEach(function(id) { idToEntry[id] = c; });
       return c;
     });
@@ -358,10 +359,13 @@ function wireCombo() {
 
 function isActive(c) { return (c.ytd || 0) > 0 || (c.drafts || 0) > 0; }
 
+function locNote(c) { return c.locations > 1 ? c.locations + ' locations · ' : ''; }
+
 function comboMeta(c) {
+  if (c.ytd > 0 && c.locations > 1) return locNote(c) + usdK(c.ytd) + ' YTD · ' + plural(c.ytdOrders, 'order');
   if (c.ytd > 0) return usdK(c.ytd) + ' YTD · ' + plural(c.ytdOrders, 'order');
-  if (c.drafts > 0) return plural(c.drafts, 'open draft');
-  return 'no orders this year';
+  if (c.drafts > 0) return locNote(c) + plural(c.drafts, 'open draft');
+  return locNote(c) + 'no orders this year';
 }
 
 function renderCombo() {
@@ -453,6 +457,7 @@ function maybeRun() {
   if (!ready) {
     runId++;                       // drop any request still in flight
     lastData = null;
+    fulPending = false; fulError = '';
     $('csvBtn').style.display = 'none';
     $('status').textContent = '';
     renderEmpty();
@@ -461,30 +466,71 @@ function maybeRun() {
   runQuery(skus);
 }
 
+// One order can show up in both halves (a partly shipped order); fold them back together.
+function mergeRecords(list) {
+  var map = {}, out = [];
+  list.forEach(function(r) {
+    var k = r.type + '|' + r.name + '|' + r.sku + '|' + r.customerId;
+    if (!map[k]) { map[k] = Object.assign({}, r); out.push(map[k]); }
+    else {
+      var m = map[k];
+      m.open += r.open; m.fulfilled += r.fulfilled;
+      m.openValue = Math.round(((m.openValue || 0) + (r.openValue || 0)) * 100) / 100;
+      m.fulfilledValue = Math.round(((m.fulfilledValue || 0) + (r.fulfilledValue || 0)) * 100) / 100;
+    }
+  });
+  return out;
+}
+
 async function runQuery(skus) {
   var my = ++runId;
   var ids = [];
   selected.forEach(function(c) { ids = ids.concat(c.ids); });
   var r = periodRange();
   lastReqSkus = skus;
+  lastData = null;
+  fulPending = true; fulError = '';
+  $('csvBtn').style.display = 'none';
   $('status').textContent = 'Searching drafts and orders…';
   $('results').innerHTML = '<div class="state-panel"><div class="spinner"></div><div class="state-sub">Searching drafts and orders…</div></div>';
-  try {
-    var data = await api('/api/analytics/query', {
+
+  function req(phase) {
+    return api('/api/analytics/query', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ customerIds: ids, skus: skus, from: r.from, to: r.to }),
+      body: JSON.stringify({ customerIds: ids, skus: skus, from: r.from, to: r.to, phase: phase }),
     });
+  }
+  // Both halves start now; the open half finishes first and paints immediately.
+  var fulP = req('fulfilled');
+  fulP.catch(function() {});         // handled below; avoids an unhandled rejection if open fails first
+  try {
+    var open = await req('open');
     if (my !== runId) return;
-    lastData = data;
+    lastData = { asOf: open.asOf, range: open.range, records: open.records };
     render();
-    $('status').textContent = 'As of ' + new Date(data.asOf).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    $('csvBtn').style.display = data.records.length ? 'inline-block' : 'none';
+    $('status').textContent = 'Open orders loaded · loading fulfilled history…';
   } catch (err) {
     if (my !== runId) return;
+    fulPending = false;
     showError(err.message);
     $('status').textContent = '';
     renderEmpty();
+    return;
   }
+  try {
+    var ful = await fulP;
+    if (my !== runId) return;
+    lastData.records = mergeRecords(lastData.records.concat(ful.records));
+  } catch (err) {
+    if (my !== runId) return;
+    fulError = err.message;
+    showError('Fulfilled history could not load: ' + err.message);
+  }
+  fulPending = false;
+  render();
+  $('status').textContent = 'As of ' + new Date(lastData.asOf).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) +
+    (fulError ? ' · fulfilled unavailable' : '');
+  $('csvBtn').style.display = lastData.records.length ? 'inline-block' : 'none';
 }
 
 // ── Rendering ────────────────────────────────────────────────────────────────
@@ -498,7 +544,7 @@ function renderEmpty() {
 
 function companyOf(r) {
   var e = idToEntry[r.customerId];
-  return e ? { key: e.key, label: e.label } : { key: 'x:' + r.label.toLowerCase(), label: r.label };
+  return e ? { key: e.key, label: e.label, locations: e.locations } : { key: 'x:' + r.label.toLowerCase(), label: r.label };
 }
 
 // Order counts are distinct drafts/orders, never summed across rows, because
@@ -542,7 +588,14 @@ function cols() {
   ];
 }
 
-function tile(label, units, money, hint, primary) {
+function tile(label, units, money, hint, primary, state) {
+  // state: 'loading' | 'error' for the Fulfilled tile while its history is still coming in
+  if (state) {
+    return '<div class="kpi-card"><div class="kpi-label">' + label + '</div>' +
+      '<div class="kpi-units" style="color:var(--dim)">' + (state === 'loading' ? '…' : '—') + '</div>' +
+      '<div class="kpi-money" style="color:var(--dim)">&nbsp;</div>' +
+      '<div class="kpi-hint">' + (state === 'loading' ? 'loading fulfilled history…' : 'could not load') + '</div></div>';
+  }
   return '<div class="kpi-card' + (primary ? ' primary' : '') + '"><div class="kpi-label">' + label + '</div>' +
     '<div class="kpi-units">' + num(units) + '<small>units</small></div>' +
     '<div class="kpi-money">' + usd(money) + '</div>' +
@@ -566,7 +619,7 @@ function render() {
     tile('On order now', all.total, all.totalV, plural(all.orders, 'order') + ' · ' + plural(all.nDrafts, 'draft') + ', ' + all.nUnf + ' unfulfilled', true) +
     tile('Open drafts', all.drafts, all.draftsV, plural(all.nDrafts, 'draft')) +
     tile('Unfulfilled', all.unf, all.unfV, plural(all.nUnf, 'order')) +
-    tile('Fulfilled', all.ful, all.fulV, plural(all.nFul, 'order')) +
+    tile('Fulfilled', all.ful, all.fulV, plural(all.nFul, 'order'), false, fulPending ? 'loading' : (fulError ? 'error' : '')) +
     '</div>';
 
   html += '<div class="section-header"><span class="section-dot"></span><span class="section-title">' +
@@ -591,7 +644,7 @@ function render() {
       var byCo = {}, keys = [];
       sr.forEach(function(r) {
         var co = companyOf(r);
-        if (!byCo[co.key]) { byCo[co.key] = { label: co.label, sub: '', recs: [] }; keys.push(co.key); }
+        if (!byCo[co.key]) { byCo[co.key] = { label: co.label, sub: co.locations > 1 ? co.locations + ' locations' : '', recs: [] }; keys.push(co.key); }
         byCo[co.key].recs.push(r);
       });
       var desc = sr.length ? sr[0].title : '';
@@ -634,8 +687,9 @@ function table(firstCol, groupsIn, hideSub, useDefault) {
       C.map(function(c) {
         var cls = [];
         if (c.sep) cls.push('dsep');
-        if (!t[c.k]) cls.push('zero'); else if (c.strong) cls.push('strong');
-        return '<td' + (cls.length ? ' class="' + cls.join(' ') + '"' : '') + '>' + c.f(t[c.k]) + '</td>';
+        var waiting = (fulPending || fulError) && (c.k === 'ful' || c.k === 'fulV');
+        if (waiting || !t[c.k]) cls.push('zero'); else if (c.strong) cls.push('strong');
+        return '<td' + (cls.length ? ' class="' + cls.join(' ') + '"' : '') + '>' + (waiting ? (fulPending ? '…' : '—') : c.f(t[c.k])) + '</td>';
       }).join('') + '</tr>';
     rows += '<tr class="detail" id="d' + gi + '"><td colspan="' + span + '"><div class="detail-inner">' + detail(g.recs) + '</div></td></tr>';
     return rows;
@@ -645,7 +699,8 @@ function table(firstCol, groupsIn, hideSub, useDefault) {
   if (groups.length > 1) {
     var gt = totals(allRecs);
     foot = '<tr class="total"><td>Total</td>' + C.map(function(c) {
-      return '<td' + (c.sep ? ' class="dsep"' : '') + '>' + c.f(gt[c.k]) + '</td>';
+      var waiting = (fulPending || fulError) && (c.k === 'ful' || c.k === 'fulV');
+      return '<td' + (c.sep ? ' class="dsep"' : '') + '>' + (waiting ? (fulPending ? '…' : '—') : c.f(gt[c.k])) + '</td>';
     }).join('') + '</tr>';
   }
   var head = '<tr><th data-k="label" class="' + (sortState.key === 'label' ? 'sorted' : '') + '">' + esc(firstCol) + arrow('label') + '</th>' +
