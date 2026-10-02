@@ -46,6 +46,10 @@ nav{display:flex;gap:3px}
 .combo-item.hl,.combo-item:hover{background:var(--green-light)}
 .combo-item .sub{font-size:11px;color:var(--dim);white-space:nowrap}
 .combo-empty{padding:10px 11px;font-size:12px;color:var(--dim)}
+.combo-head{padding:7px 11px;font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);background:var(--surface2);border-bottom:1px solid var(--border)}
+.combo-item.idle{color:var(--muted)}
+.combo-item .meta{font-size:11px;color:var(--green);white-space:nowrap;font-variant-numeric:tabular-nums}
+.combo-item.idle .meta{color:var(--dim)}
 .chips{display:flex;flex-wrap:wrap;gap:6px}
 .chips:empty{display:none}
 .chip{background:var(--green-light);border:1px solid var(--green);color:var(--green);font-size:12px;font-weight:500;padding:3px 5px 3px 9px;border-radius:2px;display:inline-flex;align-items:center;gap:6px}
@@ -221,6 +225,12 @@ function $(id) { return document.getElementById(id); }
 function esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function num(n) { return (n || 0).toLocaleString('en-US'); }
 function usd(n) { return '$' + Math.round(n || 0).toLocaleString('en-US'); }
+function usdK(n) {
+  n = n || 0;
+  if (n >= 1e6) return '$' + (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+  if (n >= 1e3) return '$' + Math.round(n / 1e3) + 'k';
+  return '$' + Math.round(n);
+}
 function plural(n, one, many) { return n + ' ' + (n === 1 ? one : (many || one + 's')); }
 function ymd(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
 function fmtDate(s) { return new Date(s + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); }
@@ -290,7 +300,8 @@ async function loadDirectory() {
       return c;
     });
     $('custInput').disabled = false;
-    $('custInput').placeholder = 'Type a company name…  (' + directory.length.toLocaleString() + ' customers)';
+    var active = directory.filter(isActive).length;
+    $('custInput').placeholder = 'Type a company name…  (' + active.toLocaleString() + ' active this year, ' + directory.length.toLocaleString() + ' total)';
   } catch (err) {
     $('custInput').placeholder = 'Customer list unavailable';
     showError('Could not load customers: ' + err.message);
@@ -345,24 +356,45 @@ function wireCombo() {
   });
 }
 
+function isActive(c) { return (c.ytd || 0) > 0 || (c.drafts || 0) > 0; }
+
+function comboMeta(c) {
+  if (c.ytd > 0) return usdK(c.ytd) + ' YTD · ' + plural(c.ytdOrders, 'order');
+  if (c.drafts > 0) return plural(c.drafts, 'open draft');
+  return 'no orders this year';
+}
+
 function renderCombo() {
   var q = $('custInput').value.trim().toLowerCase(), list = $('comboList');
   var chosen = {};
   selected.forEach(function(c) { chosen[c.key] = true; });
+  var pool = directory.filter(function(c) { return !chosen[c.key]; });
+  var head = '';
   if (!q) {
-    matches = directory.filter(function(c) { return !chosen[c.key]; }).slice(0, 12);
+    // Nothing typed: show who's actually buying this year, biggest first.
+    matches = pool.filter(isActive)
+      .sort(function(a, b) { return (b.ytd || 0) - (a.ytd || 0) || (b.drafts || 0) - (a.drafts || 0); })
+      .slice(0, 15);
+    if (matches.length) head = '<div class="combo-head">Top customers this year · type to search all ' + directory.length.toLocaleString() + '</div>';
+    else matches = pool.slice(0, 15);   // no volume data available: fall back to A–Z
   } else {
-    matches = directory.filter(function(c) { return !chosen[c.key]; })
-      .map(function(c) { return { c: c, s: fuzzy(q, c.hay) }; })
+    // Typing: best text match wins, with a nudge toward customers that buy.
+    matches = pool
+      .map(function(c) {
+        var s = fuzzy(q, c.hay);
+        if (s > 0 && c.ytd > 0) s += Math.min(25, Math.log10(c.ytd + 1) * 4);
+        else if (s > 0 && c.drafts > 0) s += 5;
+        return { c: c, s: s };
+      })
       .filter(function(x) { return x.s > 0; })
       .sort(function(a, b) { return b.s - a.s; })
-      .slice(0, 12).map(function(x) { return x.c; });
+      .slice(0, 15).map(function(x) { return x.c; });
   }
   hlIndex = matches.length ? 0 : -1;
   list.innerHTML = matches.length
-    ? matches.map(function(c, i) {
-        return '<div class="combo-item' + (i === 0 ? ' hl' : '') + '" data-i="' + i + '"><span>' + esc(c.label) + '</span>' +
-          (c.ids.length > 1 ? '<span class="sub">' + c.ids.length + ' contacts</span>' : '') + '</div>';
+    ? head + matches.map(function(c, i) {
+        return '<div class="combo-item' + (i === 0 ? ' hl' : '') + (isActive(c) ? '' : ' idle') + '" data-i="' + i + '"><span>' + esc(c.label) + '</span>' +
+          '<span class="meta">' + esc(comboMeta(c)) + '</span></div>';
       }).join('')
     : '<div class="combo-empty">No matching customers</div>';
   list.style.display = 'block';
