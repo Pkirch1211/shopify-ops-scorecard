@@ -11,10 +11,10 @@
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;min-height:100vh}
 header{position:sticky;top:0;z-index:100;display:grid;grid-template-columns:auto 1fr auto;align-items:stretch;border-bottom:2px solid var(--border);background:var(--surface)}
-.header-brand{background:var(--green-bg);color:#fff;padding:10px 22px;display:flex;flex-direction:column;justify-content:center}
+.header-brand{background:var(--green-bg);color:#fff;padding:14px 22px;display:flex;flex-direction:column;justify-content:center}
 .brand-name{font-size:15px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
 .brand-sub{font-size:9px;letter-spacing:.14em;text-transform:uppercase;opacity:.65;margin-top:2px}
-.header-title{padding:10px 24px;display:flex;flex-direction:column;justify-content:center;border-right:1px solid var(--border)}
+.header-title{padding:14px 24px;display:flex;flex-direction:column;justify-content:center;border-right:1px solid var(--border)}
 .header-title h1{font-size:15px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
 .header-title p{font-size:10px;color:var(--muted);margin-top:3px;letter-spacing:.05em}
 .header-right{display:flex;align-items:center;gap:20px;padding:0 24px}
@@ -28,11 +28,11 @@ nav{display:flex;gap:3px}
 .refresh-dot.fetching{background:var(--warn);animation:spin .7s linear infinite;border-radius:0;width:8px;height:8px}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 @keyframes spin{to{transform:rotate(360deg)}}
-.controls-bar{display:flex;align-items:center;gap:10px;padding:8px 24px;background:var(--surface2);border-bottom:1px solid var(--border)}
+.controls-bar{display:flex;align-items:center;gap:10px;padding:14px 28px;background:var(--surface2);border-bottom:1px solid var(--border)}
 .fetch-time{font-size:10px;color:var(--dim)}
 .next-refresh{font-size:10px;color:var(--dim);margin-left:auto}
-main{padding:14px 24px 28px;max-width:1400px;margin:0 auto}
-.section-header{display:flex;align-items:center;gap:10px;margin-bottom:8px;margin-top:18px}
+main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
+.section-header{display:flex;align-items:center;gap:10px;margin-bottom:12px;margin-top:28px}
 .section-header:first-child{margin-top:0}
 .section-dot{width:6px;height:6px;border-radius:50%;background:var(--green);flex-shrink:0}
 .section-title{font-size:10px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
@@ -43,44 +43,37 @@ main{padding:14px 24px 28px;max-width:1400px;margin:0 auto}
 .state-sub{font-size:13px;color:var(--muted);max-width:340px;line-height:1.6}
 .spinner{width:16px;height:16px;border:2px solid var(--border2);border-top-color:var(--green);border-radius:50%;animation:spin .7s linear infinite}
 .kpi-grid{display:grid;grid-template-columns:repeat(5,1fr);border:1px solid var(--border);border-radius:3px;overflow:hidden;background:var(--border);gap:1px;box-shadow:var(--shadow)}
-.kpi-card{background:var(--surface);padding:13px 16px;cursor:default}
+.kpi-card{background:var(--surface);padding:18px 20px;cursor:default}
 .kpi-card.clickable{cursor:pointer;transition:background .12s}
 .kpi-card.clickable:hover{background:#eeeee9}
-.kpi-label{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
-.kpi-value{font-size:26px;font-weight:700;color:var(--text);line-height:1}
+.kpi-label{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+.kpi-value{font-size:32px;font-weight:700;color:var(--text);line-height:1}
 .kpi-value.warn{color:var(--warn)}
 .kpi-value.danger{color:var(--danger)}
 .kpi-value.ok{color:var(--green)}
-.kpi-hint{font-size:10px;color:var(--dim);margin-top:5px}
+.kpi-hint{font-size:10px;color:var(--dim);margin-top:8px}
 .kpi-hint.action{color:var(--green)}
-.split-panel{border:1px solid var(--border);border-radius:3px;overflow:hidden;box-shadow:var(--shadow);margin-bottom:10px}
+.split-panel{border:1px solid var(--border);border-radius:3px;overflow:hidden;box-shadow:var(--shadow);margin-bottom:16px}
 .split-panel:last-child{margin-bottom:0}
-.split-panel-header{padding:9px 14px;background:var(--surface2);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.split-panel-header{padding:12px 16px;background:var(--surface2);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
 .split-panel-title{font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
 .split-panel-title.clean{color:var(--green)}
 .split-panel-title.flagged{color:var(--warn)}
 .split-panel-sub{font-size:10px;color:var(--dim)}
 .split-buckets{display:grid;grid-template-columns:repeat(4,1fr);background:var(--border);gap:1px}
-.split-bucket{background:var(--surface);padding:11px 14px;cursor:pointer;transition:background .12s}
+.split-bucket{background:var(--surface);padding:16px 18px;cursor:pointer;transition:background .12s}
 .split-bucket:hover{background:#eeeee9}
 .split-bucket.zero{cursor:default}
 .split-bucket.zero:hover{background:var(--surface)}
-.split-bucket.tint-remainder{background:#f5efe0}
-.split-bucket.tint-remainder:hover{background:#efe8d6}
-.split-bucket.tint-clear{background:#e9efe6}
-.split-bucket.tint-clear:hover{background:#e1e9dc}
 .split-threshold{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
-.split-count{font-size:21px;font-weight:700;color:var(--text);line-height:1}
+.split-count{font-size:26px;font-weight:700;color:var(--text);line-height:1}
 .split-count.zero{color:var(--dim)}
-.split-value{font-size:11px;margin-top:3px}
+.split-value{font-size:11px;margin-top:5px}
 .split-value span{color:var(--green);font-weight:500}
 .split-hint{font-size:10px;color:var(--dim);margin-top:3px}
 .click-hint{font-size:9px;color:var(--green);margin-top:4px}
-.split-bar-track{background:var(--border);height:5px;border-radius:3px;overflow:hidden;margin-top:5px}
-.split-bar-fill{height:100%;background:var(--green);border-radius:3px}
-.split-bar-label{font-size:9px;color:var(--dim);margin-top:4px}
-.ref-panel{border:1px solid var(--border);border-radius:3px;overflow:hidden;box-shadow:var(--shadow);margin-bottom:10px;background:var(--surface)}
-.ref-panel-header{padding:9px 14px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none}
+.ref-panel{border:1px solid var(--border);border-radius:3px;overflow:hidden;box-shadow:var(--shadow);margin-bottom:16px;background:var(--surface)}
+.ref-panel-header{padding:12px 16px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none}
 .ref-panel-header:hover{background:#eeeee9}
 .ref-panel-title-wrap{display:flex;align-items:center;gap:8px}
 .ref-panel-title{font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
@@ -102,29 +95,16 @@ main{padding:14px 24px 28px;max-width:1400px;margin:0 auto}
   .ref-table{font-size:10px}
   .ref-table th,.ref-table td{padding:6px 10px}
 }
-.funnel-row{display:flex;align-items:stretch;border:1px solid var(--border);border-radius:3px;overflow:hidden;box-shadow:var(--shadow);background:var(--border)}
-.funnel-card{flex:1;background:var(--surface);padding:13px 16px;cursor:default}
-.funnel-card.clickable{cursor:pointer;transition:background .12s}
-.funnel-card.clickable:hover{background:#eeeee9}
-.funnel-arrow{display:flex;align-items:center;justify-content:center;width:30px;background:var(--surface2);color:var(--dim);font-size:14px;flex-shrink:0}
-.funnel-label{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
-.funnel-desc{font-size:9px;color:var(--dim);font-style:italic;line-height:1.3;margin:-6px 0 10px;max-width:170px}
-.funnel-value{font-size:23px;font-weight:700;color:var(--text);line-height:1}
-.funnel-value.warn{color:var(--warn)}
-.funnel-value.ok{color:var(--green)}
-.funnel-hint{font-size:10px;color:var(--dim);margin-top:5px}
-.funnel-hint.action{color:var(--green)}
-@media(max-width:900px){.funnel-row{flex-direction:column}.funnel-arrow{width:100%;height:20px}}
-.callout-panel{border:1px solid var(--warn);border-radius:3px;overflow:hidden;box-shadow:var(--shadow);margin-bottom:10px;background:var(--surface)}
-.callout-header{padding:10px 14px;background:#f3ead9;border-bottom:1px solid var(--warn);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.callout-panel{border:1px solid var(--warn);border-radius:3px;overflow:hidden;box-shadow:var(--shadow);margin-bottom:16px;background:var(--surface)}
+.callout-header{padding:14px 16px;background:#f3ead9;border-bottom:1px solid var(--warn);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .callout-title-wrap{display:flex;flex-direction:column;gap:3px}
 .callout-title{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--warn)}
 .callout-sub{font-size:11px;color:var(--muted);line-height:1.5;max-width:560px}
 .callout-count-wrap{display:flex;align-items:center;gap:12px;flex-shrink:0}
-.callout-count{font-size:22px;font-weight:700;color:var(--warn);line-height:1}
+.callout-count{font-size:28px;font-weight:700;color:var(--warn);line-height:1}
 .callout-export-btn{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#fff;background:var(--warn);border:none;padding:8px 14px;border-radius:2px;cursor:pointer;transition:opacity .12s}
 .callout-export-btn:hover{opacity:.85}
-.callout-empty{padding:10px 14px;font-size:11px;color:var(--dim)}
+.callout-empty{padding:14px 16px;font-size:11px;color:var(--dim)}
 .callout-row-wrap{max-height:220px;overflow-y:auto;border-top:1px solid var(--border)}
 .callout-row{display:grid;grid-template-columns:90px 1fr 90px 90px;gap:10px;padding:8px 16px;font-size:11px;border-bottom:1px solid var(--border)}
 .callout-row:last-child{border-bottom:none}
@@ -132,39 +112,6 @@ main{padding:14px 24px 28px;max-width:1400px;margin:0 auto}
 .callout-row .draft-name{font-weight:600}
 .callout-row .draft-email{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .callout-row .draft-value{text-align:right;color:var(--green);font-weight:500}
-.admin-lock-panel{border:1px dashed var(--border2);border-radius:3px;padding:16px;margin-bottom:10px;background:var(--surface);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.admin-lock-icon{font-size:14px}
-.admin-lock-label{font-size:11px;color:var(--muted);flex:1;min-width:160px}
-.admin-lock-input{font-family:var(--sans);font-size:12px;padding:7px 10px;border:1px solid var(--border2);border-radius:2px;width:180px}
-.admin-unlock-btn{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#fff;background:var(--green);border:none;padding:8px 14px;border-radius:2px;cursor:pointer}
-.admin-unlock-btn:hover{opacity:.85}
-.admin-lock-err{font-size:10px;color:var(--danger)}
-.admin-session{font-size:10px;color:var(--dim)}
-.admin-lock-btn-small{font-size:9px;color:var(--muted);background:none;border:1px solid var(--border2);padding:4px 8px;border-radius:2px;cursor:pointer;text-transform:uppercase;letter-spacing:.06em}
-.admin-panel{border:1px solid var(--danger);border-radius:3px;overflow:hidden;box-shadow:var(--shadow);margin-bottom:10px;background:var(--surface)}
-.admin-panel-header{padding:10px 14px;background:#f5e8e8;border-bottom:1px solid var(--danger)}
-.admin-panel-title{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--danger)}
-.admin-panel-sub{font-size:11px;color:var(--muted);margin-top:3px;line-height:1.5}
-.admin-panel-body{padding:14px}
-.admin-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
-.admin-input{font-family:var(--sans);font-size:13px;padding:8px 10px;border:1px solid var(--border2);border-radius:2px;flex:1;min-width:160px}
-.admin-btn{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#fff;background:var(--text);border:none;padding:9px 14px;border-radius:2px;cursor:pointer}
-.admin-btn:hover{opacity:.85}
-.admin-btn.danger{background:var(--danger)}
-.admin-btn:disabled{opacity:.4;cursor:default}
-.admin-btn.secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border2)}
-.admin-table-wrap{max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:2px;margin-bottom:10px}
-.admin-table{width:100%;border-collapse:collapse;font-size:11px}
-.admin-table th{position:sticky;top:0;background:var(--surface2);text-align:left;font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:7px 10px;border-bottom:1px solid var(--border)}
-.admin-table td{padding:6px 10px;border-bottom:1px solid var(--border)}
-.admin-table tr:last-child td{border-bottom:none}
-.admin-table tr.selected{background:var(--green-light)}
-.admin-badge{font-size:9px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:2px 6px;border-radius:2px;background:#f5e8e8;color:var(--danger)}
-.admin-result{font-size:11px;padding:10px;border-radius:2px;margin-top:8px}
-.admin-result.ok{background:var(--green-light);color:var(--green)}
-.admin-result.err{background:#f5e0e0;color:var(--danger)}
-.admin-empty{font-size:11px;color:var(--dim);padding:8px 0}
-.admin-select-count{font-size:11px;color:var(--muted)}
 @media(max-width:960px){.kpi-grid{grid-template-columns:repeat(3,1fr)}.split-buckets{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:640px){
   header{grid-template-columns:1fr;position:static}
@@ -200,6 +147,7 @@ main{padding:14px 24px 28px;max-width:1400px;margin:0 auto}
       <a href="/npi.html" class="nav-link">NPI</a>
       <a href="/care.html" class="nav-link">Care@</a>
       <a href="/draft-health.html" class="nav-link active">Order Engine</a>
+      <a href="/lookup.html" class="nav-link">Lookup</a>
     </nav>
     <div class="refresh-status"><div class="refresh-dot" id="refreshDot"></div><span id="refreshLabel">Loading...</span></div>
   </div>
@@ -219,52 +167,32 @@ main{padding:14px 24px 28px;max-width:1400px;margin:0 auto}
 
     <div class="section-header"><span class="section-dot"></span><span class="section-title">Overview</span><div class="section-line"></div></div>
     <div class="kpi-grid">
-      <div class="kpi-card clickable" id="kpiTotalCard" onclick="exportAllDrafts()">
+      <div class="kpi-card">
         <div class="kpi-label">Total Open Drafts</div>
         <div class="kpi-value" id="kpiTotal">-</div>
-        <div class="kpi-hint" id="kpiTotalValue"></div>
         <div class="kpi-hint">All statuses</div>
-        <div class="kpi-hint action" id="kpiTotalHint">Click to export Excel</div>
       </div>
       <div class="kpi-card clickable" id="kpiReviewCard" onclick="exportByStatus(['needs-review'],'needs-review')">
         <div class="kpi-label">Needs Review</div>
         <div class="kpi-value warn" id="kpiReview">-</div>
-        <div class="kpi-hint" id="kpiReviewValue"></div>
         <div class="kpi-hint" id="kpiReviewCustomers"></div>
-        <div class="kpi-hint action" id="kpiReviewHint">Click to export Excel</div>
+        <div class="kpi-hint action" id="kpiReviewHint">Click to export CSV</div>
       </div>
       <div class="kpi-card clickable" id="kpiLowStockCard" onclick="exportLowStock()">
         <div class="kpi-label">Low Stock</div>
         <div class="kpi-value warn" id="kpiLowStock">-</div>
-        <div class="kpi-hint" id="kpiLowStockValue"></div>
-        <div class="kpi-hint action" id="kpiLowStockHint">Click to export Excel</div>
+        <div class="kpi-hint action" id="kpiLowStockHint">Click to export CSV</div>
       </div>
       <div class="kpi-card clickable" id="kpiInvShortageCard" onclick="exportInvShortage()">
         <div class="kpi-label">Inventory Shortage</div>
         <div class="kpi-value warn" id="kpiInvShortage">-</div>
-        <div class="kpi-hint" id="kpiInvShortageValue"></div>
-        <div class="kpi-hint action" id="kpiInvShortageHint">Click to export Excel</div>
+        <div class="kpi-hint action" id="kpiInvShortageHint">Click to export CSV</div>
       </div>
-      <div class="kpi-card clickable" id="kpiReadyCard" onclick="exportReadyToRelease()">
-        <div class="kpi-label">Ready to Release (&ge;$75)</div>
+      <div class="kpi-card clickable" id="kpiReadyCard" onclick="exportByStatus(['instock-ready'],'ready-to-release')">
+        <div class="kpi-label">Ready to Release</div>
         <div class="kpi-value ok" id="kpiReady">-</div>
-        <div class="kpi-hint" id="kpiReadyValue"></div>
-        <div class="kpi-hint action" id="kpiReadyHint">Click to export Excel</div>
+        <div class="kpi-hint action" id="kpiReadyHint">Click to export CSV</div>
       </div>
-    </div>
-
-    <div class="callout-panel" id="salesSmallReadyPanel" style="border-color:var(--green)">
-      <div class="callout-header" style="background:var(--green-light);border-bottom-color:var(--green)">
-        <div class="callout-title-wrap">
-          <div class="callout-title" style="color:var(--green)">Ready to Release Under $75 — Sales Follow-up</div>
-          <div class="callout-sub" id="salesSmallReadySub">—</div>
-        </div>
-        <div class="callout-count-wrap">
-          <div class="callout-count" id="salesSmallReadyCount" style="color:var(--green)">0</div>
-          <button class="callout-export-btn" id="salesSmallReadyExportBtn" style="background:var(--green)" onclick="exportReadySmallValue()">Export Excel</button>
-        </div>
-      </div>
-      <div class="callout-empty" id="salesSmallReadyEmpty" style="display:none">No small in-stock-ready drafts right now.</div>
     </div>
 
     <div class="ref-panel" id="excludedSkusPanel">
@@ -287,130 +215,27 @@ main{padding:14px 24px 28px;max-width:1400px;margin:0 auto}
       </div>
     </div>
 
-    <div class="section-header" style="margin-top:18px">
+    <div class="section-header" style="margin-top:28px">
       <span class="section-dot"></span>
-      <span class="section-title">Order Split Pipeline</span>
+      <span class="section-title">Partial Split Opportunity</span>
       <div class="section-line"></div>
     </div>
-    <p style="font-size:11px;color:var(--muted);margin-bottom:10px">How open drafts are moving through split evaluation. Click any stage to export.</p>
+    <p style="font-size:11px;color:var(--muted);margin-bottom:16px">Value of shippable lines if split today. Click any bucket to export those drafts.</p>
 
-    <div class="funnel-row" id="funnelRow"></div>
-
-    <div class="split-panel" style="margin-top:16px">
+    <div class="split-panel">
       <div class="split-panel-header">
-        <span class="split-panel-title clean">Backorder Children</span>
-        <span class="split-panel-sub" id="childrenTotal">—</span>
+        <span class="split-panel-title clean">Without Excluded SKUs</span>
+        <span class="split-panel-sub" id="cleanTotal">—</span>
       </div>
-      <div class="split-buckets" id="childrenBuckets" style="grid-template-columns:repeat(3,1fr)"></div>
+      <div class="split-buckets" id="cleanBuckets"></div>
     </div>
 
     <div class="split-panel">
       <div class="split-panel-header">
-        <span class="split-panel-title flagged">Remainder Under $75 — By Customer Spend</span>
-        <span class="split-panel-sub" id="spendTotal">—</span>
+        <span class="split-panel-title flagged">With Excluded SKUs — Seasonal Hold</span>
+        <span class="split-panel-sub" id="flaggedTotal">—</span>
       </div>
-      <p style="font-size:10px;color:var(--dim);padding:10px 16px 0">Trailing 12-month B2B spend per customer.</p>
-      <div class="split-buckets" id="spendBuckets" style="grid-template-columns:repeat(3,1fr)"></div>
-    </div>
-
-    <div class="section-header" style="margin-top:18px">
-      <span class="section-dot"></span>
-      <span class="section-title">Consolidation Opportunities</span>
-      <div class="section-line"></div>
-    </div>
-    <p style="font-size:11px;color:var(--muted);margin-bottom:10px">Open drafts sharing an exact shipping address — candidates for combining into one shipment.</p>
-
-    <div class="callout-panel" id="addressCalloutPanel">
-      <div class="callout-header">
-        <div class="callout-title-wrap">
-          <div class="callout-title">Same-Address Drafts</div>
-          <div class="callout-sub" id="addressCalloutSub">—</div>
-        </div>
-        <div class="callout-count-wrap">
-          <div class="callout-count" id="addressCalloutCount">0</div>
-          <button class="callout-export-btn" id="addressExportBtn" onclick="exportSameAddress()">Export Excel</button>
-        </div>
-      </div>
-      <div class="callout-empty" id="addressCalloutEmpty" style="display:none">No open drafts currently share an exact shipping address.</div>
-    </div>
-
-    <div class="section-header" style="margin-top:18px">
-      <span class="section-dot"></span>
-      <span class="section-title">Admin Tools</span>
-      <div class="section-line"></div>
-    </div>
-
-    <div id="adminLockPanel" class="admin-lock-panel">
-      <span class="admin-lock-icon">&#128274;</span>
-      <span class="admin-lock-label">Bulk SKU removal and backorder cancellation require admin unlock.</span>
-      <input type="password" class="admin-lock-input" id="adminPasswordInput" placeholder="Admin password" onkeydown="if(event.key==='Enter')unlockAdmin()">
-      <button class="admin-unlock-btn" onclick="unlockAdmin()">Unlock</button>
-      <span class="admin-lock-err" id="adminLockErr"></span>
-    </div>
-
-    <div id="adminPanels" style="display:none">
-      <div class="admin-row" style="justify-content:space-between">
-        <span class="admin-session" id="adminSessionLabel"></span>
-        <button class="admin-lock-btn-small" onclick="lockAdmin()">Lock</button>
-      </div>
-
-      <div class="admin-panel">
-        <div class="admin-panel-header">
-          <div class="admin-panel-title">Remove SKU From All Open Drafts</div>
-          <div class="admin-panel-sub">Removes a discontinued/launch-cancelled SKU from every open B2B draft that has it. A draft left with no line items after removal is deleted entirely.</div>
-        </div>
-        <div class="admin-panel-body">
-          <div class="admin-row">
-            <input type="text" class="admin-input" id="skuRemoveInput" placeholder="SKU, e.g. LL-16-3162">
-            <button class="admin-btn" onclick="previewSkuRemoval()">Preview</button>
-          </div>
-          <div id="skuPreviewWrap" style="display:none">
-            <div class="admin-table-wrap">
-              <table class="admin-table">
-                <thead><tr><th></th><th>Draft #</th><th>Customer</th><th>Qty Removed</th><th>Order Value</th><th>Outcome</th></tr></thead>
-                <tbody id="skuPreviewRows"></tbody>
-              </table>
-            </div>
-            <button class="admin-btn danger" id="skuExecuteBtn" onclick="executeSkuRemoval()">Remove From Selected Drafts</button>
-          </div>
-          <div id="skuPreviewEmpty" class="admin-empty" style="display:none">No open drafts contain that SKU.</div>
-          <div id="skuResult"></div>
-        </div>
-      </div>
-
-      <div class="admin-panel">
-        <div class="admin-panel-header">
-          <div class="admin-panel-title">Bulk-Cancel Backorder Remainders</div>
-          <div class="admin-panel-sub">Cancels (deletes) whichever split-remainder drafts you select below. Use the search box to find a specific draft, or the quick-select to grab everything under a spend/value threshold. Re-checks each draft's tags right before deleting, in case it moved on since this page loaded.</div>
-        </div>
-        <div class="admin-panel-body">
-          <div class="admin-row">
-            <input type="text" class="admin-input" id="bulkCancelSearchInput" placeholder="Filter by draft # or email" oninput="renderBulkCancelTable()">
-          </div>
-          <div class="admin-row">
-            <label style="font-size:11px;color:var(--muted)">Quick-select: value &lt;$75 and spend under $</label>
-            <input type="number" class="admin-input" id="spendThresholdInput" value="250" min="0" step="25" style="max-width:100px">
-            <button class="admin-btn secondary" onclick="quickSelectByThreshold()">Apply</button>
-            <button class="admin-btn secondary" onclick="selectVisibleBulkCancelRows(true)">Select Visible</button>
-            <button class="admin-btn secondary" onclick="selectVisibleBulkCancelRows(false)">Clear Visible</button>
-            <button class="admin-btn secondary" onclick="clearAllBulkCancelSelection()">Clear All</button>
-          </div>
-          <div id="bulkCancelPreviewWrap">
-            <div class="admin-row" style="justify-content:space-between;margin-bottom:6px">
-              <span class="admin-select-count" id="bulkCancelSelectCount">0 selected</span>
-            </div>
-            <div class="admin-table-wrap">
-              <table class="admin-table">
-                <thead><tr><th></th><th>Draft #</th><th>Customer</th><th>12mo Spend</th><th>Order Value</th></tr></thead>
-                <tbody id="bulkCancelRows"></tbody>
-              </table>
-            </div>
-            <button class="admin-btn danger" id="bulkCancelExecuteBtn" onclick="executeBulkCancel()" disabled>Cancel Selected Drafts (0)</button>
-          </div>
-          <div id="bulkCancelEmpty" class="admin-empty" style="display:none">No backorder-remainder drafts open right now.</div>
-          <div id="bulkCancelResult"></div>
-        </div>
-      </div>
+      <div class="split-buckets" id="flaggedBuckets"></div>
     </div>
 
   </div>
@@ -418,8 +243,19 @@ main{padding:14px 24px 28px;max-width:1400px;margin:0 auto}
 <script>
 const REFRESH_MS = 5 * 60 * 1000;
 let allDrafts = [];
-function fmtMoney(v) { return '$' + Math.round(v || 0).toLocaleString('en-US'); }
 let refreshTimer = null, countdownTimer = null, nextRefreshAt = null, hasData = false;
+
+// Bucket definitions — stored so export can reference by index safely
+const BUCKETS = [
+  { label: '< $20',    min: 0,   max: 20 },
+  { label: '$20–$50',  min: 20,  max: 50 },
+  { label: '$50–$100', min: 50,  max: 100 },
+  { label: '> $100',   min: 100, max: Infinity },
+];
+
+// Computed bucket rows stored here so onclick can reference by index — no JSON in HTML attrs
+var cleanBucketRows = [];
+var flaggedBucketRows = [];
 
 function scheduleRefresh() {
   clearTimers();
@@ -450,9 +286,6 @@ async function runFetch() {
     render(data);
     setStatus('live');
     scheduleRefresh();
-    // Warm the Excel library in the background (no-op once loaded) so the
-    // first export click isn't waiting on a ~1MB download.
-    loadExcelJs().catch(function() {});
   } catch (err) {
     showError(err.message);
     setStatus('error');
@@ -469,307 +302,107 @@ function render(data) {
   document.getElementById('fetchTime').textContent = 'Updated ' + t;
   document.getElementById('refreshLabel').textContent = 'Updated ' + t;
 
-  var sumValue = function(rows) { return rows.reduce(function(s, r) { return s + (r.totalPrice || 0); }, 0); };
-
   document.getElementById('kpiTotal').textContent = data.total.toLocaleString();
-  document.getElementById('kpiTotalValue').textContent = fmtMoney(sumValue(allDrafts)) + ' net';
-  if (data.total === 0) {
-    document.getElementById('kpiTotalHint').textContent = 'None';
-    document.getElementById('kpiTotalHint').classList.remove('action');
-    document.getElementById('kpiTotalCard').classList.remove('clickable');
-    document.getElementById('kpiTotalCard').style.cursor = 'default';
-  }
-
   setKpiCard('kpiReview',     'kpiReviewHint', 'kpiReviewCard', sc['needs-review'] || 0);
   var needsReviewDrafts = allDrafts.filter(function(r) { return r.status === 'needs-review'; });
-  document.getElementById('kpiReviewValue').textContent = needsReviewDrafts.length ? fmtMoney(sumValue(needsReviewDrafts)) + ' net' : '';
   var needsReviewCustomers = new Set(needsReviewDrafts.map(function(r) { return (r.email || '—').toLowerCase(); }));
   document.getElementById('kpiReviewCustomers').textContent = needsReviewDrafts.length
     ? needsReviewCustomers.size + ' unique customer' + (needsReviewCustomers.size !== 1 ? 's' : '')
     : '';
-
   var lowStockDrafts = allDrafts.filter(function(r) { var t = (r.tags || []).map(function(t){return t.toLowerCase();}); return t.indexOf('low-supply') !== -1 && t.indexOf('instock-ready') !== -1; });
   document.getElementById('kpiLowStock').textContent = lowStockDrafts.length.toLocaleString();
-  document.getElementById('kpiLowStockValue').textContent = lowStockDrafts.length ? fmtMoney(sumValue(lowStockDrafts)) + ' net' : '';
   if (lowStockDrafts.length === 0) {
     document.getElementById('kpiLowStockHint').textContent = 'None';
     document.getElementById('kpiLowStockHint').classList.remove('action');
     document.getElementById('kpiLowStockCard').classList.remove('clickable');
     document.getElementById('kpiLowStockCard').style.cursor = 'default';
   }
-
   var invShortageDrafts = allDrafts.filter(function(r) { return (r.tags || []).map(function(t){return t.toLowerCase();}).indexOf('inventory-shortage') !== -1; });
   document.getElementById('kpiInvShortage').textContent = invShortageDrafts.length.toLocaleString();
-  document.getElementById('kpiInvShortageValue').textContent = invShortageDrafts.length ? fmtMoney(sumValue(invShortageDrafts)) + ' net' : '';
   if (invShortageDrafts.length === 0) {
     document.getElementById('kpiInvShortageHint').textContent = 'None';
     document.getElementById('kpiInvShortageHint').classList.remove('action');
     document.getElementById('kpiInvShortageCard').classList.remove('clickable');
     document.getElementById('kpiInvShortageCard').style.cursor = 'default';
   }
+  setKpiCard('kpiReady', 'kpiReadyHint', 'kpiReadyCard', sc['instock-ready'] || 0);
 
-  // Ready to Release now excludes anything under the $75 floor (same threshold
-  // used for backorder-remainder holds) — a fully in-stock $12 draft isn't a
-  // fulfillment priority, it's a sales follow-up candidate (see the callout
-  // panel below). sc['instock-ready'] from the server is the unfiltered
-  // count across ALL values, so this filters client-side using totalPrice
-  // rather than trusting that count directly.
-  var readyDrafts = allDrafts.filter(function(r) { return r.status === 'instock-ready' && (r.totalPrice || 0) >= BACKORDER_HOLD_VALUE; });
-  setKpiCard('kpiReady', 'kpiReadyHint', 'kpiReadyCard', readyDrafts.length);
-  document.getElementById('kpiReadyValue').textContent = readyDrafts.length ? fmtMoney(sumValue(readyDrafts)) + ' net' : '';
+  // Left panel: out-of-stock drafts with leftover in-stock value (split opportunity
+  // today). delayed-ship-date drafts are intentionally excluded — they're not
+  // shippable right now regardless of inventory, so they're not a "split today" case.
+  var cleanDrafts = allDrafts.filter(function(r) {
+    return r.status === 'out-of-stock' && r.instockValue > 0;
+  });
 
-  renderFunnel();
-  renderAddressGroups();
-  renderSalesSmallReady();
-  refreshBulkCancelData();
+  // Right panel: excluded-sku drafts that have in-stock value (the seasonal hold scenario).
+  var flaggedDrafts = allDrafts.filter(function(r) {
+    return r.status === 'excluded-sku' && r.instockValue > 0;
+  });
+
+  cleanBucketRows = buildBuckets(cleanDrafts);
+  flaggedBucketRows = buildBuckets(flaggedDrafts);
+
+  renderSplitPanel('cleanBuckets', 'cleanTotal', cleanBucketRows, cleanDrafts);
+  renderSplitPanel('flaggedBuckets', 'flaggedTotal', flaggedBucketRows, flaggedDrafts);
 }
 
-// ── Split pipeline funnel ───────────────────────────────────────────────────
-// pipelineStage comes straight from the server, computed off raw tags:
-//   pending-eval | waiting-instock | ready-release
-//   held-instock-low | held-bo-low | held-both-low   (held for value, not split)
-//   split-remainder | split-clear                     (backorder children)
-var HELD_STAGES = ['held-instock-low', 'held-bo-low', 'held-both-low'];
-var CHILD_STAGES = ['split-remainder', 'split-clear'];
-var BACKORDER_HOLD_VALUE = 75; // mirrors MIN_BACKORDER_HOLD_VALUE in shopify-adjust-orders-2.py
-
-function stageRows(stage) {
-  return allDrafts.filter(function(r) { return r.pipelineStage === stage; });
+function buildBuckets(drafts) {
+  return BUCKETS.map(function(b) {
+    var rows = drafts.filter(function(r) { return r.instockValue >= b.min && r.instockValue < b.max; });
+    return {
+      label: b.label,
+      rows: rows,
+      count: rows.length,
+      total: rows.reduce(function(s, r) { return s + r.instockValue; }, 0),
+    };
+  });
 }
 
-// getStageRows adds derived (non-pipelineStage) buckets on top of stageRows:
-// - split-remainder-under75: split-remainder drafts whose CURRENT totalPrice
-//   has drifted below the $75 hold threshold since the split was evaluated
-//   (inventory/price changes after the fact).
-// - remainder-under75-spend-*: that same set, further segmented by the
-//   customer's trailing-12mo B2B spend, per sales' request to treat a
-//   low-spend customer's sub-$75 remainder differently than a high-spend
-//   customer's (customerSpend12mo comes from the server, B2B orders only).
-function getStageRows(key) {
-  if (key === 'split-remainder-under75') {
-    return stageRows('split-remainder').filter(function(r) { return (r.totalPrice || 0) < BACKORDER_HOLD_VALUE; });
+function renderSplitPanel(containerId, totalId, buckets, allDrafts) {
+  var container = document.getElementById(containerId);
+  var totalEl = document.getElementById(totalId);
+
+  if (!allDrafts.length) {
+    totalEl.textContent = '0 drafts';
+    container.innerHTML = BUCKETS.map(function(b) {
+      return '<div class="split-bucket zero">' +
+        '<div class="split-threshold">' + esc(b.label) + '</div>' +
+        '<div class="split-count zero">0</div>' +
+        '<div class="split-hint">No drafts</div>' +
+        '</div>';
+    }).join('');
+    return;
   }
-  if (key === 'remainder-under75-spend-gte500') {
-    return getStageRows('split-remainder-under75').filter(function(r) { return (r.customerSpend12mo || 0) >= 500; });
-  }
-  if (key === 'remainder-under75-spend-250-500') {
-    return getStageRows('split-remainder-under75').filter(function(r) { return (r.customerSpend12mo || 0) >= 250 && (r.customerSpend12mo || 0) < 500; });
-  }
-  if (key === 'remainder-under75-spend-lt250') {
-    return getStageRows('split-remainder-under75').filter(function(r) { return (r.customerSpend12mo || 0) < 250; });
-  }
-  return stageRows(key);
-}
 
-function renderFunnel() {
-  var stages = [
-    { key: 'pending-eval',    label: 'Pending Evaluation' },
-    { key: 'waiting-instock', label: 'Re-flagged Out of Stock', desc: 'Was fully in stock at evaluation, then sold out before release' },
-    { key: 'held',            label: 'Held for Value', cls: 'warn', rows: allDrafts.filter(function(r){ return HELD_STAGES.indexOf(r.pipelineStage) !== -1; }) },
-  ];
+  var grandTotal = allDrafts.length;
+  var grandValue = allDrafts.reduce(function(s, r) { return s + r.instockValue; }, 0);
+  totalEl.textContent = grandTotal + ' draft' + (grandTotal !== 1 ? 's' : '') +
+    ' · $' + grandValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' shippable';
 
-  var html = stages.map(function(s, i) {
-    var rows = s.rows || stageRows(s.key);
-    var count = rows.length;
-    var value = rows.reduce(function(s2, r) { return s2 + (r.totalPrice || 0); }, 0);
-    var clickable = count > 0;
-    var onclick = clickable ? ' onclick="exportPipelineStage(\'' + s.key + '\')"' : '';
-    var card = '<div class="funnel-card' + (clickable ? ' clickable' : '') + '"' + onclick + '>' +
-      '<div class="funnel-label">' + esc(s.label) + '</div>' +
-      (s.desc ? '<div class="funnel-desc">' + esc(s.desc) + '</div>' : '') +
-      '<div class="funnel-value' + (s.cls ? ' ' + s.cls : '') + '">' + count.toLocaleString() + '</div>' +
-      '<div class="funnel-hint">' + (count ? fmtMoney(value) + ' net' : '') + '</div>' +
-      '<div class="funnel-hint' + (clickable ? ' action' : '') + '">' + (clickable ? 'Click to export' : 'None') + '</div>' +
-      '</div>';
-    return card + (i < stages.length - 1 ? '<div class="funnel-arrow">&#8594;</div>' : '');
-  }).join('');
-  document.getElementById('funnelRow').innerHTML = html;
+  // Determine which store array this is for the onclick
+  var isFlagged = containerId === 'flaggedBuckets';
 
-  renderStageBuckets('childrenBuckets', 'childrenTotal', [
-    { key: 'split-remainder',          label: 'Remainder (<$150)', tint: 'tint-remainder' },
-    { key: 'split-remainder-under75',  label: 'Remainder Under $75', tint: 'tint-remainder' },
-    { key: 'split-clear',              label: 'Clear (≥$150)', tint: 'tint-clear' },
-  ], 'children', ['split-remainder', 'split-clear']);
-
-  renderStageBuckets('spendBuckets', 'spendTotal', [
-    { key: 'remainder-under75-spend-gte500',  label: '$500+ Spend' },
-    { key: 'remainder-under75-spend-250-500', label: '$250–$500 Spend' },
-    { key: 'remainder-under75-spend-lt250',   label: '<$250 Spend' },
-  ], 'spend', ['remainder-under75-spend-gte500', 'remainder-under75-spend-250-500', 'remainder-under75-spend-lt250']);
-}
-
-function renderStageBuckets(containerId, totalId, defs, kind, totalKeys) {
-  var keysForTotal = totalKeys || defs.map(function(d) { return d.key; });
-  var allRows = keysForTotal.reduce(function(acc, k) { return acc.concat(getStageRows(k)); }, []);
-  var totalValue = allRows.reduce(function(s, r) { return s + (r.totalPrice || 0); }, 0);
-  var noun = kind === 'held' ? 'held' : 'total';
-  document.getElementById(totalId).textContent = allRows.length
-    ? allRows.length + ' draft' + (allRows.length !== 1 ? 's' : '') + ' · ' + fmtMoney(totalValue) + ' ' + noun
-    : '0 drafts';
-
-  document.getElementById(containerId).innerHTML = defs.map(function(d) {
-    var rows = getStageRows(d.key);
-    var isZero = rows.length === 0;
-    var value = rows.reduce(function(s, r) { return s + (r.totalPrice || 0); }, 0);
-    var instockValue = rows.reduce(function(s, r) { return s + (r.instockValue || 0); }, 0);
-    var pct = value > 0 ? (instockValue / value * 100) : 0;
-    var onclick = isZero ? '' : ' onclick="exportPipelineStage(\'' + d.key + '\')"';
-    var tintClass = d.tint ? ' ' + d.tint : '';
-    var barHtml = isZero ? '' :
-      '<div class="split-bar-track"><div class="split-bar-fill" style="width:' + Math.min(100, pct).toFixed(0) + '%"></div></div>' +
-      '<div class="split-bar-label">' + pct.toFixed(0) + '% instock of ' + fmtMoney(value) + '</div>';
-    return '<div class="split-bucket' + (isZero ? ' zero' : '') + tintClass + '"' + onclick + '>' +
-      '<div class="split-threshold">' + esc(d.label) + '</div>' +
-      '<div class="split-count' + (isZero ? ' zero' : '') + '">' + rows.length + '</div>' +
+  container.innerHTML = buckets.map(function(b, i) {
+    var isZero = b.count === 0;
+    var onclickAttr = isZero ? '' : ' onclick="exportBucket(\'' + (isFlagged ? 'flagged' : 'clean') + '\',' + i + ')"';
+    return '<div class="split-bucket' + (isZero ? ' zero' : '') + '"' + onclickAttr + '>' +
+      '<div class="split-threshold">' + esc(b.label) + '</div>' +
+      '<div class="split-count' + (isZero ? ' zero' : '') + '">' + b.count + '</div>' +
       (isZero
         ? '<div class="split-hint">No drafts</div>'
-        : '<div class="split-value">Value: <span>' + fmtMoney(value) + '</span></div>' +
-          barHtml +
+        : '<div class="split-value">Shippable: <span>$' + b.total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '</span></div>' +
           '<div class="click-hint">&#8595; Click to export</div>'
       ) +
       '</div>';
   }).join('');
 }
 
-function exportPipelineStage(stage) {
-  var rows = stage === 'held'
-    ? allDrafts.filter(function(r) { return HELD_STAGES.indexOf(r.pipelineStage) !== -1; })
-    : getStageRows(stage);
-  if (!rows.length) return;
-  doExport(rows, 'pipeline-' + stage);
-}
-
-// ── Consolidation opportunities (same shipping address) ─────────────────────
-// Groups open drafts (regardless of split-pipeline stage) by a normalized
-// shipping-address key computed server-side. Only groups with 2+ drafts are
-// surfaced — a single draft at an address isn't a consolidation opportunity.
-//
-// excluded-customer drafts (Faire, TJX, Replacements Customer Care, Customer
-// Samples, etc. — see EXCLUDED_CUSTOMERS in server.js) are deliberately left
-// out: several of these are aggregators/marketplaces that route many
-// unrelated orders through one shared warehouse address, which isn't a real
-// "combine these shipments" opportunity and can otherwise balloon the count
-// whenever a batch of their orders comes in.
-var addressGroupsCache = [];
-
-function computeAddressGroups() {
-  var groups = {};
-  allDrafts.forEach(function(r) {
-    if (!r.addressKey) return; // no usable shipping/billing address on file
-    if (r.status === 'excluded-customer') return; // aggregator/distributor account — not a real match
-    if (!groups[r.addressKey]) groups[r.addressKey] = { key: r.addressKey, label: r.shipAddress, rows: [] };
-    groups[r.addressKey].rows.push(r);
-  });
-  return Object.keys(groups).map(function(k) { return groups[k]; })
-    .filter(function(g) { return g.rows.length > 1; })
-    .sort(function(a, b) { return b.rows.length - a.rows.length; });
-}
-
-function renderAddressGroups() {
-  addressGroupsCache = computeAddressGroups();
-  var groupCount = addressGroupsCache.length;
-  var draftCount = addressGroupsCache.reduce(function(s, g) { return s + g.rows.length; }, 0);
-  var totalValue = addressGroupsCache.reduce(function(s, g) {
-    return s + g.rows.reduce(function(s2, r) { return s2 + (r.totalPrice || 0); }, 0);
-  }, 0);
-  var largest = addressGroupsCache.length ? addressGroupsCache[0].rows.length : 0;
-
-  document.getElementById('addressCalloutCount').textContent = groupCount.toLocaleString();
-
-  if (groupCount === 0) {
-    document.getElementById('addressCalloutSub').textContent = 'No matches found.';
-    document.getElementById('addressCalloutEmpty').style.display = 'block';
-    document.getElementById('addressExportBtn').style.display = 'none';
-  } else {
-    document.getElementById('addressCalloutSub').textContent =
-      groupCount + ' location' + (groupCount !== 1 ? 's' : '') + ' · ' +
-      draftCount + ' draft' + (draftCount !== 1 ? 's' : '') + ' · ' + fmtMoney(totalValue) + ' combined' +
-      (largest > 4 ? ' · largest group: ' + largest + ' drafts' : '');
-    document.getElementById('addressCalloutEmpty').style.display = 'none';
-    document.getElementById('addressExportBtn').style.display = '';
-  }
-}
-
-// Same-address export goes through the shared exportTable() helper like every
-// other export. Rows are flattened to one entry per draft, carrying its group
-// number / size / address label alongside the draft row itself.
-var ADDRESS_EXPORT_COLUMNS = [
-  { header: 'Address Group',     type: 'int',   get: function(x) { return x.group; } },
-  { header: 'Drafts At Address', type: 'int',   get: function(x) { return x.groupSize; } },
-  { header: 'Matched On',        type: 'text',  get: function(x) { return x.r.addressSource || ''; } },
-  { header: 'Ship Address',      type: 'text',  get: function(x) { return x.label || ''; } },
-  { header: 'Draft #',           type: 'text',  get: function(x) { return x.r.name; } },
-  { header: 'PO Number',         type: 'text',  get: function(x) { return x.r.poNumber || ''; } },
-  { header: 'Company',           type: 'text',  get: function(x) { return x.r.company || ''; } },
-  { header: 'Email',             type: 'text',  get: function(x) { return x.r.email; } },
-  { header: 'Status',            type: 'text',  get: function(x) { return x.r.status; } },
-  { header: 'Order Value',       type: 'money', get: function(x) { return x.r.totalPrice; } },
-  { header: 'Age (days)',        type: 'int',   get: function(x) { return draftAgeDays(x.r); } },
-];
-
-function exportSameAddress() {
-  if (!addressGroupsCache.length) return;
-  var flat = [];
-  addressGroupsCache.forEach(function(g, gi) {
-    g.rows.forEach(function(r) {
-      flat.push({ group: gi + 1, groupSize: g.rows.length, label: g.label, r: r });
-    });
-  });
-  exportTable('consolidation-opportunities', ADDRESS_EXPORT_COLUMNS, flat);
-}
-
-// ── Ready to Release, under $75 (sales follow-up) ────────────────────────────
-// Drafts under the $75 release floor that are FULLY IN STOCK, whatever tag or
-// status the server has filed them under (npi-item, out-of-stock fallback,
-// split-remainder, etc.) — "in stock" is decided by inventory, not by whether
-// the instock-ready tag happens to be present. Too small to prioritize as a
-// fulfillment release, so they're surfaced for sales follow-up (upsell,
-// combine with a future order, etc.) rather than left to sit.
-//   - fullyInStock comes from the server (every line covered by inventory).
-//     If the server hasn't been updated yet it falls back to the old
-//     'instock-ready' status so the page still works.
-//   - instockValue > 0 keeps out empty / no-priced-line drafts.
-//   - excluded-customer accounts (Faire, TJX, customer care, samples...) are
-//     never sales follow-ups.
-function isFullyInStock(r) {
-  return r.fullyInStock === undefined ? r.status === 'instock-ready' : r.fullyInStock === true;
-}
-function getReadySmallValueRows() {
-  return allDrafts.filter(function(r) {
-    return isFullyInStock(r) && (r.instockValue || 0) > 0 &&
-      (r.totalPrice || 0) < BACKORDER_HOLD_VALUE && r.status !== 'excluded-customer';
-  });
-}
-
-function renderSalesSmallReady() {
-  var rows = getReadySmallValueRows();
-  var count = rows.length;
-  var value = rows.reduce(function(s, r) { return s + (r.totalPrice || 0); }, 0);
-
-  document.getElementById('salesSmallReadyCount').textContent = count.toLocaleString();
-
-  if (count === 0) {
-    document.getElementById('salesSmallReadySub').textContent = 'No matches found.';
-    document.getElementById('salesSmallReadyEmpty').style.display = 'block';
-    document.getElementById('salesSmallReadyExportBtn').style.display = 'none';
-  } else {
-    document.getElementById('salesSmallReadySub').textContent =
-      count + ' draft' + (count !== 1 ? 's' : '') + ' · ' + fmtMoney(value) + ' total · fully in stock, below the $' + BACKORDER_HOLD_VALUE + ' release floor';
-    document.getElementById('salesSmallReadyEmpty').style.display = 'none';
-    document.getElementById('salesSmallReadyExportBtn').style.display = '';
-  }
-}
-
-function exportReadyToRelease() {
-  var rows = allDrafts.filter(function(r) { return r.status === 'instock-ready' && (r.totalPrice || 0) >= BACKORDER_HOLD_VALUE; });
-  if (!rows.length) return;
-  doExport(rows, 'ready-to-release');
-}
-
-function exportReadySmallValue() {
-  var rows = getReadySmallValueRows();
-  if (!rows.length) return;
-  doExport(rows, 'ready-release-under-75-sales');
+function exportBucket(panel, bucketIdx) {
+  var buckets = panel === 'clean' ? cleanBucketRows : flaggedBucketRows;
+  var bucket = buckets[bucketIdx];
+  if (!bucket || !bucket.rows.length) return;
+  var label = panel + '-' + bucket.label.replace(/[^a-z0-9]/gi, '-').toLowerCase();
+  doExport(bucket.rows, 'split-' + label);
 }
 
 function exportInvShortage() {
@@ -790,165 +423,20 @@ function exportByStatus(statuses, filename) {
   doExport(rows, filename);
 }
 
-// Whole draft-orders section: every open draft on the page, regardless of
-// status/pipeline stage — same row shape and CSV columns as every other
-// export on this page (doExport), so it drops into the same workflow.
-function exportAllDrafts() {
-  if (!allDrafts.length) return;
-  doExport(allDrafts, 'all-open-drafts');
-}
-
-// ── Export columns (standard draft row) ─────────────────────────────────────
-function draftAgeDays(r) {
-  return Math.floor((Date.now() - new Date(r.createdAt).getTime()) / 864e5);
-}
-
-var DRAFT_EXPORT_COLUMNS = [
-  { header: 'Draft #',        type: 'text',  get: function(r) { return r.name; } },
-  { header: 'Company',        type: 'text',  get: function(r) { return r.company || ''; } },
-  { header: 'Email',          type: 'text',  get: function(r) { return r.email; } },
-  { header: '12mo B2B Spend', type: 'money', get: function(r) { return r.customerSpend12mo || 0; } },
-  { header: 'Status',         type: 'text',  get: function(r) { return r.status; } },
-  { header: 'Order Value',    type: 'money', get: function(r) { return r.totalPrice; } },
-  { header: 'In-Stock Value', type: 'money', get: function(r) { return r.instockValue; } },
-  { header: 'Age (days)',     type: 'int',   get: function(r) { return draftAgeDays(r); } },
-  { header: 'Ship Date',      type: 'date',  get: function(r) { return r.shipDate || ''; } },
-];
-
 function doExport(rows, filename) {
-  exportTable(filename, DRAFT_EXPORT_COLUMNS, rows);
-}
-
-// ── Excel export helpers ─────────────────────────────────────────────────────
-// exportTable() is the single entry point for every export on this page.
-// Columns are defined once ({ header, type, get }) and written as .xlsx via
-// ExcelJS; if the library can't load (offline / CDN blocked) it falls back to
-// a CSV of the same columns so exporting never just breaks.
-var EXCELJS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js';
-var XLSX_FONT = 'Aptos Narrow';
-// Palette pulled from the dashboard CSS: --green header, --border for the thin
-// row dividers.
-var XLSX_HEADER_FILL = 'FF4A6741';
-var XLSX_BORDER = 'FFD4D4CC';
-var XLSX_MONEY_FMT = '_([$$-409]* #,##0_);_([$$-409]* \\(#,##0\\);_([$$-409]* "-"??_);_(@_)';
-var XLSX_DATE_FMT = 'mm-dd-yy';
-var XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-var excelJsPromise = null;
-
-function loadExcelJs() {
-  if (window.ExcelJS) return Promise.resolve();
-  if (excelJsPromise) return excelJsPromise;
-  excelJsPromise = new Promise(function(resolve, reject) {
-    var s = document.createElement('script');
-    s.src = EXCELJS_URL;
-    s.onload = function() { resolve(); };
-    s.onerror = function() { excelJsPromise = null; reject(new Error('Could not load Excel library')); };
-    document.head.appendChild(s);
-  });
-  return excelJsPromise;
-}
-
-// Ship dates come from the server as 'YYYY-MM-DD' strings. Convert to a real
-// date (UTC midnight, so Excel shows the same calendar day) so the column
-// sorts and filters as dates. Anything unparseable stays as text.
-function toExcelDate(v) {
-  if (!v) return null;
-  var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v));
-  return m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])) : null;
-}
-
-function xlsxCellValue(col, raw) {
-  if (col.type === 'money' || col.type === 'int') {
-    var n = Number(raw);
-    return (raw === null || raw === undefined || raw === '' || isNaN(n)) ? null : n;
-  }
-  if (col.type === 'date') {
-    return toExcelDate(raw) || (raw ? String(raw) : null);
-  }
-  return (raw === null || raw === undefined) ? '' : String(raw);
-}
-
-function buildXlsxWorkbook(sheetName, columns, rows) {
-  var wb = new ExcelJS.Workbook();
-  var safeName = String(sheetName).replace(/[\\\/\?\*\[\]:]/g, '-').slice(0, 31) || 'Export';
-  var ws = wb.addWorksheet(safeName);
-
-  // Header row: leave room for the autofilter dropdown arrow.
-  var widths = columns.map(function(c) { return c.header.length + 3; });
-  var headerRow = ws.addRow(columns.map(function(c) { return c.header; }));
-  headerRow.eachCell(function(cell) {
-    cell.font = { name: XLSX_FONT, size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
-    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: XLSX_HEADER_FILL } };
-  });
-
+  var now = Date.now();
+  var lines = [['Draft #', 'Email', 'Status', 'Order Value', 'In-Stock Value', 'Age (days)', 'Ship Date'].map(csvEsc).join(',')];
   rows.forEach(function(r) {
-    var vals = columns.map(function(c, i) {
-      var v = xlsxCellValue(c, c.get(r));
-      var len = 0;
-      if (v === null) len = 0;
-      else if (c.type === 'money') len = Math.round(v).toLocaleString('en-US').length + 4;
-      else if (v instanceof Date) len = 10;
-      else len = String(v).length;
-      if (len > widths[i]) widths[i] = len;
-      return v;
-    });
-    var row = ws.addRow(vals);
-    columns.forEach(function(c, i) {
-      var cell = row.getCell(i + 1);
-      cell.font = { name: XLSX_FONT, size: 11 };
-      cell.border = { bottom: { style: 'thin', color: { argb: XLSX_BORDER } } };
-      if (c.type === 'money') cell.numFmt = XLSX_MONEY_FMT;
-      else if (c.type === 'date') cell.numFmt = XLSX_DATE_FMT;
-    });
+    var age = Math.floor((now - new Date(r.createdAt).getTime()) / 864e5);
+    lines.push([r.name, r.email, r.status, r.totalPrice.toFixed(2), r.instockValue.toFixed(2), age, r.shipDate || ''].map(csvEsc).join(','));
   });
-
-  columns.forEach(function(c, i) {
-    ws.getColumn(i + 1).width = Math.min(60, Math.max(8, widths[i] + 2));
-  });
-
-  ws.views = [{ state: 'frozen', ySplit: 1 }];
-  ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: rows.length + 1, column: columns.length } };
-  return wb;
-}
-
-function downloadBlob(blob, fileName) {
+  var blob = new Blob([lines.join('\n')], { type: 'text/csv' });
   var url = URL.createObjectURL(blob);
   var a = document.createElement('a');
   a.href = url;
-  a.download = fileName;
-  document.body.appendChild(a);
+  a.download = filename + '-' + new Date().toISOString().slice(0, 10) + '.csv';
   a.click();
-  document.body.removeChild(a);
-  setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
-}
-
-// CSV fallback. Prefixed with a UTF-8 BOM so Excel doesn't mangle apostrophes
-// and accented characters in company names.
-function downloadCsv(stampedName, columns, rows) {
-  var lines = [columns.map(function(c) { return csvEsc(c.header); }).join(',')];
-  rows.forEach(function(r) {
-    lines.push(columns.map(function(c) {
-      var raw = c.get(r);
-      if (c.type === 'money') {
-        var n = parseFloat(raw);
-        raw = isNaN(n) ? '' : n.toFixed(2);
-      }
-      return csvEsc(raw);
-    }).join(','));
-  });
-  downloadBlob(new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' }), stampedName + '.csv');
-}
-
-function exportTable(filename, columns, rows) {
-  var stamped = filename + '-' + new Date().toISOString().slice(0, 10);
-  loadExcelJs()
-    .then(function() { return buildXlsxWorkbook(filename, columns, rows).xlsx.writeBuffer(); })
-    .then(function(buf) { downloadBlob(new Blob([buf], { type: XLSX_MIME }), stamped + '.xlsx'); })
-    .catch(function(err) {
-      console.error('Excel export failed, falling back to CSV:', err);
-      downloadCsv(stamped, columns, rows);
-      showError('Excel export unavailable — downloaded a CSV instead.');
-    });
+  URL.revokeObjectURL(url);
 }
 
 function setKpiCard(valId, hintId, cardId, count) {
@@ -1033,252 +521,6 @@ async function loadExcludedSkus() {
   }
 }
 
-// ── Admin tools ───────────────────────────────────────────────────────────
-var adminUnlocked = false;
-var skuPreviewData = [];
-
-async function checkAdminStatus() {
-  try {
-    var res = await fetch('/api/admin/status');
-    var data = await res.json();
-    setAdminUnlocked(!!data.unlocked, data.expiresAt);
-  } catch (e) { /* treat as locked */ }
-}
-
-function setAdminUnlocked(unlocked, expiresAt) {
-  adminUnlocked = unlocked;
-  document.getElementById('adminLockPanel').style.display = unlocked ? 'none' : 'flex';
-  document.getElementById('adminPanels').style.display = unlocked ? 'block' : 'none';
-  if (unlocked && expiresAt) {
-    var mins = Math.max(0, Math.round((expiresAt - Date.now()) / 60000));
-    document.getElementById('adminSessionLabel').textContent = 'Unlocked · session active ~' + mins + ' more min';
-  }
-  if (unlocked) refreshBulkCancelData();
-}
-
-async function unlockAdmin() {
-  var pw = document.getElementById('adminPasswordInput').value;
-  var errEl = document.getElementById('adminLockErr');
-  errEl.textContent = '';
-  try {
-    var res = await fetch('/api/admin/unlock', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pw }) });
-    var data = await res.json();
-    if (!res.ok) { errEl.textContent = data.error || 'Incorrect password.'; return; }
-    document.getElementById('adminPasswordInput').value = '';
-    setAdminUnlocked(true, data.expiresAt);
-  } catch (e) {
-    errEl.textContent = 'Could not reach server.';
-  }
-}
-
-async function lockAdmin() {
-  try { await fetch('/api/admin/lock', { method: 'POST' }); } catch (e) {}
-  setAdminUnlocked(false);
-}
-
-// -- Remove SKU tool --
-async function previewSkuRemoval() {
-  var sku = document.getElementById('skuRemoveInput').value.trim();
-  var resultEl = document.getElementById('skuResult');
-  resultEl.innerHTML = '';
-  if (!sku) return;
-  try {
-    var res = await fetch('/api/admin/remove-sku/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sku: sku }) });
-    var data = await res.json();
-    if (res.status === 401) { setAdminUnlocked(false); return; }
-    if (!res.ok) throw new Error(data.error || 'Server error');
-    skuPreviewData = data.drafts || [];
-    renderSkuPreview();
-  } catch (err) {
-    resultEl.innerHTML = '<div class="admin-result err">Error: ' + esc(err.message) + '</div>';
-  }
-}
-
-function renderSkuPreview() {
-  var wrap = document.getElementById('skuPreviewWrap');
-  var emptyEl = document.getElementById('skuPreviewEmpty');
-  var rowsEl = document.getElementById('skuPreviewRows');
-  if (!skuPreviewData.length) {
-    wrap.style.display = 'none';
-    emptyEl.style.display = 'block';
-    return;
-  }
-  emptyEl.style.display = 'none';
-  wrap.style.display = 'block';
-  rowsEl.innerHTML = skuPreviewData.map(function(d, i) {
-    return '<tr>' +
-      '<td><input type="checkbox" class="sku-row-check" data-idx="' + i + '" checked></td>' +
-      '<td>' + esc(d.name) + '</td>' +
-      '<td>' + esc(d.email) + '</td>' +
-      '<td>' + d.removedQty + '</td>' +
-      '<td>$' + d.totalPrice.toFixed(2) + '</td>' +
-      '<td>' + (d.wouldDelete ? '<span class="admin-badge">Deletes draft</span>' : 'Removes line') + '</td>' +
-      '</tr>';
-  }).join('');
-  document.getElementById('skuExecuteBtn').textContent = 'Remove From ' + skuPreviewData.length + ' Draft' + (skuPreviewData.length !== 1 ? 's' : '');
-}
-
-async function executeSkuRemoval() {
-  var sku = document.getElementById('skuRemoveInput').value.trim();
-  var checks = document.querySelectorAll('.sku-row-check:checked');
-  var draftIds = Array.prototype.map.call(checks, function(c) { return skuPreviewData[+c.dataset.idx].id; });
-  var resultEl = document.getElementById('skuResult');
-  if (!draftIds.length) return;
-  var btn = document.getElementById('skuExecuteBtn');
-  btn.disabled = true;
-  try {
-    var res = await fetch('/api/admin/remove-sku/execute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sku: sku, draftIds: draftIds }) });
-    var data = await res.json();
-    if (res.status === 401) { setAdminUnlocked(false); return; }
-    if (!res.ok) throw new Error(data.error || 'Server error');
-    resultEl.innerHTML = '<div class="admin-result ok">Deleted ' + data.deleted.length + ', updated ' + data.updated.length +
-      (data.failed.length ? ', <b>' + data.failed.length + ' failed</b>' : '') + '.</div>';
-    document.getElementById('skuPreviewWrap').style.display = 'none';
-    skuPreviewData = [];
-  } catch (err) {
-    resultEl.innerHTML = '<div class="admin-result err">Error: ' + esc(err.message) + '</div>';
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-// -- Bulk cancel tool: full backorder-remainder list with manual, per-draft
-// selection. The spend/value threshold is a quick-select convenience, not a
-// filter on which rows are visible — every open split-remainder draft is
-// listed and can be checked individually, since a person may want to cancel
-// one specific draft that doesn't happen to match the auto-criteria. --
-var bulkCancelAllRows = [];      // every open split-remainder draft
-var bulkCancelSelected = new Set(); // selected draft ids (persists across re-renders/search)
-
-function refreshBulkCancelData() {
-  if (!adminUnlocked) return;
-  bulkCancelAllRows = stageRows('split-remainder').slice().sort(function(a, b) { return (a.totalPrice || 0) - (b.totalPrice || 0); });
-  // Drop selections for drafts that are no longer open/split-remainder
-  // (e.g. already released or cancelled since the last refresh).
-  var idSet = new Set(bulkCancelAllRows.map(function(r) { return r.id; }));
-  Array.from(bulkCancelSelected).forEach(function(id) { if (!idSet.has(id)) bulkCancelSelected.delete(id); });
-  renderBulkCancelTable();
-}
-
-function renderBulkCancelTable() {
-  var wrap = document.getElementById('bulkCancelPreviewWrap');
-  var emptyEl = document.getElementById('bulkCancelEmpty');
-  var rowsEl = document.getElementById('bulkCancelRows');
-  var searchInput = document.getElementById('bulkCancelSearchInput');
-  var q = searchInput ? searchInput.value.trim().toLowerCase() : '';
-
-  if (!bulkCancelAllRows.length) {
-    wrap.style.display = 'none';
-    emptyEl.style.display = 'block';
-    emptyEl.textContent = 'No backorder-remainder drafts open right now.';
-    updateBulkCancelSelectionUI();
-    return;
-  }
-
-  var filtered = q
-    ? bulkCancelAllRows.filter(function(r) {
-        return (r.name || '').toLowerCase().indexOf(q) !== -1 || (r.email || '').toLowerCase().indexOf(q) !== -1;
-      })
-    : bulkCancelAllRows;
-
-  if (!filtered.length) {
-    wrap.style.display = 'none';
-    emptyEl.style.display = 'block';
-    emptyEl.textContent = 'No drafts match that search.';
-    updateBulkCancelSelectionUI();
-    return;
-  }
-
-  emptyEl.style.display = 'none';
-  wrap.style.display = 'block';
-
-  rowsEl.innerHTML = filtered.map(function(r) {
-    var checked = bulkCancelSelected.has(r.id);
-    return '<tr class="' + (checked ? 'selected' : '') + '">' +
-      '<td><input type="checkbox" class="bulk-row-check" data-id="' + esc(r.id) + '"' + (checked ? ' checked' : '') + ' onchange="toggleBulkCancelRow(this)"></td>' +
-      '<td>' + esc(r.name) + '</td>' +
-      '<td>' + esc(r.email) + '</td>' +
-      '<td>$' + (r.customerSpend12mo || 0).toFixed(2) + '</td>' +
-      '<td>$' + r.totalPrice.toFixed(2) + '</td>' +
-      '</tr>';
-  }).join('');
-
-  updateBulkCancelSelectionUI();
-}
-
-function toggleBulkCancelRow(checkbox) {
-  var id = checkbox.dataset.id;
-  if (checkbox.checked) bulkCancelSelected.add(id);
-  else bulkCancelSelected.delete(id);
-  checkbox.closest('tr').classList.toggle('selected', checkbox.checked);
-  updateBulkCancelSelectionUI();
-}
-
-// Applies only to the rows currently visible (post-search) — selecting or
-// clearing "visible" after typing a search only touches what's on screen.
-function selectVisibleBulkCancelRows(select) {
-  var checks = document.querySelectorAll('.bulk-row-check');
-  checks.forEach(function(c) {
-    c.checked = select;
-    if (select) bulkCancelSelected.add(c.dataset.id);
-    else bulkCancelSelected.delete(c.dataset.id);
-    c.closest('tr').classList.toggle('selected', select);
-  });
-  updateBulkCancelSelectionUI();
-}
-
-function clearAllBulkCancelSelection() {
-  bulkCancelSelected.clear();
-  renderBulkCancelTable();
-}
-
-// Quick-select: checks every draft under the $75 hold value AND under the
-// entered spend threshold — same criteria the dashboard's spend buckets use
-// — without unchecking anything already selected by hand.
-function quickSelectByThreshold() {
-  var threshold = parseFloat(document.getElementById('spendThresholdInput').value) || 0;
-  bulkCancelAllRows.forEach(function(r) {
-    if ((r.totalPrice || 0) < BACKORDER_HOLD_VALUE && (r.customerSpend12mo || 0) < threshold) {
-      bulkCancelSelected.add(r.id);
-    }
-  });
-  renderBulkCancelTable();
-}
-
-function updateBulkCancelSelectionUI() {
-  var n = bulkCancelSelected.size;
-  var countEl = document.getElementById('bulkCancelSelectCount');
-  if (countEl) countEl.textContent = n + ' selected';
-  var btn = document.getElementById('bulkCancelExecuteBtn');
-  if (btn) {
-    btn.textContent = 'Cancel Selected Drafts (' + n + ')';
-    btn.disabled = n === 0;
-  }
-}
-
-async function executeBulkCancel() {
-  var draftIds = Array.from(bulkCancelSelected);
-  var resultEl = document.getElementById('bulkCancelResult');
-  if (!draftIds.length) return;
-  var btn = document.getElementById('bulkCancelExecuteBtn');
-  btn.disabled = true;
-  try {
-    var res = await fetch('/api/admin/bulk-cancel/execute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ draftIds: draftIds }) });
-    var data = await res.json();
-    if (res.status === 401) { setAdminUnlocked(false); return; }
-    if (!res.ok) throw new Error(data.error || 'Server error');
-    resultEl.innerHTML = '<div class="admin-result ok">Cancelled ' + data.deleted.length +
-      (data.skipped.length ? ', skipped ' + data.skipped.length + ' (no longer eligible)' : '') +
-      (data.failed.length ? ', <b>' + data.failed.length + ' failed</b>' : '') + '.</div>';
-    bulkCancelSelected.clear();
-    refreshBulkCancelData();
-  } catch (err) {
-    resultEl.innerHTML = '<div class="admin-result err">Error: ' + esc(err.message) + '</div>';
-    updateBulkCancelSelectionUI();
-  }
-}
-
-checkAdminStatus();
 runFetch();
 </script>
 </body>
