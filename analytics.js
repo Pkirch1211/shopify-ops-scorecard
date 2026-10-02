@@ -42,6 +42,15 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
     }
   }`;
 
+  // Lightweight pull used only to rank the customer dropdown by this year's volume.
+  const YTD_QUERY = `
+  query AnalyticsYtd($first: Int!, $after: String, $query: String!) {
+    orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT) {
+      pageInfo { hasNextPage endCursor }
+      edges { node { id customer { id } currentSubtotalPriceSet { shopMoney { amount } } } }
+    }
+  }`;
+
   // discountedTotalSet = line total after line-level discounts / price overrides
   // (whole quantity), so unit value = discountedTotalSet / quantity.
   const DRAFTS_QUERY = `
@@ -108,31 +117,51 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
       d => d.customers.edges, d => d.customers.pageInfo, 180000);
 
     const groups = new Map();
+    const idToGroup = new Map();
     const add = (id, company, name, email) => {
       const label = (company || name || email || "Unknown").trim();
       const key = label.toLowerCase();
-      if (!groups.has(key)) groups.set(key, { key, label, ids: new Set(), emails: new Set() });
+      if (!groups.has(key)) groups.set(key, { key, label, ids: new Set(), emails: new Set(), ytd: 0, ytdOrders: 0, drafts: 0 });
       const g = groups.get(key);
-      if (id) g.ids.add(id);
+      if (id) { g.ids.add(id); idToGroup.set(id, g); }
       if (email) g.emails.add(email.toLowerCase());
     };
 
     for (const c of customers) add(gidNum(c.id), c.defaultAddress?.company, c.displayName, c.email);
 
-    // Customers that only exist on an open draft (brand-new accounts).
+    // Customers that only exist on an open draft (brand-new accounts), plus an
+    // open-draft count per company so new accounts still rank as "active".
     try {
       for (const d of await getOpenDrafts()) {
-        if (d.customer?.id) add(gidNum(d.customer.id), d.shippingAddress?.company || d.billingAddress?.company, d.customer.displayName, d.email);
+        if (!d.customer?.id) continue;
+        add(gidNum(d.customer.id), d.shippingAddress?.company || d.billingAddress?.company, d.customer.displayName, d.email);
+        const g = idToGroup.get(gidNum(d.customer.id));
+        if (g) g.drafts++;
       }
     } catch (e) { console.warn("[analytics] drafts merge for directory failed:", e.message); }
 
+    // Year-to-date merchandise volume per company (calendar year, cancelled excluded).
+    // If this fails the directory still works — it just isn't ranked.
+    try {
+      const yearStart = `${new Date().getUTCFullYear()}-01-01`;
+      const orders = await gqlAll(b2bStore, b2bToken, YTD_QUERY,
+        { first: 250, query: `created_at:>=${yearStart} -status:cancelled` },
+        d => d.orders.edges, d => d.orders.pageInfo, 180000);
+      for (const o of orders) {
+        const g = idToGroup.get(gidNum(o.customer?.id));
+        if (!g) continue;
+        g.ytd += parseFloat(o.currentSubtotalPriceSet?.shopMoney?.amount) || 0;
+        g.ytdOrders++;
+      }
+    } catch (e) { console.warn("[analytics] YTD volume for directory failed:", e.message); }
+
     return [...groups.values()]
-      .map(g => ({ key: g.key, label: g.label, ids: [...g.ids], emails: [...g.emails].slice(0, 3) }))
+      .map(g => ({
+        key: g.key, label: g.label, ids: [...g.ids], emails: [...g.emails].slice(0, 3),
+        ytd: Math.round(g.ytd), ytdOrders: g.ytdOrders, drafts: g.drafts,
+      }))
       .sort((a, b) => a.label.localeCompare(b.label));
   }
-
-  // ── GET ping (deploy check) ────────────────────────────────────────────────
-  app.get("/api/analytics/ping", (req, res) => res.json({ ok: true }));
 
   // ── Customer directory: Postgres-backed, refreshed in the background ───────
   // The list is saved to its own table (analytics_directory, one row) so it
@@ -146,9 +175,14 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
         id INTEGER PRIMARY KEY, payload TEXT NOT NULL, updated_at TIMESTAMPTZ DEFAULT NOW())`);
       const r = await db.query("SELECT payload, updated_at FROM analytics_directory WHERE id = 1");
       if (r.rows[0]) {
-        directoryCache = JSON.parse(r.rows[0].payload);
-        directoryCacheTime = new Date(r.rows[0].updated_at).getTime();
-        console.log(`[analytics] loaded ${directoryCache.length} customers from DB`);
+        const saved = JSON.parse(r.rows[0].payload);
+        if (saved.length && saved[0].ytd === undefined) {
+          console.log("[analytics] saved directory predates volume ranking; rebuilding");
+        } else {
+          directoryCache = saved;
+          directoryCacheTime = new Date(r.rows[0].updated_at).getTime();
+          console.log(`[analytics] loaded ${directoryCache.length} customers from DB`);
+        }
       }
     } catch (e) { console.warn("[analytics] directory store unavailable, using memory only:", e.message); }
   }
