@@ -1758,6 +1758,9 @@ app.get("/api/sync-status", async (req, res) => {
   }
 });
 
+// ── Analytics (read-only B2B customer/SKU summary) ────────────────────────────
+require("./analytics")(app, { gql, gqlAll, CREDS });
+
 // ── Boot ──────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 
