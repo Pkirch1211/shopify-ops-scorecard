@@ -128,6 +128,14 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
       return { autoStrip: true, rules: [], never: new Set() };
     }
   }
+  // Looser key used to fold spelling variants of the same name together:
+  // "GRETCHENS Hallmark" / "Gretchen's Hallmark" / "Gretchen’s Hallmark" all match.
+  const looseKey = s => normName(s).replace(/'/g, "").replace(/\band\b/g, "&").replace(/ & /g, " ")
+    .replace(/^the /, "").replace(/\b(inc|llc|ltd|co|corp|company)\b/g, "").replace(/\s+/g, " ").trim();
+  const nicer = (a, b) => {   // which spelling to show: mixed case > ALL CAPS, has apostrophe, then longer
+    const score = x => (x !== x.toUpperCase() ? 4 : 0) + (x !== x.toLowerCase() ? 1 : 0) + (/['’]/.test(x) ? 2 : 0);
+    return score(b) > score(a) ? b : a;
+  };
   function parentOf(label, cfg) {
     const n = normName(label);
     if (cfg.never.has(n)) return label;
@@ -151,9 +159,10 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
     const add = (id, company, name, email) => {
       const store = (company || name || email || "Unknown").trim();
       const label = parentOf(store, groupCfg);
-      const key = label.toLowerCase();
+      const key = looseKey(label) || label.toLowerCase();
       if (!groups.has(key)) groups.set(key, { key, label, ids: new Set(), emails: new Set(), members: new Set(), ytd: 0, ytdOrders: 0, drafts: 0 });
       const g = groups.get(key);
+      g.label = nicer(g.label, label);
       g.members.add(store);
       if (id) { g.ids.add(id); idToGroup.set(id, g); }
       if (email) g.emails.add(email.toLowerCase());
@@ -342,6 +351,7 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
         : [[]];
 
       const orderMap = new Map();
+      const jobs = [];
       for (const chunk of chunks) {
         const custClause = chunk.length ? "(" + chunk.map(i => `customer_id:${i}`).join(" OR ") + ")" : "";
         const base = ["-status:cancelled", custClause, skuClause].filter(Boolean).join(" ");
@@ -349,13 +359,22 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
         if (wantOpen) queries.push(`${base} (fulfillment_status:unfulfilled OR fulfillment_status:partial)`);
         // Only orders that can have shipped units; skips never-fulfilled orders in the range.
         if (wantFul) queries.push(`${base} (fulfillment_status:fulfilled OR fulfillment_status:partial) created_at:>=${fromStr} created_at:<${toExclusiveStr}`);
-        for (const q of queries) {
+        for (const q of queries) jobs.push(q);
+      }
+      // Run the searches a few at a time instead of one after another. Three is
+      // a deliberate ceiling: enough to roughly cut wall time by a factor of
+      // three without tripping Shopify's query-cost throttle.
+      let next = 0;
+      const worker = async () => {
+        while (next < jobs.length) {
+          const q = jobs[next++];
           const nodes = await gqlAll(b2bStore, b2bToken, ORDERS_QUERY,
             { first: PAGE, query: q },
             d => d.orders.edges, d => d.orders.pageInfo, 120000);
           for (const n of nodes) orderMap.set(n.id, n);
         }
-      }
+      };
+      await Promise.all(Array.from({ length: Math.min(3, jobs.length) }, worker));
 
       for (const o of orderMap.values()) {
         if (o.cancelledAt) continue;
