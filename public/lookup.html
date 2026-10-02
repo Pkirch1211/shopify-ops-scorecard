@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lookup — LifeLines</title>
+<style>
+@import url('https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=swap');
+:root{--bg:#f0f0eb;--surface:#f7f7f3;--surface2:#e8e8e3;--border:#d4d4cc;--border2:#c8c8c0;--text:#2a2a28;--muted:#6b6b64;--dim:#9a9a92;--green:#4a6741;--green-bg:#4a6741;--green-light:#e8ede7;--dtc:#3d5c8a;--warn:#8a5c2a;--danger:#8a2a2a;--sans:'Satoshi',sans-serif;--shadow:0 1px 3px rgba(0,0,0,0.07)}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;min-height:100vh}
+header{position:sticky;top:0;z-index:100;display:grid;grid-template-columns:auto 1fr auto;align-items:stretch;border-bottom:2px solid var(--border);background:var(--surface)}
+.header-brand{background:var(--green-bg);color:#fff;padding:14px 22px;display:flex;flex-direction:column;justify-content:center}
+.brand-name{font-size:15px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+.brand-sub{font-size:9px;letter-spacing:.14em;text-transform:uppercase;opacity:.65;margin-top:2px}
+.header-title{padding:14px 24px;display:flex;flex-direction:column;justify-content:center;border-right:1px solid var(--border)}
+.header-title h1{font-size:15px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+.header-title p{font-size:10px;color:var(--muted);margin-top:3px;letter-spacing:.05em}
+.header-right{display:flex;align-items:center;gap:20px;padding:0 24px}
+nav{display:flex;gap:3px}
+.nav-link{font-size:10px;letter-spacing:.1em;text-transform:uppercase;padding:6px 14px;border:1px solid transparent;border-radius:2px;text-decoration:none;color:var(--muted);transition:all .12s}
+.nav-link:hover{color:var(--text);border-color:var(--border2)}
+.nav-link.active{color:var(--green);border-color:var(--green);background:var(--green-light)}
+main{padding:24px 28px 48px;max-width:1280px;margin:0 auto}
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:3px;box-shadow:var(--shadow);padding:18px 20px;margin-bottom:16px;max-width:1100px}
+.mode-toggle{display:inline-flex;border:1px solid var(--border2);border-radius:2px;overflow:hidden;margin-bottom:16px}
+.mode-btn{font-family:var(--sans);font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:8px 16px;background:var(--surface);color:var(--muted);border:none;cursor:pointer}
+.mode-btn.active{background:var(--green);color:#fff}
+.field{margin-bottom:14px}
+.field label{display:block;font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+.field .help{font-size:11px;color:var(--dim);margin-top:4px}
+input[type=text],input[type=date],textarea{width:100%;background:#fff;border:1px solid var(--border2);color:var(--text);font-family:var(--sans);font-size:14px;padding:9px 11px;border-radius:2px;outline:none}
+input:focus,textarea:focus{border-color:var(--green)}
+textarea{resize:vertical;min-height:64px}
+.row{display:flex;gap:14px;flex-wrap:wrap}
+.row .field{flex:1;min-width:160px}
+.combo{position:relative}
+.combo-list{position:absolute;left:0;right:0;top:100%;z-index:50;background:#fff;border:1px solid var(--green);border-top:none;max-height:260px;overflow-y:auto;display:none;box-shadow:0 4px 10px rgba(0,0,0,.1)}
+.combo-item{padding:8px 11px;cursor:pointer;display:flex;justify-content:space-between;gap:10px;border-bottom:1px solid var(--surface2)}
+.combo-item:last-child{border-bottom:none}
+.combo-item.hl,.combo-item:hover{background:var(--green-light)}
+.combo-item .sub{font-size:11px;color:var(--dim);white-space:nowrap}
+.combo-empty{padding:10px 11px;font-size:12px;color:var(--dim)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.chip{background:var(--green-light);border:1px solid var(--green);color:var(--green);font-size:12px;font-weight:500;padding:4px 6px 4px 10px;border-radius:2px;display:inline-flex;align-items:center;gap:6px}
+.chip button{background:none;border:none;color:var(--green);font-size:15px;line-height:1;cursor:pointer}
+.btn{font-family:var(--sans);font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;padding:10px 18px;border-radius:2px;border:none;cursor:pointer;background:var(--green);color:#fff}
+.btn:hover{opacity:.85}
+.btn:disabled{opacity:.5;cursor:default}
+.btn.secondary{background:var(--surface);color:var(--green);border:1px solid var(--green)}
+.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.status{font-size:11px;color:var(--dim)}
+.error-banner{background:#f5e0e0;border:1px solid #d49696;color:var(--danger);font-size:12px;padding:10px 16px;border-radius:2px;margin-bottom:16px;display:none}
+.result-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin:22px 0 8px;flex-wrap:wrap}
+.result-title{font-size:12px;font-weight:700;letter-spacing:.1em;text-transform:uppercase}
+.result-sub{font-size:11px;color:var(--dim)}
+.tbl-wrap{border:1px solid var(--border);border-radius:3px;overflow-x:auto;background:var(--surface);box-shadow:var(--shadow);margin-bottom:6px}
+table{width:100%;border-collapse:separate;border-spacing:0;font-size:13px}
+th{background:var(--surface2);text-align:right;font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:9px 12px;border-bottom:1px solid var(--border);white-space:nowrap}
+th.grp{text-align:center;border-bottom:1px solid var(--border2);color:var(--text)}
+th.grp.dollars{border-left:2px solid var(--border2)}
+th.dsep,td.dsep{border-left:2px solid var(--border2)}
+th:first-child,td:first-child{text-align:left}
+th.first{vertical-align:bottom;min-width:150px}
+td{padding:10px 12px;border-bottom:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+td:first-child,th.first{position:sticky;left:0;z-index:2}
+td:first-child{background:var(--surface);white-space:normal;min-width:150px}
+tr.main{cursor:pointer}
+tr.main:hover td{background:#eeeee9}
+tr.total td{font-weight:700;background:var(--surface2);border-bottom:none}
+td .name{font-weight:700;display:block;text-align:left}
+td .desc{font-size:11px;color:var(--muted);display:block;text-align:left;font-weight:400}
+td.open{font-weight:700;color:var(--green)}
+td.zero{color:var(--dim)}
+tr.detail{display:none}
+tr.detail.show{display:table-row}
+tr.detail td{background:#fff;text-align:left;padding:0;white-space:normal}
+tr.detail td:first-child{position:static}
+.detail-inner{position:sticky;left:0;width:min(900px,calc(100vw - 58px));padding:6px 14px 10px 28px}
+.drow{display:grid;grid-template-columns:70px 90px 100px 1fr 190px;gap:10px;padding:5px 0;font-size:12px;border-bottom:1px dashed var(--border)}
+.drow:last-child{border-bottom:none}
+.d-qty{text-align:right;font-variant-numeric:tabular-nums}
+.badge{font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:2px 6px;border-radius:2px;align-self:center;text-align:center}
+.badge.draft{background:#f3ead9;color:var(--warn)}
+.badge.order{background:var(--green-light);color:var(--green)}
+.note{font-size:11px;color:var(--muted);line-height:1.6;margin-top:18px;padding:12px 14px;border-left:3px solid var(--warn);background:#f3ead9;max-width:1100px}
+.empty{padding:40px;text-align:center;color:var(--dim);font-size:13px}
+@media(max-width:640px){
+  header{grid-template-columns:1fr;position:static}
+  .header-brand{padding:10px 16px}
+  .header-title{padding:10px 16px;border-right:none;border-bottom:1px solid var(--border)}
+  .header-right{padding:10px 16px}
+  nav{flex-wrap:wrap;gap:4px}
+  .nav-link{font-size:9px;padding:5px 9px}
+  main{padding:14px 14px 32px}
+  th,td{padding:9px 10px}
+  th.first,td:first-child{min-width:120px}
+  .drow{grid-template-columns:60px 80px 1fr}
+  .drow .d-title,.drow .d-qty{grid-column:1 / -1;text-align:left}
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="header-brand"><div class="brand-name">LifeLines</div><div class="brand-sub">Ops Tools</div></div>
+  <div class="header-title"><h1>Lookup</h1><p>B2B Units &amp; Dollars On Order &middot; By Customer or SKU</p></div>
+  <div class="header-right">
+    <nav>
+      <a href="/" class="nav-link">Scorecard</a>
+      <a href="/dtc.html" class="nav-link">DTC</a>
+      <a href="/b2b.html" class="nav-link">B2B</a>
+      <a href="/npi.html" class="nav-link">NPI</a>
+      <a href="/care.html" class="nav-link">Care@</a>
+      <a href="/draft-health.html" class="nav-link">Order Engine</a>
+      <a href="/lookup.html" class="nav-link active">Lookup</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="error-banner" id="errorBanner"></div>
+
+  <div class="panel">
+    <div class="mode-toggle">
+      <button class="mode-btn active" id="modeCustomer" type="button">By customer</button>
+      <button class="mode-btn" id="modeSku" type="button">By SKU</button>
+    </div>
+
+    <div class="field" id="customerField">
+      <label for="custInput">Customer</label>
+      <div class="combo">
+        <input type="text" id="custInput" placeholder="Loading customers…" autocomplete="off" disabled>
+        <div class="combo-list" id="comboList"></div>
+      </div>
+      <div class="chips" id="chips"></div>
+      <div class="help" id="custHelp">Start typing — pick more than one to combine (e.g. HomeGoods + TJX).</div>
+    </div>
+
+    <div class="field">
+      <label for="skuInput" id="skuLabel">SKUs</label>
+      <textarea id="skuInput" placeholder="Paste SKUs from the email, e.g. LL-16-3366, LL-16-3369 and LL-20-3377"></textarea>
+      <div class="help" id="skuHelp">Optional here — leave blank to see every SKU for the customer.</div>
+    </div>
+
+    <div class="row">
+      <div class="field"><label for="fromDate">Fulfilled from</label><input type="date" id="fromDate"></div>
+      <div class="field"><label for="toDate">Fulfilled to</label><input type="date" id="toDate"></div>
+    </div>
+    <div class="help" style="margin:-6px 0 14px;font-size:11px;color:var(--dim)">The date range only affects the Fulfilled columns. Open drafts and unfulfilled orders are always shown in full.</div>
+
+    <div class="actions">
+      <button class="btn" id="runBtn" type="button">Look up</button>
+      <button class="btn secondary" id="csvBtn" type="button" style="display:none">Export CSV</button>
+      <span class="status" id="status"></span>
+    </div>
+  </div>
+
+  <div id="results"></div>
+</main>
+
+<script>
+var mode = 'customer';          // 'customer' | 'sku'
+var directory = [];             // [{key,label,ids,emails}]
+var idToEntry = {};             // numeric id -> directory entry
+var selected = [];              // selected directory entries
+var lastData = null;            // last query response
+var lastReqSkus = [];
+var groupsStore = [];           // groups for detail toggling
+var hlIndex = -1, matches = [];
+
+function $(id) { return document.getElementById(id); }
+function esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function num(n) { return (n || 0).toLocaleString(); }
+function usd(n) { return '$' + Math.round(n || 0).toLocaleString('en-US'); }
+
+// ── Setup ────────────────────────────────────────────────────────────────────
+(function init() {
+  var now = new Date();
+  $('fromDate').value = now.getFullYear() + '-01-01';
+  $('toDate').value = now.toISOString().slice(0, 10);
+  $('modeCustomer').onclick = function() { setMode('customer'); };
+  $('modeSku').onclick = function() { setMode('sku'); };
+  $('runBtn').onclick = runLookup;
+  $('csvBtn').onclick = exportCsv;
+  wireCombo();
+  loadDirectory();
+})();
+
+function setMode(m) {
+  mode = m;
+  $('modeCustomer').classList.toggle('active', m === 'customer');
+  $('modeSku').classList.toggle('active', m === 'sku');
+  if (m === 'customer') {
+    $('custHelp').textContent = 'Start typing — pick more than one to combine (e.g. HomeGoods + TJX).';
+    $('skuHelp').textContent = 'Optional here — leave blank to see every SKU for the customer.';
+    $('skuLabel').textContent = 'SKUs';
+  } else {
+    $('custHelp').textContent = 'Optional here — leave blank to see every customer with the SKU on order.';
+    $('skuHelp').textContent = 'Paste one or more SKUs.';
+    $('skuLabel').textContent = 'SKUs (required)';
+  }
+  $('results').innerHTML = '';
+  $('csvBtn').style.display = 'none';
+}
+
+async function loadDirectory() {
+  try {
+    var res = await fetch('/api/lookup/customers');
+    var data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Server error');
+    directory = (data.customers || []).map(function(c) {
+      c.hay = (c.label + ' ' + (c.emails || []).join(' ')).toLowerCase();
+      c.ids.forEach(function(id) { idToEntry[id] = c; });
+      return c;
+    });
+    $('custInput').disabled = false;
+    $('custInput').placeholder = 'Type a company name…  (' + directory.length.toLocaleString() + ' customers)';
+  } catch (err) {
+    $('custInput').placeholder = 'Customer list unavailable';
+    showError('Could not load customers: ' + err.message);
+  }
+}
+
+// ── Fuzzy combobox ───────────────────────────────────────────────────────────
+function fuzzy(q, s) {
+  var toks = q.split(/\s+/).filter(Boolean), total = 0;
+  for (var t = 0; t < toks.length; t++) {
+    var tok = toks[t], i = s.indexOf(tok);
+    if (i >= 0) {
+      total += 100 - Math.min(i, 50) + ((i === 0 || s.charAt(i - 1) === ' ') ? 20 : 0);
+    } else {
+      var p = 0, last = -1, gaps = 0;
+      for (var c = 0; c < tok.length; c++) {
+        var j = s.indexOf(tok.charAt(c), p);
+        if (j < 0) return 0;
+        if (last >= 0) gaps += j - last - 1;
+        last = j; p = j + 1;
+      }
+      if (gaps > tok.length * 2) return 0;
+      total += Math.max(1, 30 - gaps);
+    }
+  }
+  return total;
+}
+
+function wireCombo() {
+  var input = $('custInput'), list = $('comboList');
+  input.addEventListener('input', renderCombo);
+  input.addEventListener('focus', renderCombo);
+  input.addEventListener('keydown', function(e) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); moveHl(1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); moveHl(-1); }
+    else if (e.key === 'Enter') { if (hlIndex >= 0 && matches[hlIndex]) { e.preventDefault(); pick(matches[hlIndex]); } }
+    else if (e.key === 'Escape') { list.style.display = 'none'; }
+  });
+  list.addEventListener('mousedown', function(e) {
+    var el = e.target.closest('.combo-item');
+    if (el) { e.preventDefault(); pick(matches[parseInt(el.getAttribute('data-i'), 10)]); }
+  });
+  document.addEventListener('click', function(e) {
+    if (!e.target.closest('.combo')) list.style.display = 'none';
+  });
+  $('chips').addEventListener('click', function(e) {
+    var b = e.target.closest('button[data-key]');
+    if (!b) return;
+    selected = selected.filter(function(c) { return c.key !== b.getAttribute('data-key'); });
+    renderChips();
+  });
+}
+
+function renderCombo() {
+  var q = $('custInput').value.trim().toLowerCase(), list = $('comboList');
+  var chosen = {};
+  selected.forEach(function(c) { chosen[c.key] = true; });
+  if (!q) {
+    matches = directory.filter(function(c) { return !chosen[c.key]; }).slice(0, 12);
+  } else {
+    matches = directory.filter(function(c) { return !chosen[c.key]; })
+      .map(function(c) { return { c: c, s: fuzzy(q, c.hay) }; })
+      .filter(function(x) { return x.s > 0; })
+      .sort(function(a, b) { return b.s - a.s; })
+      .slice(0, 12).map(function(x) { return x.c; });
+  }
+  hlIndex = matches.length ? 0 : -1;
+  list.innerHTML = matches.length
+    ? matches.map(function(c, i) {
+        return '<div class="combo-item' + (i === 0 ? ' hl' : '') + '" data-i="' + i + '"><span>' + esc(c.label) + '</span>' +
+          (c.ids.length > 1 ? '<span class="sub">' + c.ids.length + ' contacts</span>' : '') + '</div>';
+      }).join('')
+    : '<div class="combo-empty">No matching customers</div>';
+  list.style.display = 'block';
+}
+
+function moveHl(d) {
+  if (!matches.length) return;
+  hlIndex = (hlIndex + d + matches.length) % matches.length;
+  var items = $('comboList').querySelectorAll('.combo-item');
+  items.forEach(function(el, i) { el.classList.toggle('hl', i === hlIndex); });
+  if (items[hlIndex]) items[hlIndex].scrollIntoView({ block: 'nearest' });
+}
+
+function pick(c) {
+  if (!c) return;
+  selected.push(c);
+  $('custInput').value = '';
+  $('comboList').style.display = 'none';
+  renderChips();
+}
+
+function renderChips() {
+  $('chips').innerHTML = selected.map(function(c) {
+    return '<span class="chip">' + esc(c.label) + '<button type="button" data-key="' + esc(c.key) + '" aria-label="Remove">&times;</button></span>';
+  }).join('');
+}
+
+// ── Query ────────────────────────────────────────────────────────────────────
+function parseSkus(text) {
+  var found = (text.match(/[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+/g) || []).map(function(s) { return s.toUpperCase(); });
+  if (!found.length) {
+    found = text.split(/[\s,;]+/).filter(function(s) { return /\d/.test(s); }).map(function(s) { return s.toUpperCase(); });
+  }
+  return found.filter(function(s, i) { return found.indexOf(s) === i; });
+}
+
+async function runLookup() {
+  hideError();
+  var skus = parseSkus($('skuInput').value);
+  var ids = [];
+  selected.forEach(function(c) { ids = ids.concat(c.ids); });
+
+  if (mode === 'customer' && !selected.length) return showError('Pick at least one customer.');
+  if (mode === 'sku') {
+    if (!skus.length) return showError('Enter at least one SKU.');
+  }
+  lastReqSkus = skus;
+
+  $('runBtn').disabled = true;
+  $('status').textContent = 'Searching drafts and orders…';
+  $('results').innerHTML = '';
+  try {
+    var res = await fetch('/api/lookup/query', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customerIds: ids, skus: skus, from: $('fromDate').value, to: $('toDate').value }),
+    });
+    var data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Server error');
+    lastData = data;
+    render();
+    $('status').textContent = 'As of ' + new Date(data.asOf).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) +
+      ' · Fulfilled counted for orders placed ' + data.range.from + ' to ' + data.range.to;
+    $('csvBtn').style.display = data.records.length ? 'inline-block' : 'none';
+  } catch (err) {
+    showError(err.message);
+    $('status').textContent = '';
+  } finally {
+    $('runBtn').disabled = false;
+  }
+}
+
+// ── Rendering ────────────────────────────────────────────────────────────────
+function companyOf(r) {
+  var e = idToEntry[r.customerId];
+  return e ? { key: e.key, label: e.label } : { key: 'x:' + r.label.toLowerCase(), label: r.label };
+}
+
+function totals(recs) {
+  var a = { drafts: 0, unf: 0, ful: 0, total: 0, draftsV: 0, unfV: 0, fulV: 0, totalV: 0 };
+  recs.forEach(function(r) {
+    if (r.type === 'draft') { a.drafts += r.open; a.draftsV += r.openValue || 0; }
+    else { a.unf += r.open; a.unfV += r.openValue || 0; }
+    a.ful += r.fulfilled; a.fulV += r.fulfilledValue || 0;
+  });
+  a.total = a.drafts + a.unf;
+  a.totalV = a.draftsV + a.unfV;
+  return a;
+}
+
+function render() {
+  var recs = lastData.records;
+  groupsStore = [];
+  var html = '';
+
+  if (mode === 'customer') {
+    var bySku = {}, order = [];
+    lastReqSkus.forEach(function(s) { bySku[s] = { label: s, sub: '', recs: [] }; order.push(s); });
+    recs.forEach(function(r) {
+      if (!bySku[r.sku]) { bySku[r.sku] = { label: r.sku, sub: '', recs: [] }; order.push(r.sku); }
+      bySku[r.sku].sub = bySku[r.sku].sub || r.title;
+      bySku[r.sku].recs.push(r);
+    });
+    if (!lastReqSkus.length) order.sort(function(a, b) { return totals(bySku[b].recs).total - totals(bySku[a].recs).total; });
+    var title = selected.map(function(c) { return c.label; }).join(' + ');
+    html += resultHead(title, order.length + ' SKU' + (order.length !== 1 ? 's' : ''));
+    html += table('SKU', order.map(function(k) { return bySku[k]; }));
+  } else {
+    var skuList = lastReqSkus.slice();
+    skuList.forEach(function(s) {
+      var sr = recs.filter(function(r) { return r.sku === s; });
+      var byCo = {}, keys = [];
+      sr.forEach(function(r) {
+        var co = companyOf(r);
+        if (!byCo[co.key]) { byCo[co.key] = { label: co.label, sub: '', recs: [] }; keys.push(co.key); }
+        byCo[co.key].recs.push(r);
+      });
+      keys.sort(function(a, b) { return totals(byCo[b].recs).total - totals(byCo[a].recs).total; });
+      var desc = sr.length ? sr[0].title : '';
+      html += resultHead(s + (desc ? ' — ' + desc : ''), keys.length + ' customer' + (keys.length !== 1 ? 's' : ''));
+      html += table('Customer', keys.map(function(k) { return byCo[k]; }), true);
+    });
+  }
+
+  html += '<div class="note"><b>Heads up:</b> This covers drafts and orders in Shopify. Orders received in MarketTime that haven\'t transferred to Shopify yet are not included. ' +
+    'Total Open = Open Drafts + Unfulfilled. Dollars are merchandise value (units × unit price after line-level discounts); order-level discounts, tax and shipping are not included, so they won\'t match invoice totals. ' +
+    'Click any row to see the drafts and orders behind it.</div>';
+  $('results').innerHTML = html;
+  $('results').onclick = function(e) {
+    var tr = e.target.closest('tr.main');
+    if (!tr) return;
+    var d = document.getElementById('d' + tr.getAttribute('data-g'));
+    if (d) d.classList.toggle('show');
+  };
+}
+
+function resultHead(title, sub) {
+  return '<div class="result-head"><span class="result-title">' + esc(title) + '</span><span class="result-sub">' + esc(sub) + '</span></div>';
+}
+
+function table(firstCol, groups, hideSub) {
+  var grand = { drafts: 0, unf: 0, ful: 0, total: 0, draftsV: 0, unfV: 0, fulV: 0, totalV: 0 };
+  var body = groups.map(function(g) {
+    var t = totals(g.recs), gi = groupsStore.length;
+    groupsStore.push(g);
+    Object.keys(grand).forEach(function(k) { grand[k] += t[k]; });
+    var rows = '<tr class="main" data-g="' + gi + '"><td><span class="name">' + esc(g.label) + '</span>' +
+      (g.sub && !hideSub ? '<span class="desc">' + esc(g.sub) + '</span>' : '') + '</td>' +
+      cell(t.drafts) + cell(t.unf) + '<td class="open' + (t.total ? '' : ' zero') + '">' + num(t.total) + '</td>' + cell(t.ful) +
+      vcell(t.draftsV, true) + vcell(t.unfV) + '<td class="open' + (t.totalV ? '' : ' zero') + '">' + usd(t.totalV) + '</td>' + vcell(t.fulV) + '</tr>';
+    rows += '<tr class="detail" id="d' + gi + '"><td colspan="9"><div class="detail-inner">' + detail(g.recs) + '</div></td></tr>';
+    return rows;
+  }).join('');
+  if (!groups.length) body = '<tr><td colspan="9" class="empty">Nothing on order.</td></tr>';
+  var foot = groups.length > 1
+    ? '<tr class="total"><td>Total</td><td>' + num(grand.drafts) + '</td><td>' + num(grand.unf) + '</td><td>' + num(grand.total) + '</td><td>' + num(grand.ful) + '</td>' +
+      '<td class="dsep">' + usd(grand.draftsV) + '</td><td>' + usd(grand.unfV) + '</td><td>' + usd(grand.totalV) + '</td><td>' + usd(grand.fulV) + '</td></tr>' : '';
+  var head = '<tr><th class="first" rowspan="2">' + esc(firstCol) + '</th><th class="grp" colspan="4">Units</th><th class="grp dollars" colspan="4">Dollars</th></tr>' +
+    '<tr><th>Open drafts</th><th>Unfulfilled</th><th>Total open</th><th>Fulfilled</th>' +
+    '<th class="dsep">Open drafts</th><th>Unfulfilled</th><th>Total open</th><th>Fulfilled</th></tr>';
+  return '<div class="tbl-wrap"><table><thead>' + head + '</thead><tbody>' + body + foot + '</tbody></table></div>';
+}
+
+function cell(n) { return '<td' + (n ? '' : ' class="zero"') + '>' + num(n) + '</td>'; }
+function vcell(n, sep) {
+  var cls = (n ? '' : 'zero') + (sep ? ' dsep' : '');
+  return '<td' + (cls.trim() ? ' class="' + cls.trim() + '"' : '') + '>' + usd(n) + '</td>';
+}
+
+function detail(recs) {
+  if (!recs.length) return '<div class="result-sub" style="padding:8px 0">No drafts or orders found.</div>';
+  return recs.slice().sort(function(a, b) { return new Date(b.createdAt) - new Date(a.createdAt); }).map(function(r) {
+    var parts = [];
+    if (r.open) parts.push(num(r.open) + ' open · ' + usd(r.openValue));
+    if (r.fulfilled) parts.push(num(r.fulfilled) + ' fulfilled · ' + usd(r.fulfilledValue));
+    return '<div class="drow"><span class="badge ' + r.type + '">' + (r.type === 'draft' ? 'Draft' : 'Order') + '</span>' +
+      '<span><b>' + esc(r.name) + '</b></span>' +
+      '<span>' + esc(new Date(r.createdAt).toLocaleDateString()) + '</span>' +
+      '<span class="d-title" style="color:var(--muted)">' + esc(r.label) + (mode === 'sku' ? '' : ' · ' + esc(r.sku)) + '</span>' +
+      '<span class="d-qty">' + parts.join('<br>') + '</span></div>';
+  }).join('');
+}
+
+// ── Export ───────────────────────────────────────────────────────────────────
+function csvEsc(v) {
+  var s = String(v == null ? '' : v);
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function exportCsv() {
+  if (!lastData || !lastData.records.length) return;
+  var lines = [['Type', 'Document', 'Created', 'Customer', 'SKU', 'Product', 'Open Qty', 'Open $', 'Fulfilled Qty', 'Fulfilled $'].map(csvEsc).join(',')];
+  lastData.records.forEach(function(r) {
+    lines.push([r.type, r.name, r.createdAt.slice(0, 10), companyOf(r).label, r.sku, r.title,
+      r.open, (r.openValue || 0).toFixed(2), r.fulfilled, (r.fulfilledValue || 0).toFixed(2)].map(csvEsc).join(','));
+  });
+  var blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'lookup-' + new Date().toISOString().slice(0, 10) + '.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function showError(msg) { var el = $('errorBanner'); el.textContent = 'Error: ' + msg; el.style.display = 'block'; }
+function hideError() { $('errorBanner').style.display = 'none'; }
+</script>
+</body>
+</html>
