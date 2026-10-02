@@ -1,0 +1,19 @@
+{
+  "_readme": "Rolls individual store records up into one parent in the Analytics dropdown. Rules are checked top to bottom; first match wins. 'startsWith' ignores case, punctuation and extra spaces. After the rules, autoStrip trims store numbers and ' - Location' suffixes (e.g. \"Trudy's Hallmark #100\" -> \"Trudy's Hallmark\"). Names that match nothing stay as their own entry. Edit, commit, and the next directory refresh (or ?refresh=true) picks it up.",
+  "autoStrip": true,
+  "rules": [
+    {
+      "startsWith": "learning express",
+      "parent": "Learning Express"
+    },
+    {
+      "startsWith": "new seasons market",
+      "parent": "New Seasons Market"
+    },
+    {
+      "startsWith": "hobbytown",
+      "parent": "HobbyTown"
+    }
+  ],
+  "neverGroup": []
+}
