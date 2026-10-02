@@ -3,7 +3,7 @@
 // "who has <SKU> on order?" without touching any existing endpoint, cache, or table.
 //
 // Wire-up in server.js (after the CREDS block and gql/gqlAll/restFetchAll definitions):
-//     require("./analytics")(app, { gql, gqlAll, CREDS });
+//     require("./analytics")(app, { gql, gqlAll, CREDS, db });
 //
 // Quick check after deploy: open /api/analytics/ping — it should return {"ok":true}.
 // If it returns a web page instead, the require line is missing or analytics.js
@@ -13,8 +13,8 @@
 // read_customers (the last one is new — needed for the customer dropdown and
 // for customer_id order search).
 
-module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS }) {
-  const DIRECTORY_TTL = 60 * 60 * 1000; // customers rarely change
+module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
+  const DIRECTORY_TTL = 60 * 60 * 1000; // customer list is refreshed in the background after this
   const DRAFTS_TTL = 5 * 60 * 1000;
   const ID_CHUNK = 25;                  // customer ids per order search
   const SKU_RE = /^[A-Za-z0-9._\-]+$/;
@@ -24,7 +24,7 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS }) {
   // single-query cost cap isn't a new risk. gqlAll paginates for us.
   const PAGE = 50;
 
-  let directoryCache = null, directoryCacheTime = 0;
+  let directoryCache = null, directoryCacheTime = 0, building = null;
   let draftsCache = null, draftsCacheTime = 0;
 
   const gidNum = id => (id || "").split("/").pop();
@@ -134,17 +134,70 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS }) {
   // ── GET ping (deploy check) ────────────────────────────────────────────────
   app.get("/api/analytics/ping", (req, res) => res.json({ ok: true }));
 
+  // ── Customer directory: Postgres-backed, refreshed in the background ───────
+  // The list is saved to its own table (analytics_directory, one row) so it
+  // survives deploys and restarts. Requests are always served from memory; a
+  // stale list is returned immediately while a refresh runs behind it. Only the
+  // very first load on a brand-new database ever makes anyone wait.
+  async function initStore() {
+    if (!db) return;
+    try {
+      await db.query(`CREATE TABLE IF NOT EXISTS analytics_directory (
+        id INTEGER PRIMARY KEY, payload TEXT NOT NULL, updated_at TIMESTAMPTZ DEFAULT NOW())`);
+      const r = await db.query("SELECT payload, updated_at FROM analytics_directory WHERE id = 1");
+      if (r.rows[0]) {
+        directoryCache = JSON.parse(r.rows[0].payload);
+        directoryCacheTime = new Date(r.rows[0].updated_at).getTime();
+        console.log(`[analytics] loaded ${directoryCache.length} customers from DB`);
+      }
+    } catch (e) { console.warn("[analytics] directory store unavailable, using memory only:", e.message); }
+  }
+
+  async function saveDirectory(list) {
+    if (!db) return;
+    try {
+      await db.query(`INSERT INTO analytics_directory (id, payload, updated_at) VALUES (1, $1, NOW())
+        ON CONFLICT (id) DO UPDATE SET payload = $1, updated_at = NOW()`, [JSON.stringify(list)]);
+    } catch (e) { console.warn("[analytics] could not save directory:", e.message); }
+  }
+
+  // One refresh at a time; callers that arrive mid-refresh share it.
+  function refreshDirectory() {
+    if (building) return building;
+    building = (async () => {
+      try {
+        const list = await buildDirectory();
+        directoryCache = list;
+        directoryCacheTime = Date.now();
+        await saveDirectory(list);
+        console.log(`[analytics] directory refreshed: ${list.length} customers`);
+        return list;
+      } finally { building = null; }
+    })();
+    return building;
+  }
+
+  const bgRefresh = () => refreshDirectory().catch(e => console.warn("[analytics] background refresh failed:", e.message));
+  const storeReady = initStore();
+  storeReady.then(() => {
+    if (!directoryCache || Date.now() - directoryCacheTime > DIRECTORY_TTL) setTimeout(bgRefresh, 10000);
+  });
+  setInterval(() => {
+    if (!directoryCache || Date.now() - directoryCacheTime > DIRECTORY_TTL) bgRefresh();
+  }, 15 * 60 * 1000);
+
   // ── GET customer directory (dropdown source) ───────────────────────────────
   app.get("/api/analytics/customers", async (req, res) => {
     const { b2bStore, b2bToken } = CREDS;
     if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
     try {
-      if (req.query.refresh !== "true" && directoryCache && Date.now() - directoryCacheTime < DIRECTORY_TTL) {
-        return res.json({ customers: directoryCache, cached: true });
+      await storeReady;
+      if (req.query.refresh === "true" || !directoryCache) {
+        const list = await refreshDirectory();
+        return res.json({ customers: list, cached: false });
       }
-      directoryCache = await buildDirectory();
-      directoryCacheTime = Date.now();
-      res.json({ customers: directoryCache, cached: false });
+      if (Date.now() - directoryCacheTime > DIRECTORY_TTL) bgRefresh(); // serve now, refresh behind
+      res.json({ customers: directoryCache, cached: true, updatedAt: new Date(directoryCacheTime).toISOString() });
     } catch (err) {
       console.error("[analytics] directory error:", err);
       if (directoryCache) return res.json({ customers: directoryCache, cached: true, stale: true });
