@@ -110,7 +110,37 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
 
   // Customers grouped by company, so "HomeGoods" with 6 buyer contacts is one
   // dropdown entry that expands to all 6 customer ids when selected.
+  // ── Parent grouping ────────────────────────────────────────────────────────
+  // Store-level records ("Trudy's Hallmark #101", "New Seasons Market - Orenco")
+  // roll up to one parent in the dropdown. Rules live in analytics-groups.json
+  // next to this file; a missing or broken file just means no explicit rules.
+  const normName = s => String(s || "").toLowerCase().replace(/[’‘`]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
+  function loadGroupRules() {
+    try {
+      const raw = JSON.parse(require("fs").readFileSync(require("path").join(__dirname, "analytics-groups.json"), "utf8"));
+      return {
+        autoStrip: raw.autoStrip !== false,
+        rules: (raw.rules || []).filter(r => r && r.startsWith && r.parent).map(r => ({ p: normName(r.startsWith), parent: String(r.parent).trim() })),
+        never: new Set((raw.neverGroup || []).map(normName)),
+      };
+    } catch (e) {
+      if (e.code !== "ENOENT") console.warn("[analytics] analytics-groups.json unreadable:", e.message);
+      return { autoStrip: true, rules: [], never: new Set() };
+    }
+  }
+  function parentOf(label, cfg) {
+    const n = normName(label);
+    if (cfg.never.has(n)) return label;
+    for (const r of cfg.rules) if (r.p && (n === r.p || n.startsWith(r.p + " ") || n.startsWith(r.p))) return r.parent;
+    if (cfg.autoStrip) {
+      const cut = label.split(/\s+#\s*\d|\s+[-–—]\s+/)[0].replace(/[\s,\-–—]+$/, "").trim();
+      if (cut.length >= 3) return cut;
+    }
+    return label;
+  }
+
   async function buildDirectory() {
+    const groupCfg = loadGroupRules();
     const { b2bStore, b2bToken } = CREDS;
     const customers = await gqlAll(b2bStore, b2bToken, CUSTOMERS_QUERY,
       { first: 250, query: "orders_count:>0" },
@@ -119,10 +149,12 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
     const groups = new Map();
     const idToGroup = new Map();
     const add = (id, company, name, email) => {
-      const label = (company || name || email || "Unknown").trim();
+      const store = (company || name || email || "Unknown").trim();
+      const label = parentOf(store, groupCfg);
       const key = label.toLowerCase();
-      if (!groups.has(key)) groups.set(key, { key, label, ids: new Set(), emails: new Set(), ytd: 0, ytdOrders: 0, drafts: 0 });
+      if (!groups.has(key)) groups.set(key, { key, label, ids: new Set(), emails: new Set(), members: new Set(), ytd: 0, ytdOrders: 0, drafts: 0 });
       const g = groups.get(key);
+      g.members.add(store);
       if (id) { g.ids.add(id); idToGroup.set(id, g); }
       if (email) g.emails.add(email.toLowerCase());
     };
@@ -159,6 +191,8 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
       .map(g => ({
         key: g.key, label: g.label, ids: [...g.ids], emails: [...g.emails].slice(0, 3),
         ytd: Math.round(g.ytd), ytdOrders: g.ytdOrders, drafts: g.drafts,
+        locations: g.members.size,
+        members: g.members.size > 1 ? [...g.members].sort().slice(0, 80) : [],
       }))
       .sort((a, b) => a.label.localeCompare(b.label));
   }
@@ -176,7 +210,7 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
       const r = await db.query("SELECT payload, updated_at FROM analytics_directory WHERE id = 1");
       if (r.rows[0]) {
         const saved = JSON.parse(r.rows[0].payload);
-        if (saved.length && saved[0].ytd === undefined) {
+        if (saved.length && (saved[0].ytd === undefined || saved[0].locations === undefined)) {
           console.log("[analytics] saved directory predates volume ranking; rebuilding");
         } else {
           directoryCache = saved;
@@ -271,8 +305,17 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
       const skuSet = new Set(skus);
       const records = [];
 
+      // The page asks for the two halves in parallel so "on order" can show
+      // up while the (much larger) fulfilled-history search is still running.
+      //   phase "open"      : drafts + unfulfilled/partial orders  (open units only)
+      //   phase "fulfilled" : orders in the date range             (fulfilled units only)
+      //   anything else     : both, in one response
+      const phase = req.body.phase === "open" || req.body.phase === "fulfilled" ? req.body.phase : "all";
+      const wantOpen = phase !== "fulfilled";
+      const wantFul = phase !== "open";
+
       // Drafts — filtered in memory off the cached open-draft pull.
-      const drafts = await getOpenDrafts();
+      const drafts = wantOpen ? await getOpenDrafts() : [];
       for (const d of drafts) {
         if (idSet.size && !idSet.has(gidNum(d.customer?.id))) continue;
         for (const e of d.lineItems?.edges || []) {
@@ -302,10 +345,10 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
       for (const chunk of chunks) {
         const custClause = chunk.length ? "(" + chunk.map(i => `customer_id:${i}`).join(" OR ") + ")" : "";
         const base = ["-status:cancelled", custClause, skuClause].filter(Boolean).join(" ");
-        const queries = [
-          `${base} (fulfillment_status:unfulfilled OR fulfillment_status:partial)`,
-          `${base} created_at:>=${fromStr} created_at:<${toExclusiveStr}`,
-        ];
+        const queries = [];
+        if (wantOpen) queries.push(`${base} (fulfillment_status:unfulfilled OR fulfillment_status:partial)`);
+        // Only orders that can have shipped units; skips never-fulfilled orders in the range.
+        if (wantFul) queries.push(`${base} (fulfillment_status:fulfilled OR fulfillment_status:partial) created_at:>=${fromStr} created_at:<${toExclusiveStr}`);
         for (const q of queries) {
           const nodes = await gqlAll(b2bStore, b2bToken, ORDERS_QUERY,
             { first: PAGE, query: q },
@@ -322,9 +365,10 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
           const li = e.node;
           const sku = (li.sku || "").toUpperCase();
           if (skuSet.size && !skuSet.has(sku)) continue;
-          const open = Math.max(0, li.unfulfilledQuantity ?? 0);
+          const rawOpen = Math.max(0, li.unfulfilledQuantity ?? 0);
           const current = li.currentQuantity ?? li.quantity ?? 0;
-          const fulfilled = inRange ? Math.max(0, current - open) : 0;
+          const open = wantOpen ? rawOpen : 0;
+          const fulfilled = wantFul && inRange ? Math.max(0, current - rawOpen) : 0;
           if (!open && !fulfilled) continue;
           const unit = parseFloat(li.discountedUnitPriceSet?.shopMoney?.amount) || 0;
           records.push({
@@ -339,6 +383,7 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
 
       res.json({
         asOf: new Date().toISOString(),
+        phase,
         range: { from: fromStr, to: toStr },
         records,
       });
