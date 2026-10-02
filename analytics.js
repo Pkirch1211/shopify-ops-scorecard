@@ -1,19 +1,28 @@
-// ── B2B Lookup (read-only) ────────────────────────────────────────────────────
-// Answers "how many units (and dollars) does <customer> have on order of <SKUs>?"
-// without touching any existing endpoint, cache, or table.
+// ── B2B Analytics (read-only) ─────────────────────────────────────────────────
+// Answers "what does <customer> have on order, and how much is it worth?" and
+// "who has <SKU> on order?" without touching any existing endpoint, cache, or table.
 //
-// Wire-up in server.js (after the CREDS block and gql/gqlAll definitions):
-//     require("./lookup")(app, { gql, gqlAll, CREDS });
+// Wire-up in server.js (after the CREDS block and gql/gqlAll/restFetchAll definitions):
+//     require("./analytics")(app, { gql, gqlAll, CREDS });
+//
+// Quick check after deploy: open /api/analytics/ping — it should return {"ok":true}.
+// If it returns a web page instead, the require line is missing or analytics.js
+// wasn't deployed.
 //
 // Required Shopify scopes on the B2B token: read_orders, read_draft_orders,
 // read_customers (the last one is new — needed for the customer dropdown and
 // for customer_id order search).
 
-module.exports = function registerLookup(app, { gql, gqlAll, CREDS }) {
+module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS }) {
   const DIRECTORY_TTL = 60 * 60 * 1000; // customers rarely change
   const DRAFTS_TTL = 5 * 60 * 1000;
   const ID_CHUNK = 25;                  // customer ids per order search
   const SKU_RE = /^[A-Za-z0-9._\-]+$/;
+
+  // Page sizes mirror what the existing queries in server.js already run at
+  // (50 x 100 nested = same cost class as their 250 x 20), so Shopify's
+  // single-query cost cap isn't a new risk. gqlAll paginates for us.
+  const PAGE = 50;
 
   let directoryCache = null, directoryCacheTime = 0;
   let draftsCache = null, draftsCacheTime = 0;
@@ -26,7 +35,7 @@ module.exports = function registerLookup(app, { gql, gqlAll, CREDS }) {
 
   // ── Queries ────────────────────────────────────────────────────────────────
   const CUSTOMERS_QUERY = `
-  query LookupCustomers($first: Int!, $after: String, $query: String) {
+  query AnalyticsCustomers($first: Int!, $after: String, $query: String) {
     customers(first: $first, after: $after, query: $query, sortKey: NAME) {
       pageInfo { hasNextPage endCursor }
       edges { node { id displayName email defaultAddress { company } } }
@@ -36,7 +45,7 @@ module.exports = function registerLookup(app, { gql, gqlAll, CREDS }) {
   // discountedTotalSet = line total after line-level discounts / price overrides
   // (whole quantity), so unit value = discountedTotalSet / quantity.
   const DRAFTS_QUERY = `
-  query LookupDrafts($first: Int!, $after: String, $query: String!) {
+  query AnalyticsDrafts($first: Int!, $after: String, $query: String!) {
     draftOrders(first: $first, after: $after, query: $query, sortKey: UPDATED_AT) {
       pageInfo { hasNextPage endCursor }
       edges {
@@ -54,9 +63,9 @@ module.exports = function registerLookup(app, { gql, gqlAll, CREDS }) {
   }`;
 
   // discountedUnitPriceSet = unit price after line-level discounts (order-level
-  // discounts are NOT allocated, by design — see "merchandise value" note on the page).
+  // discounts are NOT allocated, by design — see the "merchandise value" note on the page).
   const ORDERS_QUERY = `
-  query LookupOrders($first: Int!, $after: String, $query: String!) {
+  query AnalyticsOrders($first: Int!, $after: String, $query: String!) {
     orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT, reverse: true) {
       pageInfo { hasNextPage endCursor }
       edges {
@@ -83,7 +92,7 @@ module.exports = function registerLookup(app, { gql, gqlAll, CREDS }) {
     if (draftsCache && Date.now() - draftsCacheTime < DRAFTS_TTL) return draftsCache;
     const { b2bStore, b2bToken } = CREDS;
     const drafts = await gqlAll(b2bStore, b2bToken, DRAFTS_QUERY,
-      { first: 250, query: "status:open" },
+      { first: PAGE, query: "status:open" },
       d => d.draftOrders.edges, d => d.draftOrders.pageInfo, 120000);
     draftsCache = drafts;
     draftsCacheTime = Date.now();
@@ -115,15 +124,18 @@ module.exports = function registerLookup(app, { gql, gqlAll, CREDS }) {
       for (const d of await getOpenDrafts()) {
         if (d.customer?.id) add(gidNum(d.customer.id), d.shippingAddress?.company || d.billingAddress?.company, d.customer.displayName, d.email);
       }
-    } catch (e) { console.warn("[lookup] drafts merge for directory failed:", e.message); }
+    } catch (e) { console.warn("[analytics] drafts merge for directory failed:", e.message); }
 
     return [...groups.values()]
       .map(g => ({ key: g.key, label: g.label, ids: [...g.ids], emails: [...g.emails].slice(0, 3) }))
       .sort((a, b) => a.label.localeCompare(b.label));
   }
 
+  // ── GET ping (deploy check) ────────────────────────────────────────────────
+  app.get("/api/analytics/ping", (req, res) => res.json({ ok: true }));
+
   // ── GET customer directory (dropdown source) ───────────────────────────────
-  app.get("/api/lookup/customers", async (req, res) => {
+  app.get("/api/analytics/customers", async (req, res) => {
     const { b2bStore, b2bToken } = CREDS;
     if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
     try {
@@ -134,7 +146,7 @@ module.exports = function registerLookup(app, { gql, gqlAll, CREDS }) {
       directoryCacheTime = Date.now();
       res.json({ customers: directoryCache, cached: false });
     } catch (err) {
-      console.error("[lookup] directory error:", err);
+      console.error("[analytics] directory error:", err);
       if (directoryCache) return res.json({ customers: directoryCache, cached: true, stale: true });
       const hint = /access denied|scope/i.test(err.message)
         ? " (B2B token needs the read_customers scope)" : "";
@@ -145,12 +157,12 @@ module.exports = function registerLookup(app, { gql, gqlAll, CREDS }) {
   // ── POST query ─────────────────────────────────────────────────────────────
   // body: { customerIds: [numeric], skus: [string], from: 'YYYY-MM-DD', to: 'YYYY-MM-DD' }
   // Returns flat line-level records; the page pivots them either by SKU
-  // (customer mode) or by customer (SKU mode).
+  // (customer view) or by customer (SKU view) and counts distinct orders itself.
   //   draft record : open = draft line quantity, openValue = discounted line total
   //   order record : open = unfulfilledQuantity, fulfilled = currentQuantity - unfulfilledQuantity
   //                  (fulfilled only counted when the order was created inside from..to)
   //                  values = units × discounted unit price (line-level discounts only)
-  app.post("/api/lookup/query", async (req, res) => {
+  app.post("/api/analytics/query", async (req, res) => {
     const { b2bStore, b2bToken } = CREDS;
     if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
 
@@ -209,7 +221,7 @@ module.exports = function registerLookup(app, { gql, gqlAll, CREDS }) {
         ];
         for (const q of queries) {
           const nodes = await gqlAll(b2bStore, b2bToken, ORDERS_QUERY,
-            { first: 100, query: q },
+            { first: PAGE, query: q },
             d => d.orders.edges, d => d.orders.pageInfo, 120000);
           for (const n of nodes) orderMap.set(n.id, n);
         }
@@ -244,7 +256,7 @@ module.exports = function registerLookup(app, { gql, gqlAll, CREDS }) {
         records,
       });
     } catch (err) {
-      console.error("[lookup] query error:", err);
+      console.error("[analytics] query error:", err);
       const hint = /access denied|scope/i.test(err.message)
         ? " (B2B token may be missing read_customers)" : "";
       res.status(500).json({ error: err.message + hint });
