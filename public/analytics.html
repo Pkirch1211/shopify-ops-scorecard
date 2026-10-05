@@ -770,6 +770,9 @@ function handleOverviewClick(e) {
       if (view === 'customer') { selected = []; renderChips(); }
       else { $('skuInput').value = ''; }
       sortState = { key: null, dir: 'desc' };
+      overview = null; lastData = null;   // clear the old table right away so it is obvious something is loading
+      $('csvBtn').style.display = 'none';
+      $('results').innerHTML = '<div class="state-panel"><div class="spinner"></div><div class="state-sub">Loading ' + (view === 'customer' ? 'customers' : 'SKUs') + '…</div></div>';
       schedule(); window.scrollTo(0, 0);
       return true;
     }
