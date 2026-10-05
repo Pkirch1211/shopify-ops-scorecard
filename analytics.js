@@ -100,12 +100,13 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
 
   // Orders and drafts with more than 100 lines: Shopify returns the first 100 and
   // says there are more. Fetch the rest so big orders aren't silently undercounted.
+  const DRAFT_LINE_FIELDS = "id sku title quantity discountedTotalSet { shopMoney { amount } }";
   const DRAFT_MORE_LINES_QUERY = `
   query AnalyticsDraftMoreLines($id: ID!, $after: String) {
     draftOrder(id: $id) {
       lineItems(first: 100, after: $after) {
         pageInfo { hasNextPage endCursor }
-        edges { node { sku title quantity discountedTotalSet { shopMoney { amount } } } }
+        edges { node { ${DRAFT_LINE_FIELDS} } }
       }
     }
   }`;
@@ -317,10 +318,10 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
       await storeReady;
       if (req.query.refresh === "true" || !directoryCache) {
         const list = await refreshDirectory();
-        return res.json({ customers: list, cached: false });
+        return res.json({ customers: await withStoreVolume(list), cached: false });
       }
       if (Date.now() - directoryCacheTime > DIRECTORY_TTL) bgRefresh(); // serve now, refresh behind
-      res.json({ customers: directoryCache, cached: true, updatedAt: new Date(directoryCacheTime).toISOString() });
+      res.json({ customers: await withStoreVolume(directoryCache), cached: true, updatedAt: new Date(directoryCacheTime).toISOString() });
     } catch (err) {
       console.error("[analytics] directory error:", err);
       if (directoryCache) return res.json({ customers: directoryCache, cached: true, stale: true });
@@ -343,8 +344,8 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
   // (open orders loaded, and the requested period is inside the loaded months).
   // Otherwise it quietly falls back to the live Shopify search.
   const STORE_MONTHS = Math.max(1, parseInt(process.env.ANALYTICS_BACKFILL_MONTHS || "24", 10) || 24);
-  const SYNC_INTERVAL = 5 * 60 * 1000;
-  const READ_SYNC_DEBOUNCE = 20 * 1000;   // a lookup tops the store up if the last sync is older than this
+  const SYNC_INTERVAL = Number(process.env.ANALYTICS_SYNC_INTERVAL_MS) || 5 * 60 * 1000;
+  const READ_SYNC_DEBOUNCE = process.env.ANALYTICS_READ_SYNC_DEBOUNCE_MS !== undefined ? Number(process.env.ANALYTICS_READ_SYNC_DEBOUNCE_MS) : 10 * 1000;   // a lookup tops the store up if the last sync is older than this
   const READ_SYNC_BUDGET = 8000;          // ...but never waits longer than this for it
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const iso = d => d.toISOString().replace(/\.\d{3}Z$/, "Z");
@@ -378,7 +379,33 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
     }
   }`;
 
-  const st = { ready: false, openLoaded: false, coveredFrom: null, watermark: null, lastSyncAt: 0, phase: "starting", error: null };
+  const STORE_DRAFTS_QUERY = `
+  query AnalyticsStoreDrafts($first: Int!, $after: String, $query: String!) {
+    draftOrders(first: $first, after: $after, query: $query, sortKey: UPDATED_AT) {
+      pageInfo { hasNextPage endCursor }
+      edges {
+        node {
+          id name createdAt updatedAt email
+          customer { id displayName }
+          shippingAddress { company }
+          billingAddress { company }
+          lineItems(first: 100) {
+            pageInfo { hasNextPage endCursor }
+            edges { node { ${DRAFT_LINE_FIELDS} } }
+          }
+        }
+      }
+    }
+  }`;
+  const DRAFT_IDS_QUERY = `
+  query AnalyticsDraftIds($first: Int!, $after: String, $query: String!) {
+    draftOrders(first: $first, after: $after, query: $query) {
+      pageInfo { hasNextPage endCursor }
+      edges { node { id } }
+    }
+  }`;
+
+  const st = { draftsLoaded: false, draftsWatermark: null, ready: false, openLoaded: false, coveredFrom: null, watermark: null, lastSyncAt: 0, phase: "starting", error: null };
   const storeEnabled = !!db && typeof db.connect === "function";
 
   async function gqlRetry(query, vars) {
@@ -469,6 +496,13 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
           quantity INTEGER, current_quantity INTEGER, unfulfilled_quantity INTEGER, unit_price NUMERIC(14,4),
           PRIMARY KEY (order_id, line_id));
         CREATE TABLE IF NOT EXISTS analytics_state (key TEXT PRIMARY KEY, value TEXT);
+        CREATE TABLE IF NOT EXISTS analytics_drafts (
+          id TEXT PRIMARY KEY, name TEXT, customer_id TEXT, label TEXT, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ, email TEXT);
+        CREATE TABLE IF NOT EXISTS analytics_draft_lines (
+          draft_id TEXT NOT NULL, line_id TEXT NOT NULL, sku TEXT, title TEXT, quantity INTEGER, total NUMERIC(14,4),
+          PRIMARY KEY (draft_id, line_id));
+        CREATE INDEX IF NOT EXISTS idx_an_drafts_cust ON analytics_drafts (customer_id);
+        CREATE INDEX IF NOT EXISTS idx_an_dlines_sku ON analytics_draft_lines (sku);
         CREATE INDEX IF NOT EXISTS idx_an_orders_cust ON analytics_orders (customer_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_an_lines_sku ON analytics_lines (sku);
         CREATE INDEX IF NOT EXISTS idx_an_lines_open ON analytics_lines (order_id) WHERE unfulfilled_quantity > 0;`);
@@ -477,6 +511,8 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
       st.openLoaded = m.open_loaded === "1";
       st.coveredFrom = m.covered_from || null;
       st.watermark = m.sync_watermark || null;
+      st.draftsLoaded = m.drafts_loaded === "1";
+      st.draftsWatermark = m.drafts_watermark || null;
       st.lastSyncAt = m.last_sync_at ? Date.parse(m.last_sync_at) : 0;
       st.ready = true; st.phase = "idle";
       return true;
@@ -538,6 +574,117 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
     return incPromise;
   }
 
+  async function pageDrafts(search, onPage, { deadline = Infinity } = {}) {
+    let after = null, n = 0;
+    for (;;) {
+      const d = await gqlRetry(STORE_DRAFTS_QUERY, { first: PAGE, after, query: search });
+      const conn = d.draftOrders;
+      const nodes = conn.edges.map(e => e.node);
+      if (nodes.length) await onPage(nodes);
+      n += nodes.length;
+      if (!conn.pageInfo.hasNextPage) return { n, complete: true };
+      after = conn.pageInfo.endCursor;
+      if (Date.now() > deadline) return { n, complete: false };
+    }
+  }
+
+  async function upsertDrafts(nodesIn) {
+    const byId = new Map();
+    for (const n of nodesIn) byId.set(gidNum(n.id), n);
+    if (!byId.size) return;
+    await completeLines([...byId.values()], DRAFT_MORE_LINES_QUERY, "draftOrder");
+    const D = { id: [], name: [], cust: [], label: [], created: [], updated: [], email: [] };
+    const L = { did: [], lid: [], sku: [], title: [], qty: [], total: [] };
+    for (const [did, n] of byId) {
+      D.id.push(did); D.name.push(n.name || ""); D.cust.push(n.customer?.id ? gidNum(n.customer.id) : null);
+      D.label.push(labelOf(n)); D.created.push(n.createdAt); D.updated.push(n.updatedAt || n.createdAt); D.email.push(n.email || null);
+      for (const e of n.lineItems?.edges || []) {
+        const li = e.node;
+        L.did.push(did); L.lid.push(gidNum(li.id)); L.sku.push((li.sku || "").toUpperCase()); L.title.push(li.title || "");
+        L.qty.push(li.quantity || 0); L.total.push(parseFloat(li.discountedTotalSet?.shopMoney?.amount) || 0);
+      }
+    }
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("DELETE FROM analytics_draft_lines WHERE draft_id = ANY($1::text[])", [D.id]);
+      await client.query(
+        `INSERT INTO analytics_drafts (id, name, customer_id, label, created_at, updated_at, email)
+         SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::timestamptz[], $7::text[])
+         ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, customer_id = EXCLUDED.customer_id, label = EXCLUDED.label,
+           created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at, email = EXCLUDED.email`,
+        [D.id, D.name, D.cust, D.label, D.created, D.updated, D.email]);
+      if (L.did.length) await client.query(
+        `INSERT INTO analytics_draft_lines (draft_id, line_id, sku, title, quantity, total)
+         SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::int[], $6::numeric[])
+         ON CONFLICT (draft_id, line_id) DO NOTHING`,
+        [L.did, L.lid, L.sku, L.title, L.qty, L.total]);
+      await client.query("COMMIT");
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch (_) {}
+      throw e;
+    } finally { client.release(); }
+  }
+
+  // Deleted and completed drafts never show up in an "updated since" search, so
+  // every so often list the ids of everything still open (cheap: ids only, no
+  // lines) and drop whatever is no longer in that list.
+  async function reconcileDrafts() {
+    const ids = [];
+    let after = null;
+    for (;;) {
+      const d = await gqlRetry(DRAFT_IDS_QUERY, { first: 250, after, query: "status:open" });
+      d.draftOrders.edges.forEach(e => ids.push(gidNum(e.node.id)));
+      if (!d.draftOrders.pageInfo.hasNextPage) break;
+      after = d.draftOrders.pageInfo.endCursor;
+    }
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("DELETE FROM analytics_draft_lines WHERE draft_id <> ALL($1::text[])", [ids]);
+      const r = await client.query("DELETE FROM analytics_drafts WHERE id <> ALL($1::text[])", [ids]);
+      await client.query("COMMIT");
+      return r.rowCount;
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch (_) {}
+      throw e;
+    } finally { client.release(); }
+  }
+
+  let draftPromise = null;
+  // full load the first time, then "updated since" (+ optional reconcile)
+  function syncDrafts({ budgetMs, reconcile } = {}) {
+    if (draftPromise) return draftPromise;
+    draftPromise = (async () => {
+      const started = Date.now();
+      const deadline = budgetMs ? started + budgetMs : Infinity;
+      try {
+        if (!st.draftsLoaded) {
+          st.phase = "loading open drafts";
+          const n = await pageDrafts("status:open", upsertDrafts);
+          st.draftsWatermark = new Date(started - 2 * 60 * 1000).toISOString();
+          st.draftsLoaded = true;
+          await setState("drafts_watermark", st.draftsWatermark);
+          await setState("drafts_loaded", "1");
+          console.log(`[analytics] store: loaded ${n.n} open drafts`);
+          return true;
+        }
+        const since = new Date(Date.parse(st.draftsWatermark) - 2 * 60 * 1000);
+        const r = await pageDrafts(`status:open updated_at:>=${iso(since)}`, upsertDrafts, { deadline });
+        if (r.complete) {
+          st.draftsWatermark = new Date(started - 2 * 60 * 1000).toISOString();
+          await setState("drafts_watermark", st.draftsWatermark);
+          if (reconcile) {
+            const gone = await reconcileDrafts();
+            if (gone) console.log(`[analytics] store: dropped ${gone} drafts that are no longer open`);
+          }
+        }
+        return r.complete;
+      } finally { draftPromise = null; }
+    })();
+    return draftPromise;
+  }
+
   let storeBusy = null;
   function storeCycle() {
     if (storeBusy) return storeBusy;
@@ -552,8 +699,13 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
         const target = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() - STORE_MONTHS, 1)).toISOString().slice(0, 10);
         let more = false;
         if (!st.openLoaded) { await loadOpenOrders(); more = true; }
+        else if (!st.draftsLoaded) { await syncDrafts(); more = true; }
         else if (!st.coveredFrom || st.coveredFrom > target) { await backfillNextMonth(); more = st.coveredFrom > target; }
-        if (!more || Date.now() - st.lastSyncAt > SYNC_INTERVAL) { st.phase = "syncing"; await incrementalSync(); }
+        if (!more || Date.now() - st.lastSyncAt > SYNC_INTERVAL) {
+          st.phase = "syncing";
+          await incrementalSync();
+          if (st.draftsLoaded) await syncDrafts({ reconcile: true });
+        }
         st.phase = "idle"; st.error = null;
         if (more) nextMs = 1000;
       } catch (e) {
@@ -567,7 +719,7 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
     })();
     return storeBusy;
   }
-  if (storeEnabled) setTimeout(storeCycle, 15000).unref?.();   // after startup, once the directory has had its head start
+  if (storeEnabled) setTimeout(storeCycle, Number(process.env.ANALYTICS_STORE_START_MS) || 15000).unref?.();   // after startup, once the directory has had its head start
 
   // Can this request be answered from the store?
   function storeUsable(fromStr, phase) {
@@ -580,7 +732,12 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
   // right after an order is placed still sees it. Bounded: never blocks long.
   async function freshen() {
     if (Date.now() - st.lastSyncAt < READ_SYNC_DEBOUNCE) return;
-    try { await Promise.race([incrementalSync(READ_SYNC_BUDGET), sleep(READ_SYNC_BUDGET + 500)]); }
+    try {
+      await Promise.race([
+        Promise.all([incrementalSync(READ_SYNC_BUDGET), st.draftsLoaded ? syncDrafts({ budgetMs: READ_SYNC_BUDGET }) : null]),
+        sleep(READ_SYNC_BUDGET + 500),
+      ]);
+    }
     catch (e) { console.warn("[analytics] freshen failed, serving store as-is:", e.message); }
   }
 
@@ -600,10 +757,21 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
     return r.rows;
   }
 
+  async function queryStoreDrafts({ customerIds, skus }) {
+    const params = [], where = ["l.quantity > 0"];
+    if (customerIds.length) { params.push(customerIds); where.push(`d.customer_id = ANY($${params.length}::text[])`); }
+    if (skus.length) { params.push(skus); where.push(`l.sku = ANY($${params.length}::text[])`); }
+    const r = await db.query(
+      `SELECT d.name, d.created_at, d.customer_id, d.label, l.sku, l.title, l.quantity, l.total
+         FROM analytics_drafts d JOIN analytics_draft_lines l ON l.draft_id = d.id
+        WHERE ${where.join(" AND ")}`, params);
+    return r.rows;
+  }
+
   app.get("/api/analytics/sync-status", async (req, res) => {
     const out = {
       enabled: storeEnabled, ready: st.ready, phase: st.phase, error: st.error,
-      openOrdersLoaded: st.openLoaded, coveredFrom: st.coveredFrom, targetMonths: STORE_MONTHS,
+      openOrdersLoaded: st.openLoaded, openDraftsLoaded: st.draftsLoaded, coveredFrom: st.coveredFrom, targetMonths: STORE_MONTHS,
       lastSync: st.lastSyncAt ? new Date(st.lastSyncAt).toISOString() : null,
     };
     try {
@@ -614,6 +782,137 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
     } catch (_) {}
     res.json(out);
   });
+
+  // ── Overview aggregates (landing tables) ───────────────────────────────────
+  // One SQL pass over the store gives every customer (or SKU) at once. Needs the
+  // store to cover the whole year plus all open orders and drafts; otherwise the
+  // endpoint says "not ready yet" with progress and the page keeps retrying.
+  const yearStartStr = () => `${new Date().getUTCFullYear()}-01-01`;
+  function overviewReady() {
+    return storeEnabled && st.ready && st.openLoaded && st.draftsLoaded && !!st.coveredFrom && st.coveredFrom <= yearStartStr();
+  }
+  const r2 = v => Math.round((Number(v) || 0) * 100) / 100;
+
+  // Filters shared by the order and draft halves: SKU list and customer-id list.
+  function ovFilters(alias, lineAlias, skus, cids, startIdx) {
+    const params = [], where = [];
+    if (skus.length) { params.push(skus); where.push(`${lineAlias}.sku = ANY($${startIdx + params.length - 1}::text[])`); }
+    if (cids.length) { params.push(cids); where.push(`${alias}.customer_id = ANY($${startIdx + params.length - 1}::text[])`); }
+    return { params, sql: where.length ? " AND " + where.join(" AND ") : "" };
+  }
+
+  async function overviewByCustomer(yearStart, skus = [], cids = []) {
+    const yS = yearStart + "T00:00:00Z";
+    const fo = ovFilters("o", "l", skus, cids, 2);
+    const orders = await db.query(
+      `SELECT o.customer_id AS cid, MAX(o.label) AS label,
+              COALESCE(SUM(CASE WHEN o.created_at >= $1::timestamptz THEN l.current_quantity * l.unit_price END), 0) AS ytd_value,
+              COALESCE(SUM(CASE WHEN o.created_at >= $1::timestamptz THEN l.current_quantity END), 0) AS ytd_units,
+              COUNT(DISTINCT CASE WHEN o.created_at >= $1::timestamptz AND l.current_quantity > 0 THEN o.id END) AS ytd_orders,
+              COALESCE(SUM(l.unfulfilled_quantity), 0) AS unf_units,
+              COALESCE(SUM(l.unfulfilled_quantity * l.unit_price), 0) AS unf_value,
+              COUNT(DISTINCT CASE WHEN l.unfulfilled_quantity > 0 THEN o.id END) AS unf_orders
+         FROM analytics_orders o JOIN analytics_lines l ON l.order_id = o.id
+        WHERE NOT o.cancelled AND o.customer_id IS NOT NULL
+          AND (o.created_at >= $1::timestamptz OR l.unfulfilled_quantity > 0)${fo.sql}
+        GROUP BY o.customer_id`, [yS, ...fo.params]);
+    const fd = ovFilters("d", "l", skus, cids, 1);
+    const drafts = await db.query(
+      `SELECT d.customer_id AS cid, MAX(d.label) AS label,
+              COALESCE(SUM(l.quantity), 0) AS draft_units, COALESCE(SUM(l.total), 0) AS draft_value,
+              COUNT(DISTINCT d.id) AS draft_count
+         FROM analytics_drafts d JOIN analytics_draft_lines l ON l.draft_id = d.id
+        WHERE d.customer_id IS NOT NULL AND l.quantity > 0${fd.sql}
+        GROUP BY d.customer_id`, fd.params);
+    const map = new Map();
+    const row = (cid, label) => {
+      if (!map.has(cid)) map.set(cid, { cid, label: label || "", ytdValue: 0, ytdUnits: 0, ytdOrders: 0, unfUnits: 0, unfValue: 0, unfOrders: 0, draftUnits: 0, draftValue: 0, draftCount: 0 });
+      return map.get(cid);
+    };
+    for (const x of orders.rows) {
+      const o = row(x.cid, x.label);
+      o.ytdValue = r2(x.ytd_value); o.ytdUnits = Number(x.ytd_units); o.ytdOrders = Number(x.ytd_orders);
+      o.unfUnits = Number(x.unf_units); o.unfValue = r2(x.unf_value); o.unfOrders = Number(x.unf_orders);
+    }
+    for (const x of drafts.rows) {
+      const o = row(x.cid, x.label);
+      o.draftUnits = Number(x.draft_units); o.draftValue = r2(x.draft_value); o.draftCount = Number(x.draft_count);
+    }
+    return [...map.values()];
+  }
+
+  async function overviewBySku(yearStart, cids = []) {
+    const yS = yearStart + "T00:00:00Z";
+    const fo = ovFilters("o", "l", [], cids, 2);
+    const orders = await db.query(
+      `SELECT l.sku, MAX(l.title) AS title,
+              COALESCE(SUM(CASE WHEN o.created_at >= $1::timestamptz THEN l.current_quantity * l.unit_price END), 0) AS ytd_value,
+              COALESCE(SUM(CASE WHEN o.created_at >= $1::timestamptz THEN l.current_quantity END), 0) AS ytd_units,
+              COALESCE(SUM(l.unfulfilled_quantity), 0) AS unf_units,
+              COALESCE(SUM(l.unfulfilled_quantity * l.unit_price), 0) AS unf_value
+         FROM analytics_orders o JOIN analytics_lines l ON l.order_id = o.id
+        WHERE NOT o.cancelled AND (o.created_at >= $1::timestamptz OR l.unfulfilled_quantity > 0)${fo.sql}
+        GROUP BY l.sku`, [yS, ...fo.params]);
+    const fd = ovFilters("d", "l", [], cids, 1);
+    const drafts = await db.query(
+      `SELECT l.sku, MAX(l.title) AS title, COALESCE(SUM(l.quantity), 0) AS draft_units, COALESCE(SUM(l.total), 0) AS draft_value
+         FROM analytics_drafts d JOIN analytics_draft_lines l ON l.draft_id = d.id
+        WHERE l.quantity > 0${fd.sql} GROUP BY l.sku`, fd.params);
+    // distinct customers with this SKU open, drafts and orders combined
+    const oc = ovFilters("o", "l", [], cids, 1), dc = ovFilters("d", "l", [], cids, 1 + oc.params.length);
+    const custs = await db.query(
+      `SELECT sku, COUNT(DISTINCT cid) AS n FROM (
+         SELECT l.sku, o.customer_id AS cid FROM analytics_orders o JOIN analytics_lines l ON l.order_id = o.id
+          WHERE NOT o.cancelled AND l.unfulfilled_quantity > 0${oc.sql}
+         UNION ALL
+         SELECT l.sku, d.customer_id FROM analytics_drafts d JOIN analytics_draft_lines l ON l.draft_id = d.id
+          WHERE l.quantity > 0${dc.sql}
+       ) x GROUP BY sku`, [...oc.params, ...dc.params]);
+    const map = new Map();
+    const row = (sku, title) => {
+      if (!map.has(sku)) map.set(sku, { sku, title: title || "", ytdValue: 0, ytdUnits: 0, unfUnits: 0, unfValue: 0, draftUnits: 0, draftValue: 0, openCustomers: 0 });
+      const o = map.get(sku); if (!o.title && title) o.title = title; return o;
+    };
+    for (const x of orders.rows) { const o = row(x.sku, x.title); o.ytdValue = r2(x.ytd_value); o.ytdUnits = Number(x.ytd_units); o.unfUnits = Number(x.unf_units); o.unfValue = r2(x.unf_value); }
+    for (const x of drafts.rows) { const o = row(x.sku, x.title); o.draftUnits = Number(x.draft_units); o.draftValue = r2(x.draft_value); }
+    for (const x of custs.rows) row(x.sku).openCustomers = Number(x.n);
+    return [...map.values()];
+  }
+
+  app.get("/api/analytics/overview", async (req, res) => {
+    try {
+      const yearStart = yearStartStr();
+      if (!overviewReady()) {
+        return res.json({ ready: false, status: {
+          enabled: storeEnabled, phase: st.phase, error: st.error, openOrdersLoaded: st.openLoaded, openDraftsLoaded: st.draftsLoaded,
+          coveredFrom: st.coveredFrom, needFrom: yearStart } });
+      }
+      const view = req.query.view === "sku" ? "sku" : "customer";
+      const skus = [...new Set(String(req.query.skus || "").split(",").map(x => x.trim().toUpperCase()).filter(x => x && SKU_RE.test(x)))];
+      const cids = [...new Set(String(req.query.cids || "").split(",").map(x => x.trim()).filter(x => /^\d+$/.test(x)))];
+      await freshen();
+      const t = Date.now();
+      const rows = view === "sku" ? await overviewBySku(yearStart, cids) : await overviewByCustomer(yearStart, skus, cids);
+      res.json({ ready: true, view, yearStart, asOf: st.lastSyncAt ? new Date(st.lastSyncAt).toISOString() : new Date().toISOString(), ms: Date.now() - t, rows });
+    } catch (err) {
+      console.error("[analytics] overview error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // The dropdown ranks by YTD volume; when the store is ready use its numbers so
+  // the dropdown and the landing table always agree.
+  async function withStoreVolume(list) {
+    if (!overviewReady()) return list;
+    try {
+      const byId = new Map((await overviewByCustomer(yearStartStr())).map(r => [r.cid, r]));
+      return list.map(c => {
+        let ytd = 0, ytdOrders = 0, drafts = 0;
+        for (const id of c.ids) { const r = byId.get(id); if (r) { ytd += r.ytdValue; ytdOrders += r.ytdOrders; drafts += r.draftCount; } }
+        return { ...c, ytd: Math.round(ytd), ytdOrders, drafts };
+      });
+    } catch (e) { console.warn("[analytics] store volume overlay failed:", e.message); return list; }
+  }
 
   // ── POST query ─────────────────────────────────────────────────────────────
   // body: { customerIds: [numeric], skus: [string], from: 'YYYY-MM-DD', to: 'YYYY-MM-DD' }
@@ -654,24 +953,44 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
       const wantOpen = phase !== "fulfilled";
       const wantFul = phase !== "open";
 
-      // Drafts — filtered in memory off the cached open-draft pull.
-      const drafts = wantOpen ? await getOpenDrafts() : [];
-      for (const d of drafts) {
-        if (idSet.size && !idSet.has(gidNum(d.customer?.id))) continue;
-        for (const e of d.lineItems?.edges || []) {
-          const li = e.node;
-          const sku = (li.sku || "").toUpperCase();
-          if (skuSet.size && !skuSet.has(sku)) continue;
-          if (!li.quantity) continue;
+      const T0 = Date.now(), timing = {};
+      const useStore = req.body.live !== true && storeUsable(fromStr, phase);
+      const useStoreDrafts = req.body.live !== true && storeEnabled && st.ready && st.draftsLoaded;
+      if (useStore || useStoreDrafts) { const t = Date.now(); await freshen(); timing.freshenMs = Date.now() - t; }
+
+      // Drafts: from the store when it has them, otherwise the cached live pull.
+      let t1 = Date.now();
+      if (wantOpen && useStoreDrafts) {
+        for (const r of await queryStoreDrafts({ customerIds, skus })) {
           records.push({
-            type: "draft", name: d.name, createdAt: d.createdAt,
-            customerId: gidNum(d.customer?.id), label: labelOf(d),
-            sku: sku || "—", title: li.title || "",
-            open: li.quantity, fulfilled: 0,
-            openValue: money(li.discountedTotalSet?.shopMoney?.amount), fulfilledValue: 0,
+            type: "draft", name: r.name, createdAt: new Date(r.created_at).toISOString(),
+            customerId: r.customer_id || "", label: r.label || "Unknown",
+            sku: r.sku || "—", title: r.title || "",
+            open: r.quantity, fulfilled: 0,
+            openValue: money(r.total), fulfilledValue: 0,
           });
         }
+        timing.drafts = "store";
+      } else if (wantOpen) {
+        for (const d of await getOpenDrafts()) {
+          if (idSet.size && !idSet.has(gidNum(d.customer?.id))) continue;
+          for (const e of d.lineItems?.edges || []) {
+            const li = e.node;
+            const sku = (li.sku || "").toUpperCase();
+            if (skuSet.size && !skuSet.has(sku)) continue;
+            if (!li.quantity) continue;
+            records.push({
+              type: "draft", name: d.name, createdAt: d.createdAt,
+              customerId: gidNum(d.customer?.id), label: labelOf(d),
+              sku: sku || "—", title: li.title || "",
+              open: li.quantity, fulfilled: 0,
+              openValue: money(li.discountedTotalSet?.shopMoney?.amount), fulfilledValue: 0,
+            });
+          }
+        }
+        timing.drafts = "live";
       }
+      timing.draftsMs = Date.now() - t1;
 
       // One place that turns an order line into a record, for both data sources.
       const addOrderRecord = o => {
@@ -688,9 +1007,9 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
       };
 
       let source = "live", asOf = new Date().toISOString();
-      if (req.body.live !== true && storeUsable(fromStr, phase)) {
+      t1 = Date.now();
+      if (useStore) {
         // Fast path: Postgres.
-        await freshen();
         const rows = await queryStore({ customerIds, skus, fromStr, toExclusiveStr });
         for (const r of rows) {
           addOrderRecord({
@@ -753,9 +1072,12 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
         }
       }
 
+      timing.ordersMs = Date.now() - t1; timing.orders = source; timing.totalMs = Date.now() - T0;
+      console.log(`[analytics] query ${phase} ${customerIds.length} cust/${skus.length} sku: ${timing.totalMs}ms (orders ${source} ${timing.ordersMs}ms, drafts ${timing.drafts || "-"} ${timing.draftsMs}ms, freshen ${timing.freshenMs || 0}ms)`);
       res.json({
         asOf,
         source,
+        timing,
         phase,
         range: { from: fromStr, to: toStr },
         records,
