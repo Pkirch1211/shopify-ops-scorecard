@@ -314,7 +314,10 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
     return building;
   }
 
-  const bgRefresh = () => refreshDirectory().catch(e => console.warn("[analytics] background refresh failed:", e.message));
+  const bgRefresh = () => refreshDirectory().catch(e => {
+    console.warn("[analytics] background refresh failed:", e.message);
+    setTimeout(() => { if (!building && (!directoryCache || Date.now() - directoryCacheTime > DIRECTORY_TTL)) bgRefresh(); }, 2 * 60 * 1000).unref?.();   // retry in 2 min, not 15
+  });
   const storeReady = initStore();
   storeReady.then(() => {
     if (!directoryCache || Date.now() - directoryCacheTime > DIRECTORY_TTL) setTimeout(bgRefresh, needsRebuildNow ? 1000 : 10000);
@@ -700,6 +703,7 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
 
   let storeBusy = null;
   function storeCycle() {
+    if (building) { setTimeout(storeCycle, 20000).unref?.(); return; }   // let the customer list rebuild finish first (they share Shopify's rate limit)
     if (storeBusy) return storeBusy;
     storeBusy = (async () => {
       let nextMs = SYNC_INTERVAL;
