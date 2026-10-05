@@ -1,1800 +1,1092 @@
-const express = require("express");
-const path = require("path");
-const { Pool } = require("pg");
+// ── B2B Analytics (read-only) ─────────────────────────────────────────────────
+// Answers "what does <customer> have on order, and how much is it worth?" and
+// "who has <SKU> on order?" without touching any existing endpoint, cache, or table.
+//
+// Wire-up in server.js (after the CREDS block and gql/gqlAll/restFetchAll definitions):
+//     require("./analytics")(app, { gql, gqlAll, CREDS, db });
+//
+// Quick check after deploy: open /api/analytics/ping — it should return {"ok":true}.
+// If it returns a web page instead, the require line is missing or analytics.js
+// wasn't deployed.
+//
+// Required Shopify scopes on the B2B token: read_orders, read_draft_orders,
+// read_customers (the last one is new — needed for the customer dropdown and
+// for customer_id order search).
 
-const app = express();
-app.use(express.json());
+module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
+  const DIRECTORY_TTL = 60 * 60 * 1000; // customer list is refreshed in the background after this
+  const DRAFTS_TTL = 5 * 60 * 1000;
+  const ID_CHUNK = 25;                  // customer ids per order search
+  const SKU_RE = /^[A-Za-z0-9._\-]+$/;
 
-// ── Password protection ───────────────────────────────────────────────────────
-const SITE_PASSWORD = process.env.SITE_PASSWORD || "edpd";
-const AUTH_COOKIE = "ops_auth";
-const authenticated = new Set(); // in-memory session store
+  // Page sizes mirror what the existing queries in server.js already run at
+  // (50 x 100 nested = same cost class as their 250 x 20), so Shopify's
+  // single-query cost cap isn't a new risk. gqlAll paginates for us.
+  const PAGE = 50;
 
-function requireAuth(req, res, next) {
-  if (req.path.startsWith("/api/")) return next();
-  const cookies = req.headers.cookie || "";
-  const token = cookies.split(";").map(c => c.trim())
-    .find(c => c.startsWith(AUTH_COOKIE + "="))?.split("=")[1];
-  if (token && authenticated.has(token)) return next();
-  if (req.method === "POST" && req.path === "/login") return next();
-  if (req.path === "/login") return next();
-  res.send(`<!DOCTYPE html>
-<html><head><meta charset="UTF-8">
-<title>LifeLines Ops — Login</title>
-<link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<style>
-@import url('https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=swap');
-*{box-sizing:border-box;margin:0;padding:0}
-body{background:#f0f0eb;display:flex;align-items:center;justify-content:center;min-height:100vh;font-family:'Satoshi',sans-serif}
-.box{background:#f7f7f3;border:1px solid #d4d4cc;border-radius:4px;padding:40px;width:320px;box-shadow:0 2px 8px rgba(0,0,0,0.08)}
-.brand{font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#4a6741;margin-bottom:24px}
-h1{font-size:16px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#2a2a28;margin-bottom:24px}
-input{width:100%;background:#fff;border:1px solid #c8c8c0;color:#2a2a28;font-family:'Satoshi',sans-serif;font-size:14px;padding:10px 12px;border-radius:2px;outline:none;margin-bottom:12px}
-input:focus{border-color:#4a6741}
-button{width:100%;background:#4a6741;color:#fff;border:none;font-family:'Satoshi',sans-serif;font-size:12px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;padding:10px;border-radius:2px;cursor:pointer}
-button:hover{opacity:.85}
-.err{color:#8a2a2a;font-size:12px;margin-top:8px;display:none}
-</style></head>
-<body><div class="box">
-<div class="brand">LifeLines</div>
-<h1>Ops Tools</h1>
-<form method="POST" action="/login">
-<input type="password" name="password" placeholder="Password" autofocus>
-<button type="submit">Enter</button>
-<div class="err" id="err">${req.query.err ? "Incorrect password" : ""}</div>
-</form>
-</div>
-<script>document.querySelector('.err').style.display='${req.query.err ? "block" : "none"}'</script>
-</body></html>`);
-}
+  let directoryCache = null, directoryCacheTime = 0, building = null;
+  let draftsCache = null, draftsCacheTime = 0;
 
-app.post("/login", express.urlencoded({ extended: false }), (req, res) => {
-  if (req.body.password === SITE_PASSWORD) {
-    const token = Math.random().toString(36).slice(2) + Date.now().toString(36);
-    authenticated.add(token);
-    res.setHeader("Set-Cookie", AUTH_COOKIE + "=" + token + "; Path=/; HttpOnly; Max-Age=" + (60*60*24*30));
-    res.redirect("/");
-  } else {
-    res.redirect("/login?err=1");
-  }
-});
+  const gidNum = id => (id || "").split("/").pop();
+  const labelOf = n =>
+    n.shippingAddress?.company || n.billingAddress?.company ||
+    n.customer?.displayName || n.email || "Unknown";
+  const money = v => Math.round((parseFloat(v) || 0) * 100) / 100;
 
-app.get('/favicon.svg', (req, res) => res.sendFile(path.join(__dirname, 'public', 'favicon.svg')));
-app.use(requireAuth);
-app.use(express.static(path.join(__dirname, "public")));
-
-
-// ── Credentials ───────────────────────────────────────────────────────────────
-const CREDS = {
-  dtcStore: process.env.DTC_STORE,
-  dtcToken: process.env.DTC_TOKEN,
-  b2bStore: process.env.B2B_STORE,
-  b2bToken: process.env.B2B_TOKEN,
-};
-
-// Shopify supports each stable API version for ~12 months. Centralized here
-// so bumping it quarterly is a one-line change instead of a repo-wide grep —
-// this was previously hardcoded separately in both gql() and restFetchAll(),
-// and had drifted all the way back to 2024-01 before this fix.
-const SHOPIFY_API_VERSION = process.env.SHOPIFY_API_VERSION || "2026-07";
-
-// ── Admin unlock (destructive-action gate) ─────────────────────────────────────
-// Separate from SITE_PASSWORD. NOTE: requireAuth above already exempts every
-// /api/* path from site-password checks, so this cookie/session is the only
-// real gate in front of the mutating endpoints below — it is not layered on
-// top of another check. Session is sliding: every authenticated call resets
-// the 30-minute window rather than expiring on a fixed clock.
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
-const ADMIN_COOKIE = "ops_admin";
-const ADMIN_SESSION_MS = 30 * 60 * 1000;
-const adminSessions = new Map(); // token -> expiresAt
-
-function getAdminToken(req) {
-  const cookies = req.headers.cookie || "";
-  return cookies.split(";").map(c => c.trim())
-    .find(c => c.startsWith(ADMIN_COOKIE + "="))?.split("=")[1];
-}
-
-function requireAdmin(req, res, next) {
-  const token = getAdminToken(req);
-  const expiresAt = token && adminSessions.get(token);
-  if (expiresAt && Date.now() < expiresAt) {
-    adminSessions.set(token, Date.now() + ADMIN_SESSION_MS); // sliding expiry
-    return next();
-  }
-  res.status(401).json({ error: "Admin unlock required." });
-}
-
-app.post("/api/admin/unlock", (req, res) => {
-  if (!ADMIN_PASSWORD) return res.status(400).json({ error: "Admin password not configured on server." });
-  if ((req.body.password || "") !== ADMIN_PASSWORD) {
-    return res.status(401).json({ error: "Incorrect admin password." });
-  }
-  const token = Math.random().toString(36).slice(2) + Date.now().toString(36);
-  const expiresAt = Date.now() + ADMIN_SESSION_MS;
-  adminSessions.set(token, expiresAt);
-  res.setHeader("Set-Cookie", `${ADMIN_COOKIE}=${token}; Path=/; HttpOnly; Max-Age=${ADMIN_SESSION_MS / 1000}`);
-  res.json({ ok: true, expiresAt });
-});
-
-app.get("/api/admin/status", (req, res) => {
-  const token = getAdminToken(req);
-  const expiresAt = token && adminSessions.get(token);
-  const unlocked = !!(expiresAt && Date.now() < expiresAt);
-  res.json({ unlocked, expiresAt: unlocked ? expiresAt : null });
-});
-
-app.post("/api/admin/lock", (req, res) => {
-  const token = getAdminToken(req);
-  if (token) adminSessions.delete(token);
-  res.setHeader("Set-Cookie", `${ADMIN_COOKIE}=; Path=/; HttpOnly; Max-Age=0`);
-  res.json({ ok: true });
-});
-
-// ── Database ──────────────────────────────────────────────────────────────────
-const db = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
-
-async function initDB() {
-  await db.query(`
-    CREATE TABLE IF NOT EXISTS orders (
-      id TEXT PRIMARY KEY,
-      store TEXT NOT NULL,
-      order_number TEXT,
-      created_at TIMESTAMPTZ,
-      email TEXT,
-      units INTEGER DEFAULT 0,
-      fulfillment_hours REAL,
-      delivery_hours REAL,
-      processing_hours REAL,
-      is_flagged BOOLEAN DEFAULT FALSE,
-      flag_types TEXT,
-      tracking_json TEXT,
-      customer_name TEXT,
-      updated_at TIMESTAMPTZ,
-      synced_at TIMESTAMPTZ DEFAULT NOW()
-    );
-    CREATE INDEX IF NOT EXISTS idx_orders_store_created ON orders(store, created_at);
-    CREATE INDEX IF NOT EXISTS idx_orders_email ON orders(email);
-    CREATE INDEX IF NOT EXISTS idx_orders_flagged ON orders(is_flagged) WHERE is_flagged = TRUE;
-  `);
-  // Added after the orders table already existed in production — CREATE TABLE
-  // IF NOT EXISTS above won't add columns to a table that's already there.
-  await db.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS order_total NUMERIC;`);
-  await db.query(`
-    CREATE INDEX IF NOT EXISTS idx_orders_store_email_created ON orders(store, email, created_at);
-
-    CREATE TABLE IF NOT EXISTS sync_state (
-      key TEXT PRIMARY KEY,
-      value TEXT,
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    );
-
-    CREATE TABLE IF NOT EXISTS stale_fulfillments (
-      fulfillment_id TEXT PRIMARY KEY,
-      order_id TEXT,
-      order_name TEXT,
-      order_created_at TIMESTAMPTZ,
-      email TEXT,
-      customer_name TEXT,
-      shipping_address TEXT,
-      order_total TEXT,
-      fulfilled_at TIMESTAMPTZ,
-      display_status TEXT,
-      has_tracking BOOLEAN DEFAULT FALSE,
-      tracking_json TEXT,
-      skus TEXT,
-      tags TEXT,
-      latest_event_json TEXT,
-      all_events_json TEXT,
-      days_since_fulfilled REAL,
-      synced_at TIMESTAMPTZ DEFAULT NOW()
-    );
-    CREATE INDEX IF NOT EXISTS idx_stale_display_status ON stale_fulfillments(display_status);
-    CREATE INDEX IF NOT EXISTS idx_stale_fulfilled_at ON stale_fulfillments(fulfilled_at);
-  `);
-  console.log("DB initialized");
-}
-
-// ── GQL helpers ───────────────────────────────────────────────────────────────
-async function gql(store, token, query, variables = {}) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
-  try {
-    const res = await fetch(`https://${store}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
-      method: "POST",
-      headers: { "X-Shopify-Access-Token": token, "Content-Type": "application/json" },
-      body: JSON.stringify({ query, variables }),
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
-    if (!res.ok) throw new Error(`GQL HTTP ${res.status}`);
-    const json = await res.json();
-    if (json.errors) throw new Error(json.errors.map(e => e.message).join("; "));
-    const cost = json.extensions?.cost;
-    if (cost?.throttleStatus) {
-      const { currentlyAvailable, restoreRate } = cost.throttleStatus;
-      const needed = (cost.actualQueryCost || 0) * 1.2;
-      if (currentlyAvailable < needed && restoreRate > 0) {
-        await new Promise(r => setTimeout(r, Math.min(Math.ceil((needed - currentlyAvailable) / restoreRate) * 1000, 2000)));
-      }
+  // ── Queries ────────────────────────────────────────────────────────────────
+  const CUSTOMERS_QUERY = `
+  query AnalyticsCustomers($first: Int!, $after: String, $query: String) {
+    customers(first: $first, after: $after, query: $query, sortKey: NAME) {
+      pageInfo { hasNextPage endCursor }
+      edges { node { id displayName email defaultAddress { company } } }
     }
-    return json.data;
-  } catch (err) {
-    clearTimeout(timeout);
-    if (err.name === "AbortError") throw new Error("GQL timeout");
-    throw err;
-  }
-}
+  }`;
 
-async function gqlAll(store, token, query, variables, getEdges, getPageInfo, deadlineMs = 120000) {
-  let results = [], cursor = null, pages = 0;
-  const DEADLINE = Date.now() + deadlineMs;
-  while (pages < 100) {
-    if (Date.now() > DEADLINE) { console.warn(`gqlAll deadline at ${pages} pages, ${results.length} results`); break; }
-    const data = await gql(store, token, query, { ...variables, after: cursor });
-    results = results.concat(getEdges(data).map(e => e.node));
-    const pi = getPageInfo(data);
-    pages++;
-    if (!pi.hasNextPage) break;
-    cursor = pi.endCursor;
-  }
-  return results;
-}
+  // Lightweight pull used only to rank the customer dropdown by this year's volume.
+  const YTD_QUERY = `
+  query AnalyticsYtd($first: Int!, $after: String, $query: String!) {
+    orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT) {
+      pageInfo { hasNextPage endCursor }
+      edges { node { id customer { id } currentSubtotalPriceSet { shopMoney { amount } } } }
+    }
+  }`;
 
-// ── REST (inventory only) ─────────────────────────────────────────────────────
-async function restFetchAll(store, token, endpoint, key) {
-  let results = [], url = `https://${store}/admin/api/${SHOPIFY_API_VERSION}${endpoint}`, pages = 0;
-  while (url && pages < 20) {
-    const res = await fetch(url, { headers: { "X-Shopify-Access-Token": token } });
-    if (!res.ok) throw new Error(`REST ${res.status}`);
-    const data = await res.json();
-    results = results.concat(data[key] || []);
-    pages++;
-    const link = res.headers.get("Link");
-    url = null;
-    if (link) { const m = link.match(/<([^>]+)>;\s*rel="next"/); if (m) url = m[1]; }
-    if (url) await new Promise(r => setTimeout(r, 250));
-  }
-  return results;
-}
-
-// ── Math ──────────────────────────────────────────────────────────────────────
-function hoursBetween(a, b) {
-  if (!a || !b) return null;
-  return (new Date(b) - new Date(a)) / 36e5;
-}
-function avg(arr) {
-  const v = arr.filter(x => x !== null && x !== undefined && !isNaN(x) && x >= 0);
-  return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
-}
-function formatDuration(h) {
-  if (h === null || h === undefined) return "—";
-  if (h < 1) return `${Math.round(h * 60)}m`;
-  if (h < 24) return `${h.toFixed(1)}h`;
-  return `${(h / 24).toFixed(1)}d`;
-}
-
-// ── GQL Queries ───────────────────────────────────────────────────────────────
-const ORDERS_QUERY = `
-query Orders($first: Int!, $after: String, $query: String!) {
-  orders(first: $first, after: $after, query: $query, sortKey: UPDATED_AT, reverse: true) {
-    pageInfo { hasNextPage endCursor }
-    edges {
-      node {
-        id name createdAt updatedAt email cancelledAt
-        totalPriceSet { shopMoney { amount } }
-        shippingAddress { firstName lastName }
-        billingAddress { firstName lastName }
-        lineItems(first: 20) { edges { node { quantity } } }
-        fulfillments(first: 5) {
-          createdAt updatedAt displayStatus
-          trackingInfo(first: 1) { company number url }
+  // discountedTotalSet = line total after line-level discounts / price overrides
+  // (whole quantity), so unit value = discountedTotalSet / quantity.
+  const DRAFTS_QUERY = `
+  query AnalyticsDrafts($first: Int!, $after: String, $query: String!) {
+    draftOrders(first: $first, after: $after, query: $query, sortKey: UPDATED_AT) {
+      pageInfo { hasNextPage endCursor }
+      edges {
+        node {
+          id name createdAt email tags
+          customer { id displayName }
+          shippingAddress { company }
+          billingAddress { company }
+          lineItems(first: 100) {
+            pageInfo { hasNextPage endCursor }
+            edges { node { sku title quantity discountedTotalSet { shopMoney { amount } } } }
+          }
         }
       }
     }
-  }
-}`;
+  }`;
 
-const DRAFT_ORDERS_QUERY = `
-query DraftOrders($first: Int!, $after: String, $query: String!) {
-  draftOrders(first: $first, after: $after, query: $query, sortKey: UPDATED_AT) {
-    pageInfo { hasNextPage endCursor }
-    edges {
-      node {
-        id name createdAt completedAt status email tags
-        totalPrice subtotalPrice
-        poNumber
-        shippingAddress { company address1 address2 city province zip country }
-        billingAddress { company address1 address2 city province zip country }
-        metafield(namespace: "b2b", key: "ship_date") { value }
-        lineItems(first: 50) {
-          edges {
-            node {
-              title variantTitle sku quantity originalUnitPrice
-              variant {
-                id
-                inventoryItem { id }
-                product { tags }
+  // discountedUnitPriceSet = unit price after line-level discounts (order-level
+  // discounts are NOT allocated, by design — see the "merchandise value" note on the page).
+  const ORDERS_QUERY = `
+  query AnalyticsOrders($first: Int!, $after: String, $query: String!) {
+    orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT, reverse: true) {
+      pageInfo { hasNextPage endCursor }
+      edges {
+        node {
+          id name createdAt cancelledAt email
+          customer { id displayName }
+          shippingAddress { company }
+          billingAddress { company }
+          lineItems(first: 100) {
+            pageInfo { hasNextPage endCursor }
+            edges {
+              node {
+                sku title quantity currentQuantity unfulfilledQuantity
+                discountedUnitPriceSet { shopMoney { amount } }
               }
             }
           }
         }
       }
     }
+  }`;
+
+  // Orders and drafts with more than 100 lines: Shopify returns the first 100 and
+  // says there are more. Fetch the rest so big orders aren't silently undercounted.
+  const DRAFT_LINE_FIELDS = "id sku title quantity discountedTotalSet { shopMoney { amount } }";
+  const DRAFT_MORE_LINES_QUERY = `
+  query AnalyticsDraftMoreLines($id: ID!, $after: String) {
+    draftOrder(id: $id) {
+      lineItems(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        edges { node { ${DRAFT_LINE_FIELDS} } }
+      }
+    }
+  }`;
+  async function completeLines(nodes, query, root) {
+    for (const n of nodes) {
+      let pi = n.lineItems?.pageInfo, guard = 0;
+      while (pi?.hasNextPage && guard++ < 30) {
+        const d = await gqlRetry(query, { id: n.id, after: pi.endCursor });
+        const more = d[root]?.lineItems;
+        if (!more) break;
+        n.lineItems.edges = n.lineItems.edges.concat(more.edges);
+        pi = n.lineItems.pageInfo = more.pageInfo;
+      }
+    }
   }
-}`;
 
-// ── SKU Holds config ────────────────────────────────────────────────────────
-const HOLD_CUSTOMER_EMAIL = "hold@lifelines.com";
+  // ── Data access ────────────────────────────────────────────────────────────
+  async function getOpenDrafts() {
+    if (draftsCache && Date.now() - draftsCacheTime < DRAFTS_TTL) return draftsCache;
+    const { b2bStore, b2bToken } = CREDS;
+    const drafts = await gqlAll(b2bStore, b2bToken, DRAFTS_QUERY,
+      { first: PAGE, query: "status:open" },
+      d => d.draftOrders.edges, d => d.draftOrders.pageInfo, 120000);
+    await completeLines(drafts, DRAFT_MORE_LINES_QUERY, "draftOrder");
+    draftsCache = drafts;
+    draftsCacheTime = Date.now();
+    return drafts;
+  }
 
-// Search orders directly by email — this uses the same root `orders` query
-// and scalar `email` field every other endpoint in this app already reads
-// successfully, so it needs no extra scope (unlike the customers/Company
-// objects, which returned "Access denied" — this token lacks read_customers).
-const SKU_HOLDS_QUERY = `
-query HoldOrders($first: Int!, $after: String, $query: String!) {
-  orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT) {
-    pageInfo { hasNextPage endCursor }
-    edges {
-      node {
-        id name createdAt email cancelledAt
-        lineItems(first: 100) {
-          edges {
-            node {
-              sku title variantTitle quantity unfulfilledQuantity
-            }
+  // Customers grouped by company, so "HomeGoods" with 6 buyer contacts is one
+  // dropdown entry that expands to all 6 customer ids when selected.
+  // ── Parent grouping ────────────────────────────────────────────────────────
+  // Store-level records ("Trudy's Hallmark #101", "New Seasons Market - Orenco")
+  // roll up to one parent in the dropdown. Rules live in analytics-groups.json
+  // next to this file; a missing or broken file just means no explicit rules.
+  const normName = s => String(s || "").toLowerCase().replace(/[’‘`]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
+  function loadGroupRules() {
+    try {
+      const raw = JSON.parse(require("fs").readFileSync(require("path").join(__dirname, "analytics-groups.json"), "utf8"));
+      return {
+        autoStrip: raw.autoStrip !== false,
+        rules: (raw.rules || []).filter(r => r && r.startsWith && r.parent).map(r => ({ p: normName(r.startsWith), parent: String(r.parent).trim() })),
+        never: new Set((raw.neverGroup || []).map(normName)),
+      };
+    } catch (e) {
+      if (e.code !== "ENOENT") console.warn("[analytics] analytics-groups.json unreadable:", e.message);
+      return { autoStrip: true, rules: [], never: new Set() };
+    }
+  }
+  // Looser key used to fold spelling variants of the same name together:
+  // "GRETCHENS Hallmark" / "Gretchen's Hallmark" / "Gretchen’s Hallmark" all match.
+  const looseKey = s => normName(s).replace(/'/g, "").replace(/\band\b/g, "&").replace(/ & /g, " ")
+    .replace(/^the /, "").replace(/\b(inc|llc|ltd|co|corp|company)\b/g, "").replace(/\s+/g, " ").trim();
+  const nicer = (a, b) => {   // which spelling to show: mixed case > ALL CAPS, has apostrophe, then longer
+    const score = x => (x !== x.toUpperCase() ? 4 : 0) + (x !== x.toLowerCase() ? 1 : 0) + (/['’]/.test(x) ? 2 : 0);
+    return score(b) > score(a) ? b : a;
+  };
+  function parentOf(label, cfg) {
+    const n = normName(label);
+    if (cfg.never.has(n)) return label;
+    for (const r of cfg.rules) if (r.p && (n === r.p || n.startsWith(r.p + " ") || n.startsWith(r.p))) return r.parent;
+    if (cfg.autoStrip) {
+      const cut = label.split(/\s+#\s*\d|\s+[-–—]\s+/)[0].replace(/[\s,\-–—]+$/, "").trim();
+      if (cut.length >= 3) return cut;
+    }
+    return label;
+  }
+
+  async function buildDirectory() {
+    const groupCfg = loadGroupRules();
+    const { b2bStore, b2bToken } = CREDS;
+    const customers = await gqlAll(b2bStore, b2bToken, CUSTOMERS_QUERY,
+      { first: 250, query: "orders_count:>0" },
+      d => d.customers.edges, d => d.customers.pageInfo, 180000);
+
+    const groups = new Map();
+    const idToGroup = new Map();
+    const add = (id, company, name, email) => {
+      const store = (company || name || email || "Unknown").trim();
+      const label = parentOf(store, groupCfg);
+      const key = looseKey(label) || label.toLowerCase();
+      if (!groups.has(key)) groups.set(key, { key, label, ids: new Set(), emails: new Set(), members: new Set(), ytd: 0, ytdOrders: 0, drafts: 0 });
+      const g = groups.get(key);
+      g.label = nicer(g.label, label);
+      g.members.add(store);
+      if (id) { g.ids.add(id); idToGroup.set(id, g); }
+      if (email) g.emails.add(email.toLowerCase());
+    };
+
+    for (const c of customers) add(gidNum(c.id), c.defaultAddress?.company, c.displayName, c.email);
+
+    // Customers that only exist on an open draft (brand-new accounts), plus an
+    // open-draft count per company so new accounts still rank as "active".
+    try {
+      for (const d of await getOpenDrafts()) {
+        if (!d.customer?.id) continue;
+        add(gidNum(d.customer.id), d.shippingAddress?.company || d.billingAddress?.company, d.customer.displayName, d.email);
+        const g = idToGroup.get(gidNum(d.customer.id));
+        if (g) g.drafts++;
+      }
+    } catch (e) { console.warn("[analytics] drafts merge for directory failed:", e.message); }
+
+    // Year-to-date merchandise volume per company (calendar year, cancelled excluded).
+    // If this fails the directory still works — it just isn't ranked.
+    try {
+      const yearStart = `${new Date().getUTCFullYear()}-01-01`;
+      const orders = await gqlAll(b2bStore, b2bToken, YTD_QUERY,
+        { first: 250, query: `created_at:>=${yearStart} -status:cancelled` },
+        d => d.orders.edges, d => d.orders.pageInfo, 180000);
+      for (const o of orders) {
+        const g = idToGroup.get(gidNum(o.customer?.id));
+        if (!g) continue;
+        g.ytd += parseFloat(o.currentSubtotalPriceSet?.shopMoney?.amount) || 0;
+        g.ytdOrders++;
+      }
+    } catch (e) { console.warn("[analytics] YTD volume for directory failed:", e.message); }
+
+    return [...groups.values()]
+      .map(g => ({
+        key: g.key, label: g.label, ids: [...g.ids], emails: [...g.emails].slice(0, 3),
+        ytd: Math.round(g.ytd), ytdOrders: g.ytdOrders, drafts: g.drafts,
+        locations: g.members.size,
+        members: g.members.size > 1 ? [...g.members].sort().slice(0, 80) : [],
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }
+
+  // ── Customer directory: Postgres-backed, refreshed in the background ───────
+  // The list is saved to its own table (analytics_directory, one row) so it
+  // survives deploys and restarts. Requests are always served from memory; a
+  // stale list is returned immediately while a refresh runs behind it. Only the
+  // very first load on a brand-new database ever makes anyone wait.
+  // Fingerprint of everything that changes how the directory is built: the
+  // grouping logic version plus the contents of analytics-groups.json. A saved
+  // directory built under a different fingerprint is still served right away,
+  // but is rebuilt immediately in the background.
+  const GROUPING_VERSION = 3;
+  function groupingSig() {
+    let file = "";
+    try { file = require("fs").readFileSync(require("path").join(__dirname, "analytics-groups.json"), "utf8"); } catch (_) {}
+    return GROUPING_VERSION + ":" + require("crypto").createHash("md5").update(file).digest("hex").slice(0, 10);
+  }
+  let needsRebuildNow = false;
+
+  async function initStore() {
+    if (!db) return;
+    try {
+      await db.query(`CREATE TABLE IF NOT EXISTS analytics_directory (
+        id INTEGER PRIMARY KEY, payload TEXT NOT NULL, updated_at TIMESTAMPTZ DEFAULT NOW())`);
+      const r = await db.query("SELECT payload, updated_at FROM analytics_directory WHERE id = 1");
+      if (r.rows[0]) {
+        const parsed = JSON.parse(r.rows[0].payload);
+        const saved = Array.isArray(parsed) ? parsed : (parsed.list || []);
+        const sig = Array.isArray(parsed) ? null : parsed.sig;
+        if (saved.length && (saved[0].ytd === undefined || saved[0].locations === undefined)) {
+          console.log("[analytics] saved directory predates volume ranking; rebuilding");
+        } else {
+          directoryCache = saved;
+          directoryCacheTime = new Date(r.rows[0].updated_at).getTime();
+          if (sig !== groupingSig()) {
+            needsRebuildNow = true;
+            directoryCacheTime = 0;   // stale on purpose: serve it, refresh behind it right away
+            console.log("[analytics] grouping rules changed; refreshing directory");
+          }
+          console.log(`[analytics] loaded ${directoryCache.length} customers from DB`);
+        }
+      }
+    } catch (e) { console.warn("[analytics] directory store unavailable, using memory only:", e.message); }
+  }
+
+  async function saveDirectory(list) {
+    if (!db) return;
+    try {
+      await db.query(`INSERT INTO analytics_directory (id, payload, updated_at) VALUES (1, $1, NOW())
+        ON CONFLICT (id) DO UPDATE SET payload = $1, updated_at = NOW()`, [JSON.stringify({ sig: groupingSig(), list })]);
+    } catch (e) { console.warn("[analytics] could not save directory:", e.message); }
+  }
+
+  // One refresh at a time; callers that arrive mid-refresh share it.
+  function refreshDirectory() {
+    if (building) return building;
+    building = (async () => {
+      try {
+        const list = await buildDirectory();
+        directoryCache = list;
+        directoryCacheTime = Date.now();
+        await saveDirectory(list);
+        console.log(`[analytics] directory refreshed: ${list.length} customers`);
+        return list;
+      } finally { building = null; }
+    })();
+    return building;
+  }
+
+  const bgRefresh = () => refreshDirectory().catch(e => console.warn("[analytics] background refresh failed:", e.message));
+  const storeReady = initStore();
+  storeReady.then(() => {
+    if (!directoryCache || Date.now() - directoryCacheTime > DIRECTORY_TTL) setTimeout(bgRefresh, needsRebuildNow ? 1000 : 10000);
+  });
+  setInterval(() => {
+    if (!directoryCache || Date.now() - directoryCacheTime > DIRECTORY_TTL) bgRefresh();
+  }, 15 * 60 * 1000);
+
+  // ── GET customer directory (dropdown source) ───────────────────────────────
+  app.get("/api/analytics/customers", async (req, res) => {
+    const { b2bStore, b2bToken } = CREDS;
+    if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
+    try {
+      await storeReady;
+      if (req.query.refresh === "true" || !directoryCache) {
+        const list = await refreshDirectory();
+        return res.json({ customers: await withStoreVolume(list), cached: false });
+      }
+      if (Date.now() - directoryCacheTime > DIRECTORY_TTL) bgRefresh(); // serve now, refresh behind
+      res.json({ customers: await withStoreVolume(directoryCache), cached: true, updatedAt: new Date(directoryCacheTime).toISOString() });
+    } catch (err) {
+      console.error("[analytics] directory error:", err);
+      if (directoryCache) return res.json({ customers: directoryCache, cached: true, stale: true });
+      const hint = /access denied|scope/i.test(err.message)
+        ? " (B2B token needs the read_customers scope)" : "";
+      res.status(500).json({ error: err.message + hint });
+    }
+  });
+
+  // ── Order store (Postgres) ─────────────────────────────────────────────────
+  // Order lines live in two tables of their own (analytics_orders / analytics_lines)
+  // so a lookup is one SQL query instead of dozens of Shopify requests. Nothing
+  // here touches the existing `orders` table or its sync.
+  //
+  // Loading happens in the background, in this order:
+  //   1. every open (unfulfilled / partial) order of any age
+  //   2. month by month, newest first, back ANALYTICS_BACKFILL_MONTHS (default 24)
+  //   3. forever after: orders changed since the last sync, every 5 minutes
+  // A lookup is answered from the store only when the store provably covers it
+  // (open orders loaded, and the requested period is inside the loaded months).
+  // Otherwise it quietly falls back to the live Shopify search.
+  const STORE_MONTHS = Math.max(1, parseInt(process.env.ANALYTICS_BACKFILL_MONTHS || "24", 10) || 24);
+  const SYNC_INTERVAL = Number(process.env.ANALYTICS_SYNC_INTERVAL_MS) || 5 * 60 * 1000;
+  const READ_SYNC_DEBOUNCE = process.env.ANALYTICS_READ_SYNC_DEBOUNCE_MS !== undefined ? Number(process.env.ANALYTICS_READ_SYNC_DEBOUNCE_MS) : 10 * 1000;   // a lookup tops the store up if the last sync is older than this
+  const READ_SYNC_BUDGET = 8000;          // ...but never waits longer than this for it
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const iso = d => d.toISOString().replace(/\.\d{3}Z$/, "Z");
+
+  const LINE_FIELDS = "id sku title quantity currentQuantity unfulfilledQuantity discountedUnitPriceSet { shopMoney { amount } }";
+  const STORE_ORDERS_QUERY = `
+  query AnalyticsStoreOrders($first: Int!, $after: String, $query: String!) {
+    orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT) {
+      pageInfo { hasNextPage endCursor }
+      edges {
+        node {
+          id name createdAt updatedAt cancelledAt email
+          customer { id displayName }
+          shippingAddress { company }
+          billingAddress { company }
+          lineItems(first: 100) {
+            pageInfo { hasNextPage endCursor }
+            edges { node { ${LINE_FIELDS} } }
           }
         }
       }
     }
-  }
-}`;
+  }`;
+  const MORE_LINES_QUERY = `
+  query AnalyticsMoreLines($id: ID!, $after: String) {
+    order(id: $id) {
+      lineItems(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        edges { node { ${LINE_FIELDS} } }
+      }
+    }
+  }`;
 
-const DTC_STALE_QUERY = `
-query StaleFulfillments($first: Int!, $after: String, $query: String!) {
-  orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT, reverse: true) {
-    pageInfo { hasNextPage endCursor }
-    edges {
-      node {
-        id name createdAt cancelledAt email displayFulfillmentStatus
-        totalPriceSet { shopMoney { amount currencyCode } }
-        shippingAddress { name address1 address2 city province zip country }
-        tags
-        fulfillments(first: 10) {
-          id name createdAt updatedAt status displayStatus
-          trackingInfo(first: 5) { company number url }
-          events(first: 50) { edges { node { status happenedAt message } } }
-          fulfillmentLineItems(first: 50) { edges { node { quantity lineItem { sku title } } } }
+  const STORE_DRAFTS_QUERY = `
+  query AnalyticsStoreDrafts($first: Int!, $after: String, $query: String!) {
+    draftOrders(first: $first, after: $after, query: $query, sortKey: UPDATED_AT) {
+      pageInfo { hasNextPage endCursor }
+      edges {
+        node {
+          id name createdAt updatedAt email
+          customer { id displayName }
+          shippingAddress { company }
+          billingAddress { company }
+          lineItems(first: 100) {
+            pageInfo { hasNextPage endCursor }
+            edges { node { ${DRAFT_LINE_FIELDS} } }
+          }
         }
       }
     }
-  }
-}`;
-
-// ── Draft order mutations (admin tools) ────────────────────────────────────────
-const MUTATION_DRAFT_UPDATE = `
-mutation DraftOrderUpdate($id: ID!, $input: DraftOrderInput!) {
-  draftOrderUpdate(id: $id, input: $input) {
-    draftOrder { id name }
-    userErrors { field message }
-  }
-}`;
-
-const MUTATION_DRAFT_DELETE = `
-mutation DraftOrderDelete($input: DraftOrderDeleteInput!) {
-  draftOrderDelete(input: $input) {
-    deletedId
-    userErrors { field message }
-  }
-}`;
-
-// Rebuilds a line item for a draftOrderUpdate call. Mirrors the behavior of
-// the local cleanup script (build_line_item_for_update in the Python
-// version): variant lines are re-sent as variantId + quantity only, with no
-// price override, so Shopify re-derives price from the variant same as the
-// existing script does. Custom (non-variant) line items are rare on these
-// B2B drafts but are preserved best-effort with their original price so
-// removing an unrelated SKU never silently reprices them. Currency is
-// assumed USD to match the B2B store — flag if that's ever not true.
-function buildLineItemInput(li) {
-  if (li.variant?.id) {
-    return { variantId: li.variant.id, quantity: li.quantity };
-  }
-  return {
-    title: li.title || "Custom item",
-    quantity: li.quantity,
-    originalUnitPriceWithCurrency: { amount: String(li.originalUnitPrice || "0"), currencyCode: "USD" },
-  };
-}
-
-// Always fetches live (bypasses cache) — both admin tools mutate Shopify, so
-// previews and executes must work off current data, not the 5-minute
-// dashboard cache. Also refreshes b2bDraftsCache as a side effect so the
-// dashboard doesn't show stale rows right after a mutation.
-async function fetchFreshOpenB2BDrafts() {
-  const { b2bStore, b2bToken } = CREDS;
-  const drafts = await gqlAll(b2bStore, b2bToken, DRAFT_ORDERS_QUERY,
-    { first: 250, query: "status:open" },
-    d => d.draftOrders.edges, d => d.draftOrders.pageInfo, 120000);
-  b2bDraftsCache = drafts;
-  b2bDraftsCacheTime = Date.now();
-  return drafts;
-}
-
-// ── Order processor (Shopify node -> DB row) ──────────────────────────────────
-function processOrderNode(node, store, draftCompletedAt) {
-  const units = (node.lineItems?.edges || []).reduce((s, e) => s + (e.node.quantity || 0), 0);
-  const addr = node.shippingAddress || node.billingAddress || {};
-  const customerName = [addr.firstName, addr.lastName].filter(Boolean).join(" ") || node.email || "—";
-  const fulfs = node.fulfillments || [];
-
-  let fulfillmentHours = null, deliveryHours = null, trackingInfo = null;
-
-  if (fulfs.length > 0) {
-    const sorted = [...fulfs].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-    const first = sorted[0];
-    const fh = hoursBetween(node.createdAt, first.createdAt);
-    if (fh !== null && fh >= 0) fulfillmentHours = fh;
-
-    const delivered = fulfs.find(f => (f.displayStatus || "").toUpperCase() === "DELIVERED");
-    if (delivered) {
-      const dh = hoursBetween(first.createdAt, delivered.updatedAt);
-      if (dh !== null && dh >= 0) deliveryHours = dh;
+  }`;
+  const DRAFT_IDS_QUERY = `
+  query AnalyticsDraftIds($first: Int!, $after: String, $query: String!) {
+    draftOrders(first: $first, after: $after, query: $query) {
+      pageInfo { hasNextPage endCursor }
+      edges { node { id } }
     }
+  }`;
 
-    const wt = [...fulfs].reverse().find(f => f.trackingInfo?.length > 0);
-    if (wt) trackingInfo = {
-      number: wt.trackingInfo[0].number,
-      company: wt.trackingInfo[0].company,
-      url: wt.trackingInfo[0].url,
-      shipmentStatus: wt.displayStatus,
-      updatedAt: wt.updatedAt,
-    };
-  }
+  const st = { draftsLoaded: false, draftsWatermark: null, ready: false, openLoaded: false, coveredFrom: null, watermark: null, lastSyncAt: 0, phase: "starting", error: null };
+  const storeEnabled = !!db && typeof db.connect === "function";
 
-  const processingHours = draftCompletedAt ? hoursBetween(node.createdAt, draftCompletedAt) : null;
-
-  const THRESHOLD = 5 * 24;
-  const EXCLUDED = new Set(["inquiries@lifelines.com", "care@lifelines.com"]);
-  const flags = [];
-  if (fulfillmentHours !== null && fulfillmentHours > THRESHOLD) flags.push("fulfillment");
-  if (deliveryHours !== null && deliveryHours > THRESHOLD) flags.push("delivery");
-  if (fulfs.length > 0 && !fulfs.find(f => (f.displayStatus || "").toUpperCase() === "DELIVERED")) {
-    const first = [...fulfs].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))[0];
-    const stalled = hoursBetween(first.createdAt, new Date().toISOString());
-    if (stalled !== null && stalled > THRESHOLD) flags.push("delivery_stalled");
-  }
-
-  const isFlagged = flags.length > 0 && !EXCLUDED.has((node.email || "").toLowerCase());
-  const orderTotal = node.totalPriceSet?.shopMoney?.amount != null
-    ? parseFloat(node.totalPriceSet.shopMoney.amount) : null;
-
-  return {
-    id: node.id, store, order_number: node.name,
-    created_at: node.createdAt, updated_at: node.updatedAt,
-    email: node.email || null, units,
-    fulfillment_hours: fulfillmentHours, delivery_hours: deliveryHours,
-    processing_hours: processingHours, is_flagged: isFlagged,
-    flag_types: flags.join(","),
-    tracking_json: trackingInfo ? JSON.stringify(trackingInfo) : null,
-    customer_name: customerName,
-    order_total: orderTotal,
-  };
-}
-
-// ── In-memory caches ──────────────────────────────────────────────────────────
-let b2bDraftsCache = null;
-let b2bDraftsCacheTime = 0;
-let dtcStaleCache = null;
-let dtcStaleCacheTime = 0;
-let skuHoldsCache = null;
-let skuHoldsCacheTime = 0;
-let excludedSkusCache = null;
-let excludedSkusCacheTime = 0;
-const B2B_CACHE_TTL = 5 * 60 * 1000;
-const DTC_STALE_TTL = 5 * 60 * 1000;
-const SKU_HOLDS_TTL = 5 * 60 * 1000;
-const EXCLUDED_SKUS_SNAPSHOT_TTL = 5 * 60 * 1000;
-const EXCLUDED_SKUS_SNAPSHOT_URL =
-  "https://raw.githubusercontent.com/Pkirch1211/release-instock-orders/main/excluded_skus.json";
-
-// ── Sync logic ────────────────────────────────────────────────────────────────
-let syncInProgress = false;
-
-async function syncStore(store, token, label, since) {
-  // IMPORTANT: Shopify's orders search defaults to status:open when no status
-  // clause is given — closed/archived orders (the common case once an order
-  // is paid + fulfilled) silently drop out of results. That was undercounting
-  // every customer's synced order history, which fed directly into the B2B
-  // 12-month spend rollup (getB2BCustomerSpendMap) used for the under-$75
-  // segmentation. status:any restores full coverage; cancelled orders are
-  // explicitly filtered back out below since they shouldn't count as spend.
-  const query = since
-    ? `status:any updated_at:>=${since}`
-    : `status:any created_at:>=${new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)}`;
-
-  console.log(`[sync] ${label}: fetching orders since ${since || "12mo ago"}`);
-  const allOrders = await gqlAll(store, token, ORDERS_QUERY, { first: 250, query },
-    d => d.orders.edges, d => d.orders.pageInfo, 600000);
-  const cancelledIds = allOrders.filter(n => n.cancelledAt).map(n => n.id);
-  const orders = allOrders.filter(n => !n.cancelledAt);
-  console.log(`[sync] ${label}: got ${allOrders.length} orders (${cancelledIds.length} cancelled, excluded)`);
-
-  // Clean up any order that was previously synced as active and has since
-  // been cancelled, so it stops counting toward spend/flag totals.
-  if (cancelledIds.length) {
-    await db.query(`DELETE FROM orders WHERE id = ANY($1)`, [cancelledIds]);
-  }
-  if (!orders.length) return 0;
-
-  const BATCH = 50;
-  let upserted = 0;
-  for (let i = 0; i < orders.length; i += BATCH) {
-    const batch = orders.slice(i, i + BATCH);
-    const values = [], params = [];
-    let pi = 1;
-    for (const node of batch) {
-      const row = processOrderNode(node, label, null);
-      values.push(`($${pi},$${pi+1},$${pi+2},$${pi+3},$${pi+4},$${pi+5},$${pi+6},$${pi+7},$${pi+8},$${pi+9},$${pi+10},$${pi+11},$${pi+12},$${pi+13},$${pi+14})`);
-      params.push(row.id, row.store, row.order_number, row.created_at, row.updated_at,
-        row.email, row.units, row.fulfillment_hours, row.delivery_hours, row.processing_hours,
-        row.is_flagged, row.flag_types, row.tracking_json, row.customer_name, row.order_total);
-      pi += 15;
-    }
-    await db.query(`
-      INSERT INTO orders (id, store, order_number, created_at, updated_at, email, units,
-        fulfillment_hours, delivery_hours, processing_hours, is_flagged, flag_types, tracking_json, customer_name, order_total)
-      VALUES ${values.join(",")}
-      ON CONFLICT (id) DO UPDATE SET
-        updated_at = EXCLUDED.updated_at, units = EXCLUDED.units,
-        fulfillment_hours = EXCLUDED.fulfillment_hours, delivery_hours = EXCLUDED.delivery_hours,
-        processing_hours = EXCLUDED.processing_hours, is_flagged = EXCLUDED.is_flagged,
-        flag_types = EXCLUDED.flag_types, tracking_json = EXCLUDED.tracking_json,
-        customer_name = EXCLUDED.customer_name, order_total = EXCLUDED.order_total, synced_at = NOW()
-    `, params);
-    upserted += batch.length;
-  }
-  return upserted;
-}
-
-// Trailing-12-month spend per B2B customer, from the already-synced `orders`
-// table (store = 'B2B' only — DTC purchase history is a separate customer
-// base and deliberately excluded here per the sales team's ask). Keyed by
-// lowercased email so it matches draft.email case-insensitively.
-//
-// SAFEGUARD: order_total was added via ALTER TABLE ... ADD COLUMN, which does
-// NOT backfill existing rows — they land as NULL and are excluded from the
-// SUM below by design (a NULL shouldn't silently count as $0 of spend). If a
-// large fraction of a customer's order history predates this column and was
-// never re-synced (e.g. an old, untouched order whose updated_at never
-// re-entered an incremental sync window), spend for that customer will read
-// artificially low. This logs a warning so that failure mode is visible
-// instead of silently under-counting spend forever. It does not change the
-// returned map or any behavior — it only reports on data coverage.
-async function getB2BCustomerSpendMap() {
-  const [sumRes, coverageRes] = await Promise.all([
-    db.query(`
-      SELECT LOWER(email) AS email, SUM(order_total) AS total_spend
-      FROM orders
-      WHERE store = 'B2B' AND email IS NOT NULL AND order_total IS NOT NULL
-        AND created_at >= NOW() - INTERVAL '12 months'
-      GROUP BY LOWER(email)
-    `),
-    db.query(`
-      SELECT COUNT(*) AS total, COUNT(order_total) AS with_total
-      FROM orders
-      WHERE store = 'B2B' AND email IS NOT NULL
-        AND created_at >= NOW() - INTERVAL '12 months'
-    `),
-  ]);
-
-  const totalRows = parseInt(coverageRes.rows[0]?.total || 0);
-  const withTotal = parseInt(coverageRes.rows[0]?.with_total || 0);
-  if (totalRows > 0) {
-    const missing = totalRows - withTotal;
-    const missingFraction = missing / totalRows;
-    if (missingFraction > 0.1) {
-      console.warn(
-        `[getB2BCustomerSpendMap] WARNING: ${missing}/${totalRows} B2B orders ` +
-        `(${(missingFraction * 100).toFixed(1)}%) in the trailing 12mo window have ` +
-        `NULL order_total and are excluded from spend totals — customer spend may be ` +
-        `undercounted. Run POST /api/trigger-backfill to re-sync and populate order_total.`
-      );
-    }
-  }
-
-  const map = {};
-  for (const r of sumRes.rows) map[r.email] = parseFloat(r.total_spend) || 0;
-  return map;
-}
-
-async function buildDraftsMap(store, token, since, deadlineMs = 120000) {
-  const query = since
-    ? `status:completed updated_at:>=${since}`
-    : `status:completed updated_at:>=${new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)}`;
-
-  const drafts = await gqlAll(store, token, DRAFT_ORDERS_QUERY, { first: 250, query },
-    d => d.draftOrders.edges, d => d.draftOrders.pageInfo, deadlineMs);
-
-  const byMonth = {};
-  for (const d of drafts) {
-    if (d.completedAt) {
-      const h = hoursBetween(d.createdAt, d.completedAt);
-      if (h !== null && h >= 0 && h < 720) {
-        const key = d.completedAt.slice(0, 7);
-        if (!byMonth[key]) byMonth[key] = [];
-        byMonth[key].push(h);
+  async function gqlRetry(query, vars) {
+    for (let attempt = 0; ; attempt++) {
+      try { return await gql(CREDS.b2bStore, CREDS.b2bToken, query, vars); }
+      catch (e) {
+        if (attempt >= 3 || !/throttl|timeout|HTTP (429|5\d\d)|fetch failed|ECONN|ETIMEDOUT/i.test(e.message)) throw e;
+        await sleep(1500 * (attempt + 1));
       }
     }
   }
-  const result = {};
-  for (const [month, hours] of Object.entries(byMonth)) result[month] = avg(hours);
-  return result;
-}
 
-async function syncStaleFulfillments(store, token) {
-  const TARGET = new Set(["IN_TRANSIT", "CONFIRMED"]);
-  const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-
-  const orders = await gqlAll(store, token, DTC_STALE_QUERY,
-    { first: 250, query: `fulfillment_status:fulfilled -status:cancelled created_at:>=${ninetyDaysAgo}` },
-    d => d.orders.edges, d => d.orders.pageInfo, 120000);
-
-  await db.query("DELETE FROM stale_fulfillments");
-
-  const rows = [];
-  for (const order of orders) {
-    if (order.cancelledAt) continue;
-    for (const f of order.fulfillments || []) {
-      const status = (f.displayStatus || "").toUpperCase().replace(/ /g, "_");
-      if (!TARGET.has(status)) continue;
-      const days = (Date.now() - new Date(f.createdAt).getTime()) / 864e5;
-      if (days < 5) continue;
-
-      const events = (f.events.edges || []).map(e => e.node).filter(e => e.happenedAt)
-        .sort((a, b) => new Date(b.happenedAt) - new Date(a.happenedAt));
-      const skus = (f.fulfillmentLineItems.edges || [])
-        .map(e => `${e.node.lineItem.sku || e.node.lineItem.title} x${e.node.quantity}`);
-      const addr = order.shippingAddress || {};
-      const total = order.totalPriceSet?.shopMoney || {};
-      const tracking = (f.trackingInfo || []).map(t => ({ company: t.company, number: t.number, url: t.url }));
-
-      rows.push({
-        fulfillment_id: f.id, order_id: order.id, order_name: order.name,
-        order_created_at: order.createdAt, email: order.email || null,
-        customer_name: addr.name || order.email || "",
-        shipping_address: [addr.address1, addr.address2, addr.city, addr.province, addr.zip, addr.country].filter(Boolean).join(", "),
-        order_total: total.amount ? `${total.currencyCode} ${parseFloat(total.amount).toFixed(2)}` : "",
-        fulfilled_at: f.createdAt, display_status: f.displayStatus,
-        has_tracking: tracking.length > 0, tracking_json: JSON.stringify(tracking),
-        skus: skus.join(" | "), tags: (order.tags || []).join(", "),
-        latest_event_json: events[0] ? JSON.stringify(events[0]) : null,
-        all_events_json: JSON.stringify(events),
-        days_since_fulfilled: Math.floor(days),
-      });
+  // Walks every page of an order search. No page cap (unlike gqlAll), so a big
+  // window can't silently truncate. With a deadline it stops early and says so.
+  async function pageOrders(search, onPage, { deadline = Infinity } = {}) {
+    let after = null, n = 0;
+    for (;;) {
+      const d = await gqlRetry(STORE_ORDERS_QUERY, { first: PAGE, after, query: search });
+      const conn = d.orders;
+      const nodes = conn.edges.map(e => e.node);
+      if (nodes.length) await onPage(nodes);
+      n += nodes.length;
+      if (!conn.pageInfo.hasNextPage) return { n, complete: true };
+      after = conn.pageInfo.endCursor;
+      if (Date.now() > deadline) return { n, complete: false };
     }
   }
 
-  const BATCH = 50;
-  for (let i = 0; i < rows.length; i += BATCH) {
-    const batch = rows.slice(i, i + BATCH);
-    const values = [], params = [];
-    let pi = 1;
-    for (const r of batch) {
-      values.push(`($${pi},$${pi+1},$${pi+2},$${pi+3},$${pi+4},$${pi+5},$${pi+6},$${pi+7},$${pi+8},$${pi+9},$${pi+10},$${pi+11},$${pi+12},$${pi+13},$${pi+14},$${pi+15},$${pi+16})`);
-      params.push(r.fulfillment_id, r.order_id, r.order_name, r.order_created_at, r.email,
-        r.customer_name, r.shipping_address, r.order_total, r.fulfilled_at, r.display_status,
-        r.has_tracking, r.tracking_json, r.skus, r.tags, r.latest_event_json, r.all_events_json, r.days_since_fulfilled);
-      pi += 17;
+  async function upsertOrders(nodesIn) {
+    const byId = new Map();
+    for (const n of nodesIn) byId.set(gidNum(n.id), n);   // a page can repeat an order; keep the last
+    if (!byId.size) return;
+    const O = { id: [], name: [], cust: [], label: [], created: [], updated: [], cancelled: [], email: [] };
+    const L = { oid: [], lid: [], sku: [], title: [], qty: [], cur: [], unf: [], price: [] };
+    for (const [oid, n] of byId) {
+      O.id.push(oid); O.name.push(n.name || ""); O.cust.push(n.customer?.id ? gidNum(n.customer.id) : null);
+      O.label.push(labelOf(n)); O.created.push(n.createdAt); O.updated.push(n.updatedAt || n.createdAt);
+      O.cancelled.push(!!n.cancelledAt); O.email.push(n.email || null);
+      let edges = n.lineItems?.edges || [], pi = n.lineItems?.pageInfo, guard = 0;
+      while (pi?.hasNextPage && guard++ < 30) {   // orders with more than 100 lines
+        const d = await gqlRetry(MORE_LINES_QUERY, { id: n.id, after: pi.endCursor });
+        const more = d.order?.lineItems;
+        if (!more) break;
+        edges = edges.concat(more.edges); pi = more.pageInfo;
+      }
+      for (const e of edges) {
+        const li = e.node;
+        L.oid.push(oid); L.lid.push(gidNum(li.id)); L.sku.push((li.sku || "").toUpperCase()); L.title.push(li.title || "");
+        L.qty.push(li.quantity || 0); L.cur.push(li.currentQuantity ?? li.quantity ?? 0);
+        L.unf.push(Math.max(0, li.unfulfilledQuantity || 0));
+        L.price.push(parseFloat(li.discountedUnitPriceSet?.shopMoney?.amount) || 0);
+      }
     }
-    await db.query(`
-      INSERT INTO stale_fulfillments (fulfillment_id, order_id, order_name, order_created_at, email,
-        customer_name, shipping_address, order_total, fulfilled_at, display_status,
-        has_tracking, tracking_json, skus, tags, latest_event_json, all_events_json, days_since_fulfilled)
-      VALUES ${values.join(",")}
-      ON CONFLICT (fulfillment_id) DO UPDATE SET
-        display_status = EXCLUDED.display_status, has_tracking = EXCLUDED.has_tracking,
-        tracking_json = EXCLUDED.tracking_json, latest_event_json = EXCLUDED.latest_event_json,
-        all_events_json = EXCLUDED.all_events_json, days_since_fulfilled = EXCLUDED.days_since_fulfilled,
-        tags = EXCLUDED.tags, synced_at = NOW()
-    `, params);
-  }
-
-  console.log(`[sync] DTC stale: ${rows.length} stale fulfillments synced`);
-  return rows.length;
-}
-
-async function runSync(isFullBackfill = false) {
-  if (syncInProgress) { console.log('[sync] Skipping — sync already in progress'); return; }
-  const { dtcStore, dtcToken, b2bStore, b2bToken } = CREDS;
-  if (!dtcStore || !b2bStore) return;
-  syncInProgress = true;
-
-  try {
-    const stateRes = await db.query("SELECT value FROM sync_state WHERE key = 'last_sync'");
-    const lastSync = stateRes.rows[0]?.value || null;
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-    const since = isFullBackfill ? null : (lastSync ? (new Date(lastSync) < new Date(thirtyDaysAgo) ? thirtyDaysAgo : lastSync) : thirtyDaysAgo);
-    const syncStart = new Date().toISOString();
-
-    console.log(`[sync] Starting ${isFullBackfill ? "BACKFILL" : "incremental"} sync`);
-
-    const [dtcDrafts, b2bDrafts] = await Promise.all([
-      buildDraftsMap(dtcStore, dtcToken, since, isFullBackfill ? 600000 : 60000).catch(e => { console.warn("DTC drafts:", e.message); return {}; }),
-      buildDraftsMap(b2bStore, b2bToken, since, isFullBackfill ? 600000 : 60000).catch(e => { console.warn("B2B drafts:", e.message); return {}; }),
-    ]);
-
-    for (const [month, avgHours] of Object.entries(dtcDrafts)) {
-      await db.query(`INSERT INTO sync_state (key, value, updated_at) VALUES ($1, $2, NOW())
-        ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
-        [`processing_dtc_${month}`, String(avgHours)]);
-    }
-    for (const [month, avgHours] of Object.entries(b2bDrafts)) {
-      await db.query(`INSERT INTO sync_state (key, value, updated_at) VALUES ($1, $2, NOW())
-        ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
-        [`processing_b2b_${month}`, String(avgHours)]);
-    }
-
-    const [dtcCount, b2bCount] = await Promise.all([
-      syncStore(dtcStore, dtcToken, "DTC", since),
-      syncStore(b2bStore, b2bToken, "B2B", since),
-    ]);
-
-    await db.query(`
-      INSERT INTO sync_state (key, value, updated_at) VALUES ('last_sync', $1, NOW())
-      ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()
-    `, [syncStart]);
-
-    console.log(`[sync] Done — DTC: ${dtcCount}, B2B: ${b2bCount} orders upserted`);
-
+    const client = await db.connect();
     try {
-      await syncStaleFulfillments(dtcStore, dtcToken);
-    } catch (err) {
-      console.warn("[sync] DTC stale fulfillments error:", err.message);
-    }
-  } catch (err) {
-    console.error("[sync] Error:", err.message);
-  } finally {
-    syncInProgress = false;
-  }
-}
-
-// ── Scorecard endpoint ────────────────────────────────────────────────────────
-app.post("/api/scorecard", async (req, res) => {
-  const { year, month } = req.body;
-  const start = new Date(Date.UTC(year, month - 1, 1));
-  const end   = new Date(Date.UTC(year, month, 1));
-  const monthKey = `${year}-${String(month).padStart(2, '0')}`;
-
-  try {
-    const [statsRes, flaggedRes, syncRes, processingRes] = await Promise.all([
-      db.query(`
-        SELECT store, COUNT(*) AS total_orders, SUM(units) AS total_units,
-          AVG(fulfillment_hours) AS avg_fulfillment, AVG(delivery_hours) AS avg_delivery
-        FROM orders WHERE created_at >= $1 AND created_at < $2 GROUP BY store
-      `, [start, end]),
-      db.query(`
-        SELECT id, store, order_number, customer_name, email, units,
-               created_at, flag_types, fulfillment_hours, delivery_hours,
-               processing_hours, tracking_json
-        FROM orders
-        WHERE created_at >= $1 AND created_at < $2 AND is_flagged = TRUE
-        ORDER BY GREATEST(COALESCE(fulfillment_hours,0), COALESCE(delivery_hours,0)) DESC LIMIT 500
-      `, [start, end]),
-      db.query("SELECT value FROM sync_state WHERE key = 'last_sync'"),
-      db.query("SELECT key, value FROM sync_state WHERE key = ANY($1)",
-        [[`processing_dtc_${monthKey}`, `processing_b2b_${monthKey}`]]),
-    ]);
-
-    const processingMap = {};
-    for (const r of processingRes.rows) {
-      if (r.key.includes('_dtc_')) processingMap['DTC'] = parseFloat(r.value);
-      if (r.key.includes('_b2b_')) processingMap['B2B'] = parseFloat(r.value);
-    }
-
-    const dailyRes = await db.query(`
-      SELECT store, DATE(created_at) AS day, COUNT(*) AS orders, SUM(units) AS units
-      FROM orders WHERE created_at >= $1 AND created_at < $2
-      GROUP BY store, DATE(created_at) ORDER BY day
-    `, [start, end]);
-
-    const fulfillRes = await db.query(`
-      SELECT store, DATE(created_at) AS day, COUNT(*) AS fulfilled
-      FROM orders WHERE created_at >= $1 AND created_at < $2 AND fulfillment_hours IS NOT NULL
-      GROUP BY store, DATE(created_at) ORDER BY day
-    `, [start, end]);
-
-    const daysInMonth = new Date(year, month, 0).getDate();
-    const stores = ["DTC", "B2B"].map(label => {
-      const stats = statsRes.rows.find(r => r.store === label) || {};
-      return {
-        label,
-        totalOrders: parseInt(stats.total_orders || 0),
-        totalUnits: parseInt(stats.total_units || 0),
-        avgProcessingFormatted: formatDuration(processingMap[label] || null),
-        avgFulfillmentFormatted: formatDuration(parseFloat(stats.avg_fulfillment) || null),
-        avgDeliveryFormatted: formatDuration(parseFloat(stats.avg_delivery) || null),
-        avgFulfillmentHours: parseFloat(stats.avg_fulfillment) || null,
-        avgDeliveryHours: parseFloat(stats.avg_delivery) || null,
-        rawProcessingTimes: [], rawFulfillmentTimes: [], flaggedOrders: [],
-        ordersByDay: buildDayArray(daysInMonth, dailyRes.rows.filter(r => r.store === label), "orders", "units"),
-        fulfillmentsByDay: buildDayArray(daysInMonth, fulfillRes.rows.filter(r => r.store === label), "fulfilled"),
-      };
-    });
-
-    const allStats = statsRes.rows;
-    const combined = {
-      totalOrders: allStats.reduce((s, r) => s + parseInt(r.total_orders || 0), 0),
-      totalUnits: allStats.reduce((s, r) => s + parseInt(r.total_units || 0), 0),
-      avgProcessingFormatted: formatDuration(avg(Object.values(processingMap).filter(v => v > 0))),
-      avgFulfillmentFormatted: formatDuration(avg(allStats.map(r => parseFloat(r.avg_fulfillment)).filter(v => v > 0))),
-      avgDeliveryFormatted: formatDuration(avg(allStats.map(r => parseFloat(r.avg_delivery)).filter(v => v > 0))),
-    };
-
-    const flaggedOrders = flaggedRes.rows.map(r => ({
-      store: r.store, orderNumber: r.order_number, customerName: r.customer_name,
-      email: r.email, units: r.units, createdAt: r.created_at,
-      issues: (r.flag_types || "").split(",").filter(Boolean).map(type => ({
-        type,
-        hours: type === "fulfillment" ? r.fulfillment_hours :
-               type === "delivery" ? r.delivery_hours :
-               type === "delivery_stalled" ? (r.delivery_hours || r.fulfillment_hours || 0) : 0,
-      })),
-      processingHours: r.processing_hours, fulfillmentHours: r.fulfillment_hours,
-      deliveryHours: r.delivery_hours,
-      tracking: r.tracking_json ? JSON.parse(r.tracking_json) : null,
-    }));
-
-    res.json({ stores, combined, flaggedOrders, year, month, lastSync: syncRes.rows[0]?.value || null });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-function buildDayArray(daysInMonth, rows, countField, unitsField) {
-  const arr = Array.from({ length: daysInMonth }, (_, i) => ({ day: i + 1, orders: 0, units: 0, fulfilled: 0 }));
-  for (const row of rows) {
-    const d = new Date(row.day).getUTCDate();
-    if (arr[d - 1]) {
-      arr[d - 1][countField] = parseInt(row[countField] || 0);
-      if (unitsField) arr[d - 1][unitsField] = parseInt(row[unitsField] || 0);
-    }
-  }
-  return arr;
-}
-
-// ── Care@ endpoint ────────────────────────────────────────────────────────────
-app.post("/api/care-scorecard", async (req, res) => {
-  const { year, month } = req.body;
-  const start = new Date(Date.UTC(year, month - 1, 1));
-  const end   = new Date(Date.UTC(year, month, 1));
-
-  try {
-    const [statsRes, syncRes] = await Promise.all([
-      db.query(`
-        SELECT COUNT(*) AS total_orders, SUM(units) AS total_units,
-          AVG(fulfillment_hours) AS avg_fulfillment, AVG(delivery_hours) AS avg_delivery
-        FROM orders WHERE created_at >= $1 AND created_at < $2 AND LOWER(email) = 'care@lifelines.com'
-      `, [start, end]),
-      db.query("SELECT value FROM sync_state WHERE key = 'last_sync'"),
-    ]);
-
-    const dailyRes = await db.query(`
-      SELECT DATE(created_at) AS day, COUNT(*) AS orders, SUM(units) AS units
-      FROM orders WHERE created_at >= $1 AND created_at < $2 AND LOWER(email) = 'care@lifelines.com'
-      GROUP BY DATE(created_at) ORDER BY day
-    `, [start, end]);
-
-    const fulfillRes = await db.query(`
-      SELECT DATE(created_at) AS day, COUNT(*) AS fulfilled
-      FROM orders WHERE created_at >= $1 AND created_at < $2
-        AND LOWER(email) = 'care@lifelines.com' AND fulfillment_hours IS NOT NULL
-      GROUP BY DATE(created_at) ORDER BY day
-    `, [start, end]);
-
-    const daysInMonth = new Date(year, month, 0).getDate();
-    const stats = statsRes.rows[0] || {};
-    res.json({
-      totalOrders: parseInt(stats.total_orders || 0),
-      totalUnits: parseInt(stats.total_units || 0),
-      avgFulfillmentFormatted: formatDuration(parseFloat(stats.avg_fulfillment) || null),
-      avgDeliveryFormatted: formatDuration(parseFloat(stats.avg_delivery) || null),
-      ordersByDay: buildDayArray(daysInMonth, dailyRes.rows, "orders", "units"),
-      fulfillmentsByDay: buildDayArray(daysInMonth, fulfillRes.rows, "fulfilled"),
-      year, month, lastSync: syncRes.rows[0]?.value || null,
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── DTC Stale ─────────────────────────────────────────────────────────────────
-app.post("/api/dtc-stale", async (req, res) => {
-  try {
-    const result = await db.query(`SELECT * FROM stale_fulfillments ORDER BY days_since_fulfilled DESC`);
-
-    const allDbRows = result.rows;
-
-    // Split into resolved vs active based on the "resolved" Shopify order tag
-    const activeDbRows = allDbRows.filter(r => {
-      const tags = (r.tags || '').toLowerCase().split(',').map(t => t.trim());
-      return !tags.includes('resolved');
-    });
-    const resolvedCount = allDbRows.length - activeDbRows.length;
-
-    const rows = activeDbRows.map(r => ({
-      orderName: r.order_name, orderId: r.order_id, orderCreatedAt: r.order_created_at,
-      email: r.email, customerName: r.customer_name, shippingAddress: r.shipping_address,
-      orderTotal: r.order_total, fulfillmentId: r.fulfillment_id, fulfilledAt: r.fulfilled_at,
-      daysSinceFulfilled: Math.round(r.days_since_fulfilled), displayStatus: r.display_status,
-      hasTracking: r.has_tracking, tracking: r.tracking_json ? JSON.parse(r.tracking_json) : [],
-      skus: r.skus ? r.skus.split(" | ") : [], tags: r.tags || "",
-      latestEvent: r.latest_event_json ? JSON.parse(r.latest_event_json) : null,
-      allEvents: r.all_events_json ? JSON.parse(r.all_events_json) : [],
-    }));
-
-    res.json({ rows, total: rows.length, resolvedCount, fromDB: true });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── B2B Drafts ────────────────────────────────────────────────────────────────
-app.post("/api/b2b-drafts", async (req, res) => {
-  const { b2bStore, b2bToken } = CREDS;
-  if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
-
-  try {
-    let drafts;
-    const forceRefresh = req.body.refresh === true;
-    if (!forceRefresh && b2bDraftsCache && Date.now() - b2bDraftsCacheTime < B2B_CACHE_TTL) {
-      drafts = b2bDraftsCache;
-    } else {
-      drafts = await gqlAll(b2bStore, b2bToken, DRAFT_ORDERS_QUERY,
-        { first: 250, query: "status:open" },
-        d => d.draftOrders.edges, d => d.draftOrders.pageInfo, 120000);
-      b2bDraftsCache = drafts;
-      b2bDraftsCacheTime = Date.now();
-    }
-
-    const needsReview = drafts.filter(d => (d.tags || []).map(t => t.toLowerCase()).includes("needs-review"));
-
-    const customerMap = {};
-    for (const d of drafts) {
-      const key = d.email || "Unknown";
-      if (!customerMap[key]) customerMap[key] = { customer: key, email: d.email || "—", draftCount: 0, totalValue: 0 };
-      customerMap[key].draftCount++;
-      customerMap[key].totalValue += parseFloat(d.totalPrice || 0);
-    }
-    const byCustomer = Object.values(customerMap).sort((a, b) => b.draftCount - a.draftCount);
-
-    const invItemIds = [...new Set(
-      drafts.flatMap(d => (d.lineItems.edges || []).map(e => e.node.variant?.inventoryItem?.id).filter(Boolean))
-    )];
-    const inventoryMap = {};
-    if (invItemIds.length > 0) {
-      const numericIds = invItemIds.map(id => id.replace("gid://shopify/InventoryItem/", ""));
-      for (let i = 0; i < numericIds.length; i += 50) {
-        const batch = numericIds.slice(i, i + 50).join(",");
-        const levels = await restFetchAll(b2bStore, b2bToken,
-          `/inventory_levels.json?inventory_item_ids=${batch}&limit=250`, "inventory_levels");
-        for (const lvl of levels) {
-          const gid = `gid://shopify/InventoryItem/${lvl.inventory_item_id}`;
-          inventoryMap[gid] = (inventoryMap[gid] || 0) + (lvl.available || 0);
-        }
-      }
-    }
-
-    const oosMap = {};
-    for (const draft of drafts) {
-      for (const edge of draft.lineItems.edges || []) {
-        const li = edge.node;
-        if (!li.variant?.inventoryItem?.id) continue;
-        const available = inventoryMap[li.variant.inventoryItem.id] ?? null;
-        if (available === null || available > 0) continue;
-        const vid = li.variant.id;
-        if (!oosMap[vid]) {
-          oosMap[vid] = { sku: li.sku || "—", productTitle: li.title || "Unknown",
-            variantTitle: li.variantTitle || "", available,
-            draftCount: 0, totalUnitsRequested: 0, affectedDrafts: [] };
-        }
-        oosMap[vid].draftCount++;
-        oosMap[vid].totalUnitsRequested += li.quantity || 0;
-        oosMap[vid].affectedDrafts.push(draft.name);
-      }
-    }
-    const oosItems = Object.values(oosMap).sort((a, b) => b.draftCount - a.draftCount);
-
-    const needsReviewExport = needsReview.map(d => ({
-      name: d.name, createdAt: d.createdAt, tags: (d.tags || []).join(", "),
-      customerName: d.email || "—", email: d.email || "",
-      subtotal: d.subtotalPrice, total: d.totalPrice,
-      lineItems: (d.lineItems.edges || []).map(e => ({
-        title: e.node.title, variantTitle: e.node.variantTitle || "",
-        sku: e.node.sku || "", quantity: e.node.quantity, price: e.node.originalUnitPrice,
-      })),
-    }));
-
-    res.json({ totalDrafts: drafts.length, needsReviewCount: needsReview.length, needsReviewExport, byCustomer, oosItems });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── SKU Holds endpoint ─────────────────────────────────────────────────────────
-app.post("/api/sku-holds", async (req, res) => {
-  const { b2bStore, b2bToken } = CREDS;
-  if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
-
-  try {
-    const forceRefresh = req.body.refresh === true;
-    let orders, debug;
-    if (!forceRefresh && skuHoldsCache && Date.now() - skuHoldsCacheTime < SKU_HOLDS_TTL) {
-      orders = skuHoldsCache.orders;
-      debug = skuHoldsCache.debug;
-    } else {
-      const allMatches = await gqlAll(b2bStore, b2bToken, SKU_HOLDS_QUERY,
-        { first: 250, query: `email:${HOLD_CUSTOMER_EMAIL} fulfillment_status:unfulfilled status:open` },
-        d => d.orders.edges, d => d.orders.pageInfo, 120000);
-      // Defensive double-check: confirm email match and exclude any cancelled
-      // orders that might slip through the status:open filter.
-      orders = allMatches.filter(o => (o.email || "").toLowerCase() === HOLD_CUSTOMER_EMAIL && !o.cancelledAt);
-      debug = { searchMatches: allMatches.length, afterFilters: orders.length };
-      skuHoldsCache = { orders, debug };
-      skuHoldsCacheTime = Date.now();
-    }
-
-    const skuMap = {};
-    for (const order of orders) {
-      for (const edge of order.lineItems?.edges || []) {
-        const li = edge.node;
-        const qty = (li.unfulfilledQuantity ?? li.quantity) || 0;
-        if (qty <= 0) continue;
-        const sku = li.sku || "—";
-        const description = (li.variantTitle && li.variantTitle !== "Default Title")
-          ? `${li.title} - ${li.variantTitle}` : (li.title || "—");
-        if (!skuMap[sku]) skuMap[sku] = { sku, description, quantity: 0, orderCount: 0, orders: [] };
-        skuMap[sku].quantity += qty;
-        skuMap[sku].orderCount++;
-        skuMap[sku].orders.push(order.name);
-      }
-    }
-
-    const holds = Object.values(skuMap).sort((a, b) => b.quantity - a.quantity);
-    const totalUnitsOnHold = holds.reduce((s, h) => s + h.quantity, 0);
-
-    res.json({
-      asOf: new Date().toISOString(),
-      ordersFound: orders.length,
-      totalSkus: holds.length,
-      totalUnitsOnHold,
-      holds,
-      debug,
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Excluded SKUs snapshot ─────────────────────────────────────────────────────
-// Reads the JSON file published by release-instock-orders.py (via its
-// GitHub Actions workflow) so the dashboard can show what's currently on
-// the manual exclusion list, with product titles, without needing Shopify
-// credentials or a database write from the Python side.
-app.get("/api/excluded-skus", async (req, res) => {
-  try {
-    const forceRefresh = req.query.refresh === "true";
-    if (!forceRefresh && excludedSkusCache && Date.now() - excludedSkusCacheTime < EXCLUDED_SKUS_SNAPSHOT_TTL) {
-      return res.json(excludedSkusCache);
-    }
-
-    const ghRes = await fetch(EXCLUDED_SKUS_SNAPSHOT_URL, {
-      headers: { "Cache-Control": "no-cache" },
-    });
-    if (!ghRes.ok) throw new Error(`GitHub fetch HTTP ${ghRes.status}`);
-    const snapshot = await ghRes.json();
-
-    const payload = {
-      generatedAt: snapshot.generated_at || null,
-      count: snapshot.count ?? (snapshot.skus || []).length,
-      skus: (snapshot.skus || []).map(s => ({ sku: s.sku, title: s.title || s.sku })),
-    };
-
-    excludedSkusCache = payload;
-    excludedSkusCacheTime = Date.now();
-    res.json(payload);
-  } catch (err) {
-    console.error(err);
-    // Serve a stale cache rather than a hard error if GitHub is unreachable —
-    // reference data that's a few minutes old is still useful; an error
-    // banner for a transient fetch hiccup is not.
-    if (excludedSkusCache) {
-      return res.json(excludedSkusCache);
-    }
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── NPI endpoint ──────────────────────────────────────────────────────────────
-app.post("/api/npi", async (req, res) => {
-  const { b2bStore, b2bToken } = CREDS;
-  if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
-
-  try {
-    let drafts;
-    if (b2bDraftsCache && Date.now() - b2bDraftsCacheTime < B2B_CACHE_TTL) {
-      drafts = b2bDraftsCache;
-    } else {
-      drafts = await gqlAll(b2bStore, b2bToken, DRAFT_ORDERS_QUERY,
-        { first: 250, query: "status:open" },
-        d => d.draftOrders.edges, d => d.draftOrders.pageInfo, 120000);
-      b2bDraftsCache = drafts;
-      b2bDraftsCacheTime = Date.now();
-    }
-
-    const LAUNCH_RE = /^launch-([a-z]{3})-2026$/i;
-    const launchMap = {};
-
-    for (const d of drafts) {
-      let launchTag = null;
-      for (const edge of d.lineItems?.edges || []) {
-        const productTags = edge.node.variant?.product?.tags || [];
-        launchTag = productTags.find(t => LAUNCH_RE.test(t));
-        if (launchTag) break;
-      }
-      if (!launchTag) continue;
-      const match = launchTag.match(LAUNCH_RE);
-      const monthCode = match[1].toLowerCase();
-      const key = monthCode + "-2026";
-      if (!launchMap[key]) {
-        launchMap[key] = {
-          tag: launchTag, monthCode,
-          label: monthCode.charAt(0).toUpperCase() + monthCode.slice(1) + " 2026",
-          draftCount: 0, totalUnits: 0, totalValue: 0, customers: new Set(), drafts: [],
-        };
-      }
-      const units = (d.lineItems?.edges || []).reduce((s, e) => s + (e.node.quantity || 0), 0);
-      launchMap[key].draftCount++;
-      launchMap[key].totalUnits += units;
-      launchMap[key].totalValue += parseFloat(d.totalPrice || 0);
-      if (d.email) launchMap[key].customers.add(d.email.toLowerCase());
-      launchMap[key].drafts.push({
-        name: d.name, email: d.email || "—", units,
-        value: parseFloat(d.totalPrice || 0), createdAt: d.createdAt, tags: d.tags,
-        lineItems: (d.lineItems?.edges || []).map(e => ({
-          title: e.node.title, sku: e.node.sku || "", quantity: e.node.quantity,
-        })),
-      });
-    }
-
-    const MONTH_ORDER = { jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12 };
-    const launches = Object.values(launchMap)
-      .map(l => Object.assign({}, l, { customerCount: l.customers.size, customers: undefined }))
-      .sort((a, b) => (MONTH_ORDER[a.monthCode] || 99) - (MONTH_ORDER[b.monthCode] || 99));
-
-    res.json({ launches, totalDrafts: launches.reduce((s, l) => s + l.draftCount, 0) });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Draft Health endpoint ─────────────────────────────────────────────────────
-app.post("/api/draft-health", async (req, res) => {
-  const { b2bStore, b2bToken } = CREDS;
-  if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
-
-  const EXCLUDED_CUSTOMERS = [
-    "replacements customer care customer care",
-    "replacements and customer care",
-    "customer samples",
-    "faire",
-    "tjx companies, inc",
-    "norman's hallmark",
-    "trudy's hallmark",
-    "noreen batdorf",
-    "faire marketplace",
-    "tjx canada",
-    "new seasons market",
-  ];
-
-  const EXCLUDED_SKUS = new Set([
-    "LL-16-3162","LL-16-3158","LL-16-3157",
-    "LL-20-3227","LL-20-3228","LL-20-3229","LL-20-3230","LL-20-3231","LL-20-3232",
-    "LL-99-0014","LL-16-3154",
-  ]);
-
-  const LAUNCH_RE = /^launch-[a-z]{3}-2026$/i;
-
-  // ── New split0/split1 pipeline classification ──────────────────────────
-  // Purely tag-driven — mirrors shopify-adjust-orders-2.py / partial-instock-
-  // split-v2.py's tagging contract. Independent of classifyDraft() below
-  // (legacy statuses are evaluated upstream of this pipeline and are
-  // mutually exclusive with it — a draft either gets caught by
-  // excluded-customer/needs-review/npi-item/excluded-sku, or it flows into
-  // split0/split-generation, never both).
-  //
-  // IMPORTANT: partial-instock-split-v2.py applies split-150/split-remainder
-  // to EVERY backorder-descended draft regardless of how many generations
-  // deep it is (split1, split2, split3, ...) — those band tags are the only
-  // reliable, depth-independent signal for "this is a backorder child."
-  // The old check here gated on the literal "split1" tag first, which only
-  // matches first-generation children and silently drops every split2+
-  // draft from the dashboard (they never carry "split1" at all — see
-  // build_next_po_number / generation_tag_for in partial-instock-split-v2.py).
-  // Checking the band tags directly, with no generation-tag gate in front,
-  // fixes that reconciliation gap.
-  function classifySplitStage(tags) {
-    const t = (tags || []).map(x => x.toLowerCase());
-    const has = tag => t.includes(tag);
-
-    if (has("split-remainder") || has("split-150")) {
-      return has("split-remainder") ? "split-remainder" : "split-clear";
-    }
-    if (has("split0")) {
-      if (has("instock-minvalue")) return "held-instock-low";
-      if (has("bo-minvalue")) return "held-bo-low";
-      if (has("order-minvalue")) return "held-both-low";
-      if (has("eval-done")) {
-        return has("instock-ready") ? "ready-release" : "waiting-instock";
-      }
-      return "pending-eval";
-    }
-    return null; // not part of the split pipeline at all
+      await client.query("BEGIN");
+      await client.query("DELETE FROM analytics_lines WHERE order_id = ANY($1::text[])", [O.id]);
+      await client.query(
+        `INSERT INTO analytics_orders (id, name, customer_id, label, created_at, updated_at, cancelled, email)
+         SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::timestamptz[], $7::boolean[], $8::text[])
+         ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, customer_id = EXCLUDED.customer_id, label = EXCLUDED.label,
+           created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at, cancelled = EXCLUDED.cancelled, email = EXCLUDED.email`,
+        [O.id, O.name, O.cust, O.label, O.created, O.updated, O.cancelled, O.email]);
+      if (L.oid.length) await client.query(
+        `INSERT INTO analytics_lines (order_id, line_id, sku, title, quantity, current_quantity, unfulfilled_quantity, unit_price)
+         SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::int[], $6::int[], $7::int[], $8::numeric[])
+         ON CONFLICT (order_id, line_id) DO NOTHING`,
+        [L.oid, L.lid, L.sku, L.title, L.qty, L.cur, L.unf, L.price]);
+      await client.query("COMMIT");
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch (_) {}
+      throw e;
+    } finally { client.release(); }
   }
 
-  function isExcludedCustomer(email, name) {
-    const haystack = ((email || "") + " " + (name || "")).toLowerCase();
-    return EXCLUDED_CUSTOMERS.some(excl => haystack.includes(excl));
-  }
+  const setState = (k, v) => db.query(
+    "INSERT INTO analytics_state (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2", [k, String(v)]);
 
-  function classifyDraft(draft, inventoryMap) {
-    const tags = (draft.tags || []).map(t => t.toLowerCase());
-    const lines = (draft.lineItems?.edges || []).map(e => e.node);
-
-    if (isExcludedCustomer(draft.email, draft.name)) return "excluded-customer";
-    if (tags.includes("needs-review")) return "needs-review";
-
-    const hasNpi = lines.some(li =>
-      (li.variant?.product?.tags || []).some(t => LAUNCH_RE.test(t))
-    );
-    if (hasNpi) return "npi-item";
-
-    // Computed early so the excluded-sku branch below can defer to it.
-    // IMPORTANT: this mirrors release-instock-orders.py's ship_date_allows_release()
-    // exactly — the script releases a draft as long as its ship date is within
-    // 7 days from today (today+1 through today+7 still count as releasable),
-    // not just ship dates that have already arrived. Treating any future date
-    // as "delayed" (as this used to) hid drafts the script was correctly about
-    // to release, undercounting Ready to Release.
-    const shipDateVal = draft.metafield?.value;
-    const shipDate = shipDateVal ? new Date(shipDateVal) : null;
-    const today = new Date();
-    let hasFutureShipDate = false;
-    if (shipDate && !isNaN(shipDate)) {
-      const daysUntil = Math.ceil((shipDate - today) / 86400000);
-      hasFutureShipDate = daysUntil > 7;
-    }
-
-    const hasExcludedSku = lines.some(li => EXCLUDED_SKUS.has(li.sku));
-    if (hasExcludedSku) {
-      // A draft can carry a manually-excluded SKU (launch gate) while ALSO
-      // already being tagged instock-ready by the automation — meaning
-      // inventory has landed and every line, excluded SKU included, is ready
-      // to ship. Without this split, that draft silently disappears into the
-      // generic excluded-sku bucket with no signal that it's actually ready.
-      if (tags.includes("instock-ready")) {
-        if (hasFutureShipDate) return "delayed-ship-date";
-        return "excluded-sku-ready";
-      }
-      return "excluded-sku";
-    }
-
-    const isReady = tags.includes("instock-ready");
-    if (!isReady) {
-      const hasOos = lines.some(li => {
-        const invId = li.variant?.inventoryItem?.id;
-        if (!invId) return false;
-        const avail = inventoryMap[invId];
-        return avail !== undefined && avail < li.quantity;
-      });
-      if (hasOos) return "out-of-stock";
-    }
-
-    if (hasFutureShipDate) return "delayed-ship-date";
-
-    // A draft can be tagged instock-ready by the automation and STILL be blocked
-    // from actually shipping if low-supply or inventory-shortage was also applied
-    // (e.g. partial inventory covers the order but not safely/fully). These must
-    // not count as "truly" ready, or they get double-counted against Low Stock /
-    // Inventory Shortage on the dashboard.
-    const isSupplyBlocked = tags.includes("low-supply") || tags.includes("inventory-shortage");
-    if (isReady && isSupplyBlocked) return "supply-blocked";
-    if (isReady) return "instock-ready";
-    return "out-of-stock";
-  }
-
-  try {
-    let drafts;
-    const forceRefresh = req.body.refresh === true;
-    if (!forceRefresh && b2bDraftsCache && Date.now() - b2bDraftsCacheTime < B2B_CACHE_TTL) {
-      drafts = b2bDraftsCache;
-    } else {
-      drafts = await gqlAll(b2bStore, b2bToken, DRAFT_ORDERS_QUERY,
-        { first: 250, query: "status:open" },
-        d => d.draftOrders.edges, d => d.draftOrders.pageInfo, 120000);
-      b2bDraftsCache = drafts;
-      b2bDraftsCacheTime = Date.now();
-    }
-
-    // Build inventory map (same pattern as b2b-drafts)
-    const invItemIds = [...new Set(
-      drafts.flatMap(d => (d.lineItems.edges || [])
-        .map(e => e.node.variant?.inventoryItem?.id).filter(Boolean))
-    )];
-    const inventoryMap = {};
-    if (invItemIds.length > 0) {
-      const numericIds = invItemIds.map(id => id.replace("gid://shopify/InventoryItem/", ""));
-      for (let i = 0; i < numericIds.length; i += 50) {
-        const batch = numericIds.slice(i, i + 50).join(",");
-        const levels = await restFetchAll(b2bStore, b2bToken,
-          `/inventory_levels.json?inventory_item_ids=${batch}&limit=250`, "inventory_levels");
-        for (const lvl of levels) {
-          const gid = `gid://shopify/InventoryItem/${lvl.inventory_item_id}`;
-          inventoryMap[gid] = (inventoryMap[gid] || 0) + (lvl.available || 0);
-        }
-      }
-    }
-
-    // Trailing-12-month B2B spend per customer, for the under-$75 backorder
-    // segmentation (sales wants to treat low-, mid-, and high-spend customers
-    // differently rather than treating every sub-$75 remainder the same).
-    let customerSpendMap = {};
+  async function initOrderStore() {
+    if (!storeEnabled) { st.phase = "disabled (no database)"; return false; }
     try {
-      customerSpendMap = await getB2BCustomerSpendMap();
-    } catch (err) {
-      console.warn("[draft-health] customer spend lookup failed:", err.message);
-    }
-
-    const STATUS_ORDER = ["needs-review","out-of-stock","npi-item","excluded-sku-ready","excluded-sku","delayed-ship-date","excluded-customer","supply-blocked","instock-ready"];
-
-    const rows = drafts.map(draft => {
-      const lines = (draft.lineItems?.edges || []).map(e => e.node);
-      const status = classifyDraft(draft, inventoryMap);
-
-      // Compute in-stock value: lines where inventory covers the quantity (or untracked)
-      let instockValue = 0;
-      // fullyInStock: EVERY line is covered by inventory (or untracked) — the
-      // same per-line test as instockValue above. Independent of tags/status,
-      // so the dashboard's "Ready to Release Under $75" box can be defined by
-      // actual stock rather than by whichever tag/status the draft carries.
-      let fullyInStock = lines.length > 0;
-      for (const li of lines) {
-        const invId = li.variant?.inventoryItem?.id;
-        const avail = invId ? (inventoryMap[invId] ?? null) : null;
-        const tracked = !!invId;
-        if (!tracked || (avail !== null && avail >= li.quantity)) {
-          instockValue += parseFloat(li.originalUnitPrice || 0) * (li.quantity || 0);
-        } else {
-          fullyInStock = false;
-        }
-      }
-
-      const shipAddr = draft.shippingAddress || {};
-      const billAddr = draft.billingAddress || {};
-      const company = shipAddr.company || billAddr.company || "";
-
-      // Consolidation matching: prefer the shipping address; only fall back
-      // to billing if there's no shipping address at all on the draft.
-      const addrSource = (shipAddr.address1 || shipAddr.city) ? shipAddr : billAddr;
-      const addressSource = (shipAddr.address1 || shipAddr.city) ? "shipping" : (billAddr.address1 || billAddr.city) ? "billing" : null;
-      const addressParts = [addrSource.address1, addrSource.address2, addrSource.city,
-        addrSource.province, addrSource.zip, addrSource.country]
-        .map(v => (v || "").trim())
-        .filter(Boolean);
-      const shipAddressLabel = addressParts.join(", ") || null;
-      // Normalized join key — null (rather than "") for drafts with no usable
-      // address on file, so they're never accidentally grouped with each other.
-      const addressKey = addressParts.length
-        ? addressParts.join("|").toLowerCase().replace(/\s+/g, " ")
-        : null;
-
-      return {
-        id: draft.id,
-        name: draft.name,
-        email: draft.email || "—",
-        company,
-        poNumber: draft.poNumber || "",
-        customerSpend12mo: customerSpendMap[(draft.email || "").toLowerCase()] || 0,
-        shipAddress: shipAddressLabel,
-        addressSource,
-        addressKey,
-        createdAt: draft.createdAt,
-        totalPrice: parseFloat(draft.totalPrice || 0),
-        status,
-        pipelineStage: classifySplitStage(draft.tags || []),
-        shipDate: draft.metafield?.value || null,
-        instockValue: parseFloat(instockValue.toFixed(2)),
-        fullyInStock,
-        tags: draft.tags || [],
-      };
-    }).sort((a, b) => STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status));
-
-    // Status summary counts
-    const statusCounts = {};
-    for (const r of rows) statusCounts[r.status] = (statusCounts[r.status] || 0) + 1;
-
-    // Partial split opportunity: held drafts with some in-stock value
-    const heldRows = rows.filter(r => r.status !== "instock-ready" && r.instockValue > 0);
-    const splitBuckets = [
-      { label: "< $20",    min: 0,   max: 20,       count: 0, totalInstockValue: 0 },
-      { label: "$20–$50",  min: 20,  max: 50,       count: 0, totalInstockValue: 0 },
-      { label: "$50–$100", min: 50,  max: 100,      count: 0, totalInstockValue: 0 },
-      { label: "> $100",   min: 100, max: Infinity, count: 0, totalInstockValue: 0 },
-    ];
-    for (const r of heldRows) {
-      const bucket = splitBuckets.find(b => r.instockValue >= b.min && r.instockValue < b.max);
-      if (bucket) { bucket.count++; bucket.totalInstockValue += r.instockValue; }
-    }
-    for (const b of splitBuckets) b.totalInstockValue = parseFloat(b.totalInstockValue.toFixed(2));
-
-    res.json({ total: rows.length, statusCounts, splitBuckets, rows });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Admin: Remove SKU from all open drafts ─────────────────────────────────────
-// Preview shows exactly what execute would do, computed off a fresh (not
-// cached) fetch so what the reviewer sees matches what actually happens a
-// moment later when they confirm.
-app.post("/api/admin/remove-sku/preview", requireAdmin, async (req, res) => {
-  const { b2bStore, b2bToken } = CREDS;
-  if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
-  const sku = (req.body.sku || "").trim();
-  if (!sku) return res.status(400).json({ error: "SKU required." });
-
-  try {
-    const drafts = await fetchFreshOpenB2BDrafts();
-    const skuLower = sku.toLowerCase();
-    const matches = [];
-    for (const d of drafts) {
-      const lines = (d.lineItems?.edges || []).map(e => e.node);
-      const matchingLines = lines.filter(li => (li.sku || "").trim().toLowerCase() === skuLower);
-      if (!matchingLines.length) continue;
-      const remainingLines = lines.filter(li => (li.sku || "").trim().toLowerCase() !== skuLower);
-      const removedQty = matchingLines.reduce((s, li) => s + (li.quantity || 0), 0);
-      matches.push({
-        id: d.id,
-        name: d.name,
-        email: d.email || "—",
-        totalPrice: parseFloat(d.totalPrice || 0),
-        removedQty,
-        remainingLineCount: remainingLines.length,
-        wouldDelete: remainingLines.length === 0,
-      });
-    }
-    res.json({ sku, matchCount: matches.length, drafts: matches });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post("/api/admin/remove-sku/execute", requireAdmin, async (req, res) => {
-  const { b2bStore, b2bToken } = CREDS;
-  if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
-  const sku = (req.body.sku || "").trim();
-  const draftIds = Array.isArray(req.body.draftIds) ? req.body.draftIds : [];
-  if (!sku || !draftIds.length) return res.status(400).json({ error: "sku and draftIds required." });
-
-  try {
-    // Re-fetch fresh and re-derive the SKU match server-side rather than
-    // trusting the client's draftIds list at face value — the only thing we
-    // trust from the client is *which* of the currently-matching drafts to
-    // include; whether a draft still matches is decided here.
-    const drafts = await fetchFreshOpenB2BDrafts();
-    const skuLower = sku.toLowerCase();
-    const idSet = new Set(draftIds);
-    const targets = drafts.filter(d => idSet.has(d.id) &&
-      (d.lineItems?.edges || []).some(e => (e.node.sku || "").trim().toLowerCase() === skuLower));
-
-    const results = { deleted: [], updated: [], failed: [] };
-
-    for (const d of targets) {
-      const lines = (d.lineItems?.edges || []).map(e => e.node);
-      const remainingLines = lines.filter(li => (li.sku || "").trim().toLowerCase() !== skuLower);
-      try {
-        if (remainingLines.length === 0) {
-          const delRes = await gql(b2bStore, b2bToken, MUTATION_DRAFT_DELETE, { input: { id: d.id } });
-          const errs = delRes.draftOrderDelete.userErrors;
-          if (errs?.length) throw new Error(errs.map(e => e.message).join("; "));
-          results.deleted.push(d.name);
-        } else {
-          const input = { lineItems: remainingLines.map(buildLineItemInput) };
-          const updRes = await gql(b2bStore, b2bToken, MUTATION_DRAFT_UPDATE, { id: d.id, input });
-          const errs = updRes.draftOrderUpdate.userErrors;
-          if (errs?.length) throw new Error(errs.map(e => e.message).join("; "));
-          results.updated.push(d.name);
-        }
-      } catch (err) {
-        results.failed.push({ name: d.name, error: err.message });
-      }
-    }
-
-    b2bDraftsCache = null; // force a fresh fetch on the dashboard's next load
-    res.json(results);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Admin: bulk-cancel small backorder remainders ──────────────────────────────
-// No separate preview endpoint — the dashboard already has the live
-// split-remainder rows loaded client-side with customerSpend12mo attached,
-// so the person previews by adjusting the spend threshold locally. Execute
-// re-fetches fresh and only deletes drafts that still carry the
-// split-remainder tag, so a draft that moved on (cleared, edited by someone
-// else) between page-load and confirm is skipped rather than deleted blind.
-app.post("/api/admin/bulk-cancel/execute", requireAdmin, async (req, res) => {
-  const { b2bStore, b2bToken } = CREDS;
-  if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
-  const draftIds = Array.isArray(req.body.draftIds) ? req.body.draftIds : [];
-  if (!draftIds.length) return res.status(400).json({ error: "draftIds required." });
-
-  try {
-    const drafts = await fetchFreshOpenB2BDrafts();
-    const idSet = new Set(draftIds);
-    const targets = drafts.filter(d => idSet.has(d.id) &&
-      (d.tags || []).map(t => t.toLowerCase()).includes("split-remainder"));
-    const targetIdSet = new Set(targets.map(d => d.id));
-
-    const results = { deleted: [], skipped: [], failed: [] };
-    for (const id of draftIds) {
-      if (!targetIdSet.has(id)) results.skipped.push(id);
-    }
-
-    for (const d of targets) {
-      try {
-        const delRes = await gql(b2bStore, b2bToken, MUTATION_DRAFT_DELETE, { input: { id: d.id } });
-        const errs = delRes.draftOrderDelete.userErrors;
-        if (errs?.length) throw new Error(errs.map(e => e.message).join("; "));
-        results.deleted.push(d.name);
-      } catch (err) {
-        results.failed.push({ name: d.name, error: err.message });
-      }
-    }
-
-    b2bDraftsCache = null;
-    res.json(results);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Delivery trend endpoint ───────────────────────────────────────────────────
-app.post("/api/delivery-trend", async (req, res) => {
-  try {
-    const result = await db.query(`
-      SELECT store, TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') AS month,
-        AVG(fulfillment_hours) AS avg_fulfillment, AVG(delivery_hours) AS avg_delivery,
-        COUNT(*) AS orders, SUM(units) AS units
-      FROM orders
-      WHERE created_at >= NOW() - INTERVAL '9 months'
-      GROUP BY store, DATE_TRUNC('month', created_at)
-      ORDER BY DATE_TRUNC('month', created_at)
-    `);
-    const byStore = {};
-    for (const row of result.rows) {
-      if (!byStore[row.store]) byStore[row.store] = [];
-      byStore[row.store].push({
-        month: row.month,
-        avgFulfillmentHours: parseFloat(row.avg_fulfillment) || null,
-        avgDeliveryHours: parseFloat(row.avg_delivery) || null,
-        orders: parseInt(row.orders),
-        units: parseInt(row.units) || 0,
-      });
-    }
-    res.json({ byStore });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Care@ SKU breakdown ───────────────────────────────────────────────────────
-app.post("/api/care-skus", async (req, res) => {
-  const { year, month } = req.body;
-  const { b2bStore, b2bToken } = CREDS;
-  if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
-
-  const CARE_SKU_QUERY = `
-query CareOrders($first: Int!, $after: String, $query: String!) {
-  orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT) {
-    pageInfo { hasNextPage endCursor }
-    edges {
-      node {
-        id name createdAt
-        lineItems(first: 50) { edges { node { sku title quantity } } }
-      }
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS analytics_orders (
+          id TEXT PRIMARY KEY, name TEXT, customer_id TEXT, label TEXT,
+          created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ, cancelled BOOLEAN DEFAULT FALSE, email TEXT);
+        CREATE TABLE IF NOT EXISTS analytics_lines (
+          order_id TEXT NOT NULL, line_id TEXT NOT NULL, sku TEXT, title TEXT,
+          quantity INTEGER, current_quantity INTEGER, unfulfilled_quantity INTEGER, unit_price NUMERIC(14,4),
+          PRIMARY KEY (order_id, line_id));
+        CREATE TABLE IF NOT EXISTS analytics_state (key TEXT PRIMARY KEY, value TEXT);
+        CREATE TABLE IF NOT EXISTS analytics_drafts (
+          id TEXT PRIMARY KEY, name TEXT, customer_id TEXT, label TEXT, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ, email TEXT);
+        CREATE TABLE IF NOT EXISTS analytics_draft_lines (
+          draft_id TEXT NOT NULL, line_id TEXT NOT NULL, sku TEXT, title TEXT, quantity INTEGER, total NUMERIC(14,4),
+          PRIMARY KEY (draft_id, line_id));
+        CREATE INDEX IF NOT EXISTS idx_an_drafts_cust ON analytics_drafts (customer_id);
+        CREATE INDEX IF NOT EXISTS idx_an_dlines_sku ON analytics_draft_lines (sku);
+        CREATE INDEX IF NOT EXISTS idx_an_orders_cust ON analytics_orders (customer_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_an_lines_sku ON analytics_lines (sku);
+        CREATE INDEX IF NOT EXISTS idx_an_lines_open ON analytics_lines (order_id) WHERE unfulfilled_quantity > 0;`);
+      const r = await db.query("SELECT key, value FROM analytics_state");
+      const m = {}; r.rows.forEach(x => { m[x.key] = x.value; });
+      st.openLoaded = m.open_loaded === "1";
+      st.coveredFrom = m.covered_from || null;
+      st.watermark = m.sync_watermark || null;
+      st.draftsLoaded = m.drafts_loaded === "1";
+      st.draftsWatermark = m.drafts_watermark || null;
+      st.lastSyncAt = m.last_sync_at ? Date.parse(m.last_sync_at) : 0;
+      st.ready = true; st.phase = "idle";
+      return true;
+    } catch (e) {
+      console.warn("[analytics] order store unavailable, using live Shopify lookups:", e.message);
+      st.phase = "unavailable"; st.error = e.message;
+      return false;
     }
   }
-}`;
+  const orderStoreReady = initOrderStore();
 
-  const start = `${year}-${String(month).padStart(2, "0")}-01`;
-  const endDate = new Date(Date.UTC(year, month, 1));
-  const end = `${endDate.getFullYear()}-${String(endDate.getMonth() + 1).padStart(2, "0")}-01`;
-
-  try {
-    const orders = await gqlAll(b2bStore, b2bToken, CARE_SKU_QUERY,
-      { first: 250, query: `email:care@lifelines.com created_at:>=${start} created_at:<${end}` },
-      d => d.orders.edges, d => d.orders.pageInfo, 30000);
-
-    const skuMap = {};
-    for (const order of orders) {
-      for (const edge of order.lineItems.edges || []) {
-        const li = edge.node;
-        const key = li.sku || li.title;
-        if (!skuMap[key]) skuMap[key] = { sku: li.sku || "", title: li.title, qty: 0, orderCount: 0 };
-        skuMap[key].qty += li.quantity || 0;
-        skuMap[key].orderCount++;
-      }
-    }
-
-    const topSkus = Object.values(skuMap).sort((a, b) => b.qty - a.qty).slice(0, 20);
-    res.json({ topSkus, totalOrders: orders.length });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Quality SKU endpoint ──────────────────────────────────────────────────────
-app.post("/api/quality-skus", async (req, res) => {
-  try {
-    const result = await db.query(`
-      SELECT tracking_json, order_number, store, created_at, flag_types,
-             fulfillment_hours, delivery_hours
-      FROM orders
-      WHERE is_flagged = TRUE AND created_at >= DATE_TRUNC('year', NOW())
-        AND tracking_json IS NOT NULL
-      ORDER BY created_at DESC LIMIT 2000
-    `);
-
-    const carrierMap = {};
-    for (const row of result.rows) {
-      let tracking = null;
-      try { tracking = JSON.parse(row.tracking_json); } catch(e) { continue; }
-      if (!tracking || !tracking.company) continue;
-      const carrier = tracking.company;
-      if (!carrierMap[carrier]) carrierMap[carrier] = { carrier, count: 0, orders: [] };
-      carrierMap[carrier].count++;
-      carrierMap[carrier].orders.push(row.order_number);
-    }
-
-    const ytdRes = await db.query(`
-      SELECT store, TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') AS month,
-        COUNT(*) AS flagged_count,
-        SUM(CASE WHEN flag_types LIKE '%fulfillment%' THEN 1 ELSE 0 END) AS fulfillment_flags,
-        SUM(CASE WHEN flag_types LIKE '%delivery%' THEN 1 ELSE 0 END) AS delivery_flags
-      FROM orders
-      WHERE is_flagged = TRUE AND created_at >= DATE_TRUNC('year', NOW())
-      GROUP BY store, DATE_TRUNC('month', created_at)
-      ORDER BY DATE_TRUNC('month', created_at)
-    `);
-
-    res.json({
-      topCarriers: Object.values(carrierMap).sort((a,b) => b.count - a.count).slice(0,10),
-      byMonth: ytdRes.rows,
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Debug: inspect draft tags ─────────────────────────────────────────────────
-app.get("/api/debug-tags", async (req, res) => {
-  const { b2bStore, b2bToken } = CREDS;
-  try {
-    let drafts;
-    if (b2bDraftsCache && Date.now() - b2bDraftsCacheTime < B2B_CACHE_TTL) {
-      drafts = b2bDraftsCache;
-    } else {
-      drafts = await gqlAll(b2bStore, b2bToken, DRAFT_ORDERS_QUERY,
-        { first: 250, query: "status:open" },
-        d => d.draftOrders.edges, d => d.draftOrders.pageInfo, 120000);
-      b2bDraftsCache = drafts;
-      b2bDraftsCacheTime = Date.now();
-    }
-    const launchTags = new Set();
-    const sampleProductTags = [];
-    for (const d of drafts) {
-      for (const edge of (d.lineItems?.edges || [])) {
-        const productTags = edge.node.variant?.product?.tags || [];
-        for (const t of productTags) { if (/launch/i.test(t)) launchTags.add(t); }
-        if (sampleProductTags.length < 10) sampleProductTags.push(...productTags.slice(0,3));
-      }
-    }
-    res.json({
-      totalDrafts: drafts.length,
-      launchTags: [...launchTags].sort(),
-      sampleProductTags: [...new Set(sampleProductTags)].slice(0, 20),
-      sampleDraftOrderTags: drafts.slice(0, 3).map(d => ({ name: d.name, orderTags: d.tags })),
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Manual backfill trigger ───────────────────────────────────────────────────
-app.post("/api/trigger-backfill", async (req, res) => {
-  await db.query("DELETE FROM sync_state WHERE key = 'last_sync'");
-  res.json({ ok: true, message: "Backfill will start within 5 seconds" });
-  setTimeout(() => runSync(true), 2000);
-});
-
-// ── Sync status endpoint ──────────────────────────────────────────────────────
-app.get("/api/sync-status", async (req, res) => {
-  try {
-    const [syncRes, countRes] = await Promise.all([
-      db.query("SELECT * FROM sync_state"),
-      db.query("SELECT store, COUNT(*) as count FROM orders GROUP BY store"),
-    ]);
-    res.json({
-      state: Object.fromEntries(syncRes.rows.map(r => [r.key, r.value])),
-      counts: Object.fromEntries(countRes.rows.map(r => [r.store, parseInt(r.count)])),
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Analytics (read-only B2B customer/SKU summary) ────────────────────────────
-require("./analytics")(app, { gql, gqlAll, CREDS, db });
-
-// ── Boot ──────────────────────────────────────────────────────────────────────
-const PORT = process.env.PORT || 3000;
-
-async function boot() {
-  await initDB();
-
-  const stateRes = await db.query("SELECT value FROM sync_state WHERE key = 'last_sync'");
-  const needsBackfill = !stateRes.rows[0];
-
-  app.listen(PORT, () => console.log(`Ops Scorecard running on :${PORT}`));
-
-  if (needsBackfill) {
-    console.log("[sync] No previous sync found — running 12-month backfill in background");
-    setTimeout(() => runSync(true), 2000);
-  } else {
-    console.log("[sync] Running incremental sync on startup");
-    setTimeout(() => runSync(false), 2000);
+  async function loadOpenOrders() {
+    st.phase = "loading open orders";
+    let total = 0;
+    await pageOrders("-status:cancelled (fulfillment_status:unfulfilled OR fulfillment_status:partial)",
+      async nodes => { await upsertOrders(nodes); total += nodes.length; });
+    await setState("open_loaded", "1");
+    st.openLoaded = true;
+    console.log(`[analytics] store: loaded ${total} open orders`);
   }
 
-  setInterval(() => {
+  // One month at a time, newest first, so recent periods become usable first
+  // and a restart resumes where it left off.
+  async function backfillNextMonth() {
     const now = new Date();
-    const utcHour = now.getUTCHours();
-    const month = now.getUTCMonth();
-    const isDST = month >= 2 && month <= 10;
-    const mtHour = (utcHour - (isDST ? 6 : 7) + 24) % 24;
-    if (mtHour >= 7 && mtHour < 20) {
-      runSync(false);
-    } else {
-      console.log(`[sync] Outside business hours (${mtHour}:00 MT) — skipping`);
-    }
-  }, 5 * 60 * 1000);
-}
+    const upper = st.coveredFrom ? new Date(st.coveredFrom + "T00:00:00Z")
+      : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+    const lower = new Date(Date.UTC(upper.getUTCFullYear(), upper.getUTCMonth() - 1, 1));
+    st.phase = `backfilling ${lower.toISOString().slice(0, 7)}`;
+    let total = 0;
+    await pageOrders(`-status:cancelled created_at:>=${iso(lower)} created_at:<${iso(upper)}`,
+      async nodes => { await upsertOrders(nodes); total += nodes.length; });
+    st.coveredFrom = lower.toISOString().slice(0, 10);
+    await setState("covered_from", st.coveredFrom);
+    console.log(`[analytics] store: loaded ${total} orders for ${st.coveredFrom.slice(0, 7)}`);
+  }
 
-boot().catch(err => {
-  console.error("Boot failed:", err);
-  process.exit(1);
-});
+  let incPromise = null;
+  function incrementalSync(budgetMs) {
+    if (incPromise) return incPromise;
+    incPromise = (async () => {
+      const started = Date.now();
+      const deadline = budgetMs ? started + budgetMs : Infinity;
+      try {
+        const since = new Date(Date.parse(st.watermark) - 2 * 60 * 1000);   // 2 min overlap
+        let count = 0;
+        const r = await pageOrders(`updated_at:>=${iso(since)}`,
+          async nodes => { await upsertOrders(nodes); count += nodes.length; }, { deadline });
+        if (r.complete) {
+          st.watermark = new Date(started - 2 * 60 * 1000).toISOString();
+          st.lastSyncAt = Date.now();
+          await setState("sync_watermark", st.watermark);
+          await setState("last_sync_at", new Date(st.lastSyncAt).toISOString());
+          if (count > 200) console.log(`[analytics] store: synced ${count} changed orders`);
+        }
+        return r.complete;
+      } finally { incPromise = null; }
+    })();
+    return incPromise;
+  }
+
+  async function pageDrafts(search, onPage, { deadline = Infinity } = {}) {
+    let after = null, n = 0;
+    for (;;) {
+      const d = await gqlRetry(STORE_DRAFTS_QUERY, { first: PAGE, after, query: search });
+      const conn = d.draftOrders;
+      const nodes = conn.edges.map(e => e.node);
+      if (nodes.length) await onPage(nodes);
+      n += nodes.length;
+      if (!conn.pageInfo.hasNextPage) return { n, complete: true };
+      after = conn.pageInfo.endCursor;
+      if (Date.now() > deadline) return { n, complete: false };
+    }
+  }
+
+  async function upsertDrafts(nodesIn) {
+    const byId = new Map();
+    for (const n of nodesIn) byId.set(gidNum(n.id), n);
+    if (!byId.size) return;
+    await completeLines([...byId.values()], DRAFT_MORE_LINES_QUERY, "draftOrder");
+    const D = { id: [], name: [], cust: [], label: [], created: [], updated: [], email: [] };
+    const L = { did: [], lid: [], sku: [], title: [], qty: [], total: [] };
+    for (const [did, n] of byId) {
+      D.id.push(did); D.name.push(n.name || ""); D.cust.push(n.customer?.id ? gidNum(n.customer.id) : null);
+      D.label.push(labelOf(n)); D.created.push(n.createdAt); D.updated.push(n.updatedAt || n.createdAt); D.email.push(n.email || null);
+      for (const e of n.lineItems?.edges || []) {
+        const li = e.node;
+        L.did.push(did); L.lid.push(gidNum(li.id)); L.sku.push((li.sku || "").toUpperCase()); L.title.push(li.title || "");
+        L.qty.push(li.quantity || 0); L.total.push(parseFloat(li.discountedTotalSet?.shopMoney?.amount) || 0);
+      }
+    }
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("DELETE FROM analytics_draft_lines WHERE draft_id = ANY($1::text[])", [D.id]);
+      await client.query(
+        `INSERT INTO analytics_drafts (id, name, customer_id, label, created_at, updated_at, email)
+         SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::timestamptz[], $7::text[])
+         ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, customer_id = EXCLUDED.customer_id, label = EXCLUDED.label,
+           created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at, email = EXCLUDED.email`,
+        [D.id, D.name, D.cust, D.label, D.created, D.updated, D.email]);
+      if (L.did.length) await client.query(
+        `INSERT INTO analytics_draft_lines (draft_id, line_id, sku, title, quantity, total)
+         SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::int[], $6::numeric[])
+         ON CONFLICT (draft_id, line_id) DO NOTHING`,
+        [L.did, L.lid, L.sku, L.title, L.qty, L.total]);
+      await client.query("COMMIT");
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch (_) {}
+      throw e;
+    } finally { client.release(); }
+  }
+
+  // Deleted and completed drafts never show up in an "updated since" search, so
+  // every so often list the ids of everything still open (cheap: ids only, no
+  // lines) and drop whatever is no longer in that list.
+  async function reconcileDrafts() {
+    const ids = [];
+    let after = null;
+    for (;;) {
+      const d = await gqlRetry(DRAFT_IDS_QUERY, { first: 250, after, query: "status:open" });
+      d.draftOrders.edges.forEach(e => ids.push(gidNum(e.node.id)));
+      if (!d.draftOrders.pageInfo.hasNextPage) break;
+      after = d.draftOrders.pageInfo.endCursor;
+    }
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("DELETE FROM analytics_draft_lines WHERE draft_id <> ALL($1::text[])", [ids]);
+      const r = await client.query("DELETE FROM analytics_drafts WHERE id <> ALL($1::text[])", [ids]);
+      await client.query("COMMIT");
+      return r.rowCount;
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch (_) {}
+      throw e;
+    } finally { client.release(); }
+  }
+
+  let draftPromise = null;
+  // full load the first time, then "updated since" (+ optional reconcile)
+  function syncDrafts({ budgetMs, reconcile } = {}) {
+    if (draftPromise) return draftPromise;
+    draftPromise = (async () => {
+      const started = Date.now();
+      const deadline = budgetMs ? started + budgetMs : Infinity;
+      try {
+        if (!st.draftsLoaded) {
+          st.phase = "loading open drafts";
+          const n = await pageDrafts("status:open", upsertDrafts);
+          st.draftsWatermark = new Date(started - 2 * 60 * 1000).toISOString();
+          st.draftsLoaded = true;
+          await setState("drafts_watermark", st.draftsWatermark);
+          await setState("drafts_loaded", "1");
+          console.log(`[analytics] store: loaded ${n.n} open drafts`);
+          return true;
+        }
+        const since = new Date(Date.parse(st.draftsWatermark) - 2 * 60 * 1000);
+        const r = await pageDrafts(`status:open updated_at:>=${iso(since)}`, upsertDrafts, { deadline });
+        if (r.complete) {
+          st.draftsWatermark = new Date(started - 2 * 60 * 1000).toISOString();
+          await setState("drafts_watermark", st.draftsWatermark);
+          if (reconcile) {
+            const gone = await reconcileDrafts();
+            if (gone) console.log(`[analytics] store: dropped ${gone} drafts that are no longer open`);
+          }
+        }
+        return r.complete;
+      } finally { draftPromise = null; }
+    })();
+    return draftPromise;
+  }
+
+  let storeBusy = null;
+  function storeCycle() {
+    if (storeBusy) return storeBusy;
+    storeBusy = (async () => {
+      let nextMs = SYNC_INTERVAL;
+      try {
+        if (!(await orderStoreReady)) return;
+        if (!st.watermark) {   // first ever run: everything changing from now on is caught by the incremental sync
+          st.watermark = new Date().toISOString();
+          await setState("sync_watermark", st.watermark);
+        }
+        const target = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() - STORE_MONTHS, 1)).toISOString().slice(0, 10);
+        let more = false;
+        if (!st.openLoaded) { await loadOpenOrders(); more = true; }
+        else if (!st.draftsLoaded) { await syncDrafts(); more = true; }
+        else if (!st.coveredFrom || st.coveredFrom > target) { await backfillNextMonth(); more = st.coveredFrom > target; }
+        if (!more || Date.now() - st.lastSyncAt > SYNC_INTERVAL) {
+          st.phase = "syncing";
+          await incrementalSync();
+          if (st.draftsLoaded) await syncDrafts({ reconcile: true });
+        }
+        st.phase = "idle"; st.error = null;
+        if (more) nextMs = 1000;
+      } catch (e) {
+        st.error = e.message; st.phase = "retrying";
+        console.warn("[analytics] store sync error:", e.message);
+        nextMs = 30000;
+      } finally {
+        storeBusy = null;
+        setTimeout(storeCycle, nextMs).unref?.();
+      }
+    })();
+    return storeBusy;
+  }
+  if (storeEnabled) setTimeout(storeCycle, Number(process.env.ANALYTICS_STORE_START_MS) || 15000).unref?.();   // after startup, once the directory has had its head start
+
+  // Can this request be answered from the store?
+  function storeUsable(fromStr, phase) {
+    if (!storeEnabled || !st.ready || !st.openLoaded || !st.watermark) return false;
+    if (phase === "open") return true;               // open orders are loaded for all ages
+    return !!st.coveredFrom && fromStr >= st.coveredFrom;
+  }
+
+  // Top the store up with whatever changed in the last few minutes so a lookup
+  // right after an order is placed still sees it. Bounded: never blocks long.
+  async function freshen() {
+    if (Date.now() - st.lastSyncAt < READ_SYNC_DEBOUNCE) return;
+    try {
+      await Promise.race([
+        Promise.all([incrementalSync(READ_SYNC_BUDGET), st.draftsLoaded ? syncDrafts({ budgetMs: READ_SYNC_BUDGET }) : null]),
+        sleep(READ_SYNC_BUDGET + 500),
+      ]);
+    }
+    catch (e) { console.warn("[analytics] freshen failed, serving store as-is:", e.message); }
+  }
+
+  async function queryStore({ customerIds, skus, fromStr, toExclusiveStr }) {
+    const params = [], where = ["NOT o.cancelled"];
+    if (customerIds.length) { params.push(customerIds); where.push(`o.customer_id = ANY($${params.length}::text[])`); }
+    if (skus.length) { params.push(skus); where.push(`l.sku = ANY($${params.length}::text[])`); }
+    params.push(fromStr + "T00:00:00Z", toExclusiveStr + "T00:00:00Z");
+    const a = params.length - 1, b = params.length;
+    const inRange = `(o.created_at >= $${a}::timestamptz AND o.created_at < $${b}::timestamptz)`;
+    const r = await db.query(
+      `SELECT o.name, o.created_at, o.customer_id, o.label, l.sku, l.title,
+              l.current_quantity, l.unfulfilled_quantity, l.unit_price, ${inRange} AS in_range
+         FROM analytics_orders o JOIN analytics_lines l ON l.order_id = o.id
+        WHERE ${where.join(" AND ")}
+          AND (l.unfulfilled_quantity > 0 OR (${inRange} AND l.current_quantity - l.unfulfilled_quantity > 0))`, params);
+    return r.rows;
+  }
+
+  async function queryStoreDrafts({ customerIds, skus }) {
+    const params = [], where = ["l.quantity > 0"];
+    if (customerIds.length) { params.push(customerIds); where.push(`d.customer_id = ANY($${params.length}::text[])`); }
+    if (skus.length) { params.push(skus); where.push(`l.sku = ANY($${params.length}::text[])`); }
+    const r = await db.query(
+      `SELECT d.name, d.created_at, d.customer_id, d.label, l.sku, l.title, l.quantity, l.total
+         FROM analytics_drafts d JOIN analytics_draft_lines l ON l.draft_id = d.id
+        WHERE ${where.join(" AND ")}`, params);
+    return r.rows;
+  }
+
+  app.get("/api/analytics/sync-status", async (req, res) => {
+    const out = {
+      enabled: storeEnabled, ready: st.ready, phase: st.phase, error: st.error,
+      openOrdersLoaded: st.openLoaded, openDraftsLoaded: st.draftsLoaded, coveredFrom: st.coveredFrom, targetMonths: STORE_MONTHS,
+      lastSync: st.lastSyncAt ? new Date(st.lastSyncAt).toISOString() : null,
+    };
+    try {
+      if (st.ready) {
+        const r = await db.query("SELECT (SELECT COUNT(*) FROM analytics_orders) AS orders, (SELECT COUNT(*) FROM analytics_lines) AS lines");
+        out.orders = Number(r.rows[0].orders); out.lines = Number(r.rows[0].lines);
+      }
+    } catch (_) {}
+    res.json(out);
+  });
+
+  // ── Overview aggregates (landing tables) ───────────────────────────────────
+  // One SQL pass over the store gives every customer (or SKU) at once. Needs the
+  // store to cover the whole year plus all open orders and drafts; otherwise the
+  // endpoint says "not ready yet" with progress and the page keeps retrying.
+  const yearStartStr = () => `${new Date().getUTCFullYear()}-01-01`;
+  function overviewReady() {
+    return storeEnabled && st.ready && st.openLoaded && st.draftsLoaded && !!st.coveredFrom && st.coveredFrom <= yearStartStr();
+  }
+  const r2 = v => Math.round((Number(v) || 0) * 100) / 100;
+
+  // Filters shared by the order and draft halves: SKU list and customer-id list.
+  function ovFilters(alias, lineAlias, skus, cids, startIdx) {
+    const params = [], where = [];
+    if (skus.length) { params.push(skus); where.push(`${lineAlias}.sku = ANY($${startIdx + params.length - 1}::text[])`); }
+    if (cids.length) { params.push(cids); where.push(`${alias}.customer_id = ANY($${startIdx + params.length - 1}::text[])`); }
+    return { params, sql: where.length ? " AND " + where.join(" AND ") : "" };
+  }
+
+  async function overviewByCustomer(yearStart, skus = [], cids = []) {
+    const yS = yearStart + "T00:00:00Z";
+    const fo = ovFilters("o", "l", skus, cids, 2);
+    const orders = await db.query(
+      `SELECT o.customer_id AS cid, MAX(o.label) AS label,
+              COALESCE(SUM(CASE WHEN o.created_at >= $1::timestamptz THEN l.current_quantity * l.unit_price END), 0) AS ytd_value,
+              COALESCE(SUM(CASE WHEN o.created_at >= $1::timestamptz THEN l.current_quantity END), 0) AS ytd_units,
+              COUNT(DISTINCT CASE WHEN o.created_at >= $1::timestamptz AND l.current_quantity > 0 THEN o.id END) AS ytd_orders,
+              COALESCE(SUM(l.unfulfilled_quantity), 0) AS unf_units,
+              COALESCE(SUM(l.unfulfilled_quantity * l.unit_price), 0) AS unf_value,
+              COUNT(DISTINCT CASE WHEN l.unfulfilled_quantity > 0 THEN o.id END) AS unf_orders
+         FROM analytics_orders o JOIN analytics_lines l ON l.order_id = o.id
+        WHERE NOT o.cancelled AND o.customer_id IS NOT NULL
+          AND (o.created_at >= $1::timestamptz OR l.unfulfilled_quantity > 0)${fo.sql}
+        GROUP BY o.customer_id`, [yS, ...fo.params]);
+    const fd = ovFilters("d", "l", skus, cids, 1);
+    const drafts = await db.query(
+      `SELECT d.customer_id AS cid, MAX(d.label) AS label,
+              COALESCE(SUM(l.quantity), 0) AS draft_units, COALESCE(SUM(l.total), 0) AS draft_value,
+              COUNT(DISTINCT d.id) AS draft_count
+         FROM analytics_drafts d JOIN analytics_draft_lines l ON l.draft_id = d.id
+        WHERE d.customer_id IS NOT NULL AND l.quantity > 0${fd.sql}
+        GROUP BY d.customer_id`, fd.params);
+    const map = new Map();
+    const row = (cid, label) => {
+      if (!map.has(cid)) map.set(cid, { cid, label: label || "", ytdValue: 0, ytdUnits: 0, ytdOrders: 0, unfUnits: 0, unfValue: 0, unfOrders: 0, draftUnits: 0, draftValue: 0, draftCount: 0 });
+      return map.get(cid);
+    };
+    for (const x of orders.rows) {
+      const o = row(x.cid, x.label);
+      o.ytdValue = r2(x.ytd_value); o.ytdUnits = Number(x.ytd_units); o.ytdOrders = Number(x.ytd_orders);
+      o.unfUnits = Number(x.unf_units); o.unfValue = r2(x.unf_value); o.unfOrders = Number(x.unf_orders);
+    }
+    for (const x of drafts.rows) {
+      const o = row(x.cid, x.label);
+      o.draftUnits = Number(x.draft_units); o.draftValue = r2(x.draft_value); o.draftCount = Number(x.draft_count);
+    }
+    return [...map.values()];
+  }
+
+  async function overviewBySku(yearStart, cids = []) {
+    const yS = yearStart + "T00:00:00Z";
+    const fo = ovFilters("o", "l", [], cids, 2);
+    const orders = await db.query(
+      `SELECT l.sku, MAX(l.title) AS title,
+              COALESCE(SUM(CASE WHEN o.created_at >= $1::timestamptz THEN l.current_quantity * l.unit_price END), 0) AS ytd_value,
+              COALESCE(SUM(CASE WHEN o.created_at >= $1::timestamptz THEN l.current_quantity END), 0) AS ytd_units,
+              COALESCE(SUM(l.unfulfilled_quantity), 0) AS unf_units,
+              COALESCE(SUM(l.unfulfilled_quantity * l.unit_price), 0) AS unf_value
+         FROM analytics_orders o JOIN analytics_lines l ON l.order_id = o.id
+        WHERE NOT o.cancelled AND (o.created_at >= $1::timestamptz OR l.unfulfilled_quantity > 0)${fo.sql}
+        GROUP BY l.sku`, [yS, ...fo.params]);
+    const fd = ovFilters("d", "l", [], cids, 1);
+    const drafts = await db.query(
+      `SELECT l.sku, MAX(l.title) AS title, COALESCE(SUM(l.quantity), 0) AS draft_units, COALESCE(SUM(l.total), 0) AS draft_value
+         FROM analytics_drafts d JOIN analytics_draft_lines l ON l.draft_id = d.id
+        WHERE l.quantity > 0${fd.sql} GROUP BY l.sku`, fd.params);
+    // distinct customers with this SKU open, drafts and orders combined
+    const oc = ovFilters("o", "l", [], cids, 1), dc = ovFilters("d", "l", [], cids, 1 + oc.params.length);
+    const custs = await db.query(
+      `SELECT sku, COUNT(DISTINCT cid) AS n FROM (
+         SELECT l.sku, o.customer_id AS cid FROM analytics_orders o JOIN analytics_lines l ON l.order_id = o.id
+          WHERE NOT o.cancelled AND l.unfulfilled_quantity > 0${oc.sql}
+         UNION ALL
+         SELECT l.sku, d.customer_id FROM analytics_drafts d JOIN analytics_draft_lines l ON l.draft_id = d.id
+          WHERE l.quantity > 0${dc.sql}
+       ) x GROUP BY sku`, [...oc.params, ...dc.params]);
+    const map = new Map();
+    const row = (sku, title) => {
+      if (!map.has(sku)) map.set(sku, { sku, title: title || "", ytdValue: 0, ytdUnits: 0, unfUnits: 0, unfValue: 0, draftUnits: 0, draftValue: 0, openCustomers: 0 });
+      const o = map.get(sku); if (!o.title && title) o.title = title; return o;
+    };
+    for (const x of orders.rows) { const o = row(x.sku, x.title); o.ytdValue = r2(x.ytd_value); o.ytdUnits = Number(x.ytd_units); o.unfUnits = Number(x.unf_units); o.unfValue = r2(x.unf_value); }
+    for (const x of drafts.rows) { const o = row(x.sku, x.title); o.draftUnits = Number(x.draft_units); o.draftValue = r2(x.draft_value); }
+    for (const x of custs.rows) row(x.sku).openCustomers = Number(x.n);
+    return [...map.values()];
+  }
+
+  app.get("/api/analytics/overview", async (req, res) => {
+    try {
+      const yearStart = yearStartStr();
+      if (!overviewReady()) {
+        return res.json({ ready: false, status: {
+          enabled: storeEnabled, phase: st.phase, error: st.error, openOrdersLoaded: st.openLoaded, openDraftsLoaded: st.draftsLoaded,
+          coveredFrom: st.coveredFrom, needFrom: yearStart } });
+      }
+      const view = req.query.view === "sku" ? "sku" : "customer";
+      const skus = [...new Set(String(req.query.skus || "").split(",").map(x => x.trim().toUpperCase()).filter(x => x && SKU_RE.test(x)))];
+      const cids = [...new Set(String(req.query.cids || "").split(",").map(x => x.trim()).filter(x => /^\d+$/.test(x)))];
+      await freshen();
+      const t = Date.now();
+      const rows = view === "sku" ? await overviewBySku(yearStart, cids) : await overviewByCustomer(yearStart, skus, cids);
+      res.json({ ready: true, view, yearStart, asOf: st.lastSyncAt ? new Date(st.lastSyncAt).toISOString() : new Date().toISOString(), ms: Date.now() - t, rows });
+    } catch (err) {
+      console.error("[analytics] overview error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // The dropdown ranks by YTD volume; when the store is ready use its numbers so
+  // the dropdown and the landing table always agree.
+  async function withStoreVolume(list) {
+    if (!overviewReady()) return list;
+    try {
+      const byId = new Map((await overviewByCustomer(yearStartStr())).map(r => [r.cid, r]));
+      return list.map(c => {
+        let ytd = 0, ytdOrders = 0, drafts = 0;
+        for (const id of c.ids) { const r = byId.get(id); if (r) { ytd += r.ytdValue; ytdOrders += r.ytdOrders; drafts += r.draftCount; } }
+        return { ...c, ytd: Math.round(ytd), ytdOrders, drafts };
+      });
+    } catch (e) { console.warn("[analytics] store volume overlay failed:", e.message); return list; }
+  }
+
+  // ── POST query ─────────────────────────────────────────────────────────────
+  // body: { customerIds: [numeric], skus: [string], from: 'YYYY-MM-DD', to: 'YYYY-MM-DD' }
+  // Returns flat line-level records; the page pivots them either by SKU
+  // (customer view) or by customer (SKU view) and counts distinct orders itself.
+  //   draft record : open = draft line quantity, openValue = discounted line total
+  //   order record : open = unfulfilledQuantity, fulfilled = currentQuantity - unfulfilledQuantity
+  //                  (fulfilled only counted when the order was created inside from..to)
+  //                  values = units × discounted unit price (line-level discounts only)
+  app.post("/api/analytics/query", async (req, res) => {
+    const { b2bStore, b2bToken } = CREDS;
+    if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
+
+    try {
+      const customerIds = (req.body.customerIds || []).map(String).filter(s => /^\d+$/.test(s));
+      const skus = [...new Set((req.body.skus || []).map(s => String(s).trim().toUpperCase()).filter(s => SKU_RE.test(s)))];
+      if (!customerIds.length && !skus.length) {
+        return res.status(400).json({ error: "Pick at least one customer or one SKU." });
+      }
+
+      const year = new Date().getUTCFullYear();
+      const fromStr = /^\d{4}-\d{2}-\d{2}$/.test(req.body.from || "") ? req.body.from : `${year}-01-01`;
+      const toStr = /^\d{4}-\d{2}-\d{2}$/.test(req.body.to || "") ? req.body.to : new Date().toISOString().slice(0, 10);
+      const fromMs = Date.parse(fromStr + "T00:00:00Z");
+      const toExclusive = new Date(Date.parse(toStr + "T00:00:00Z") + 864e5);
+      const toExclusiveStr = toExclusive.toISOString().slice(0, 10);
+
+      const idSet = new Set(customerIds);
+      const skuSet = new Set(skus);
+      const records = [];
+
+      // The page asks for the two halves in parallel so "on order" can show
+      // up while the (much larger) fulfilled-history search is still running.
+      //   phase "open"      : drafts + unfulfilled/partial orders  (open units only)
+      //   phase "fulfilled" : orders in the date range             (fulfilled units only)
+      //   anything else     : both, in one response
+      const phase = req.body.phase === "open" || req.body.phase === "fulfilled" ? req.body.phase : "all";
+      const wantOpen = phase !== "fulfilled";
+      const wantFul = phase !== "open";
+
+      const T0 = Date.now(), timing = {};
+      const useStore = req.body.live !== true && storeUsable(fromStr, phase);
+      const useStoreDrafts = req.body.live !== true && storeEnabled && st.ready && st.draftsLoaded;
+      if (useStore || useStoreDrafts) { const t = Date.now(); await freshen(); timing.freshenMs = Date.now() - t; }
+
+      // Drafts: from the store when it has them, otherwise the cached live pull.
+      let t1 = Date.now();
+      if (wantOpen && useStoreDrafts) {
+        for (const r of await queryStoreDrafts({ customerIds, skus })) {
+          records.push({
+            type: "draft", name: r.name, createdAt: new Date(r.created_at).toISOString(),
+            customerId: r.customer_id || "", label: r.label || "Unknown",
+            sku: r.sku || "—", title: r.title || "",
+            open: r.quantity, fulfilled: 0,
+            openValue: money(r.total), fulfilledValue: 0,
+          });
+        }
+        timing.drafts = "store";
+      } else if (wantOpen) {
+        for (const d of await getOpenDrafts()) {
+          if (idSet.size && !idSet.has(gidNum(d.customer?.id))) continue;
+          for (const e of d.lineItems?.edges || []) {
+            const li = e.node;
+            const sku = (li.sku || "").toUpperCase();
+            if (skuSet.size && !skuSet.has(sku)) continue;
+            if (!li.quantity) continue;
+            records.push({
+              type: "draft", name: d.name, createdAt: d.createdAt,
+              customerId: gidNum(d.customer?.id), label: labelOf(d),
+              sku: sku || "—", title: li.title || "",
+              open: li.quantity, fulfilled: 0,
+              openValue: money(li.discountedTotalSet?.shopMoney?.amount), fulfilledValue: 0,
+            });
+          }
+        }
+        timing.drafts = "live";
+      }
+      timing.draftsMs = Date.now() - t1;
+
+      // One place that turns an order line into a record, for both data sources.
+      const addOrderRecord = o => {
+        const open = wantOpen ? o.rawOpen : 0;
+        const fulfilled = wantFul && o.inRange ? Math.max(0, o.current - o.rawOpen) : 0;
+        if (!open && !fulfilled) return;
+        records.push({
+          type: "order", name: o.name, createdAt: o.createdAt,
+          customerId: o.customerId, label: o.label,
+          sku: o.sku || "—", title: o.title || "",
+          open, fulfilled,
+          openValue: money(open * o.unit), fulfilledValue: money(fulfilled * o.unit),
+        });
+      };
+
+      let source = "live", asOf = new Date().toISOString();
+      t1 = Date.now();
+      if (useStore) {
+        // Fast path: Postgres.
+        const rows = await queryStore({ customerIds, skus, fromStr, toExclusiveStr });
+        for (const r of rows) {
+          addOrderRecord({
+            name: r.name, createdAt: new Date(r.created_at).toISOString(), customerId: r.customer_id || "",
+            label: r.label || "Unknown", sku: r.sku, title: r.title,
+            rawOpen: Math.max(0, r.unfulfilled_quantity || 0), current: r.current_quantity || 0,
+            unit: parseFloat(r.unit_price) || 0, inRange: !!r.in_range,
+          });
+        }
+        source = "store";
+        if (st.lastSyncAt) asOf = new Date(st.lastSyncAt).toISOString();
+      } else {
+        // Fallback: live Shopify search (same behavior as before the store existed).
+        // Orders — two searches per customer chunk, deduped by order id:
+        //   A) anything still unfulfilled/partial, any age (this is "on order")
+        //   B) anything created inside the date range (this feeds "fulfilled")
+        const skuClause = skus.length ? "(" + skus.map(s => `sku:"${s}"`).join(" OR ") + ")" : "";
+        const chunks = customerIds.length
+          ? Array.from({ length: Math.ceil(customerIds.length / ID_CHUNK) }, (_, i) => customerIds.slice(i * ID_CHUNK, (i + 1) * ID_CHUNK))
+          : [[]];
+
+        const orderMap = new Map();
+        const jobs = [];
+        for (const chunk of chunks) {
+          const custClause = chunk.length ? "(" + chunk.map(i => `customer_id:${i}`).join(" OR ") + ")" : "";
+          const base = ["-status:cancelled", custClause, skuClause].filter(Boolean).join(" ");
+          if (wantOpen) jobs.push(`${base} (fulfillment_status:unfulfilled OR fulfillment_status:partial)`);
+          // Only orders that can have shipped units; skips never-fulfilled orders in the range.
+          if (wantFul) jobs.push(`${base} (fulfillment_status:fulfilled OR fulfillment_status:partial) created_at:>=${fromStr} created_at:<${toExclusiveStr}`);
+        }
+        // A few searches at a time; three is a deliberate ceiling for Shopify's cost throttle.
+        let next = 0;
+        const worker = async () => {
+          while (next < jobs.length) {
+            const q = jobs[next++];
+            const nodes = await gqlAll(b2bStore, b2bToken, ORDERS_QUERY,
+              { first: PAGE, query: q },
+              d => d.orders.edges, d => d.orders.pageInfo, 120000);
+            for (const n of nodes) orderMap.set(n.id, n);
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(3, jobs.length) }, worker));
+        await completeLines([...orderMap.values()], MORE_LINES_QUERY, "order");
+
+        for (const o of orderMap.values()) {
+          if (o.cancelledAt) continue;
+          if (idSet.size && !idSet.has(gidNum(o.customer?.id))) continue;
+          const inRange = new Date(o.createdAt).getTime() >= fromMs && new Date(o.createdAt) < toExclusive;
+          for (const e of o.lineItems?.edges || []) {
+            const li = e.node;
+            const sku = (li.sku || "").toUpperCase();
+            if (skuSet.size && !skuSet.has(sku)) continue;
+            addOrderRecord({
+              name: o.name, createdAt: o.createdAt, customerId: gidNum(o.customer?.id), label: labelOf(o),
+              sku, title: li.title,
+              rawOpen: Math.max(0, li.unfulfilledQuantity ?? 0), current: li.currentQuantity ?? li.quantity ?? 0,
+              unit: parseFloat(li.discountedUnitPriceSet?.shopMoney?.amount) || 0, inRange,
+            });
+          }
+        }
+      }
+
+      timing.ordersMs = Date.now() - t1; timing.orders = source; timing.totalMs = Date.now() - T0;
+      console.log(`[analytics] query ${phase} ${customerIds.length} cust/${skus.length} sku: ${timing.totalMs}ms (orders ${source} ${timing.ordersMs}ms, drafts ${timing.drafts || "-"} ${timing.draftsMs}ms, freshen ${timing.freshenMs || 0}ms)`);
+      res.json({
+        asOf,
+        source,
+        timing,
+        phase,
+        range: { from: fromStr, to: toStr },
+        records,
+      });
+    } catch (err) {
+      console.error("[analytics] query error:", err);
+      const hint = /access denied|scope/i.test(err.message)
+        ? " (B2B token may be missing read_customers)" : "";
+      res.status(500).json({ error: err.message + hint });
+    }
+  });
+};
