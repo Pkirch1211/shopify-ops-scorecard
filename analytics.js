@@ -148,7 +148,12 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
       const raw = JSON.parse(require("fs").readFileSync(require("path").join(__dirname, "analytics-groups.json"), "utf8"));
       return {
         autoStrip: raw.autoStrip !== false,
-        rules: (raw.rules || []).filter(r => r && r.startsWith && r.parent).map(r => ({ p: normName(r.startsWith), parent: String(r.parent).trim() })),
+        rules: (raw.rules || []).filter(r => r && r.parent && (r.startsWith || r.contains || r.regex)).map(r => {
+          let re = null;
+          if (r.regex) { try { re = new RegExp(r.regex, "i"); } catch (e) { console.warn("[analytics] bad regex in analytics-groups.json:", r.regex); } }
+          if (r.regex && !re) return null;
+          return { p: r.startsWith ? normName(r.startsWith) : "", c: r.contains ? normName(r.contains) : "", re, parent: String(r.parent).trim() };
+        }).filter(Boolean),
         never: new Set((raw.neverGroup || []).map(normName)),
       };
     } catch (e) {
@@ -167,7 +172,11 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
   function parentOf(label, cfg) {
     const n = normName(label);
     if (cfg.never.has(n)) return label;
-    for (const r of cfg.rules) if (r.p && (n === r.p || n.startsWith(r.p + " ") || n.startsWith(r.p))) return r.parent;
+    for (const r of cfg.rules) {
+      if (r.p && n.startsWith(r.p)) return r.parent;
+      if (r.c && (" " + n + " ").includes(" " + r.c + " ")) return r.parent;
+      if (r.re && r.re.test(String(label))) return r.parent;   // regex runs on the raw name
+    }
     if (cfg.autoStrip) {
       const cut = label.split(/\s+#\s*\d|\s+[-–—]\s+/)[0].replace(/[\s,\-–—]+$/, "").trim();
       if (cut.length >= 3) return cut;
