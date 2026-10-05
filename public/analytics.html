@@ -1,1092 +1,1130 @@
-// ── B2B Analytics (read-only) ─────────────────────────────────────────────────
-// Answers "what does <customer> have on order, and how much is it worth?" and
-// "who has <SKU> on order?" without touching any existing endpoint, cache, or table.
-//
-// Wire-up in server.js (after the CREDS block and gql/gqlAll/restFetchAll definitions):
-//     require("./analytics")(app, { gql, gqlAll, CREDS, db });
-//
-// Quick check after deploy: open /api/analytics/ping — it should return {"ok":true}.
-// If it returns a web page instead, the require line is missing or analytics.js
-// wasn't deployed.
-//
-// Required Shopify scopes on the B2B token: read_orders, read_draft_orders,
-// read_customers (the last one is new — needed for the customer dropdown and
-// for customer_id order search).
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Analytics — LifeLines</title>
+<style>
+@import url('https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=swap');
+:root{--bg:#f0f0eb;--surface:#f7f7f3;--surface2:#e8e8e3;--border:#d4d4cc;--border2:#c8c8c0;--text:#2a2a28;--muted:#6b6b64;--dim:#9a9a92;--green:#4a6741;--green-bg:#4a6741;--green-light:#e8ede7;--dtc:#3d5c8a;--warn:#8a5c2a;--danger:#8a2a2a;--sans:'Satoshi',sans-serif;--shadow:0 1px 3px rgba(0,0,0,0.07)}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;min-height:100vh}
+header{position:sticky;top:0;z-index:100;display:grid;grid-template-columns:auto 1fr auto;align-items:stretch;border-bottom:2px solid var(--border);background:var(--surface)}
+.header-brand{background:var(--green-bg);color:#fff;padding:14px 22px;display:flex;flex-direction:column;justify-content:center}
+.brand-name{font-size:15px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+.brand-sub{font-size:9px;letter-spacing:.14em;text-transform:uppercase;opacity:.65;margin-top:2px}
+.header-title{padding:14px 24px;display:flex;flex-direction:column;justify-content:center;border-right:1px solid var(--border)}
+.header-title h1{font-size:15px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+.header-title p{font-size:10px;color:var(--muted);margin-top:3px;letter-spacing:.05em}
+.header-right{display:flex;align-items:center;gap:20px;padding:0 24px}
+nav{display:flex;gap:3px}
+.nav-link{font-size:10px;letter-spacing:.1em;text-transform:uppercase;padding:6px 14px;border:1px solid transparent;border-radius:2px;text-decoration:none;color:var(--muted);transition:all .12s}
+.nav-link:hover{color:var(--text);border-color:var(--border2)}
+.nav-link.active{color:var(--green);border-color:var(--green);background:var(--green-light)}
 
-module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
-  const DIRECTORY_TTL = 60 * 60 * 1000; // customer list is refreshed in the background after this
-  const DRAFTS_TTL = 5 * 60 * 1000;
-  const ID_CHUNK = 25;                  // customer ids per order search
-  const SKU_RE = /^[A-Za-z0-9._\-]+$/;
+/* selector bar */
+.selector-bar{background:var(--surface2);border-bottom:1px solid var(--border);padding:14px 28px 16px}
+.sel-row{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;max-width:1400px;margin:0 auto}
+.sel{display:flex;flex-direction:column;gap:5px;min-width:120px}
+.sel.grow{flex:1 1 300px}
+.sel.sku{flex:1 1 240px}
+.sel label{font-size:10px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.sel select,.sel input[type=text],.sel input[type=date]{width:100%;background:#fff;border:1px solid var(--border2);color:var(--text);font-family:var(--sans);font-size:13px;padding:8px 10px;border-radius:2px;outline:none;height:36px}
+.sel select:focus,.sel input:focus{border-color:var(--green)}
+.sel-dates{display:none;gap:8px;align-items:flex-end}
+.sel-dates.show{display:flex}
+.sel-dates .sel{min-width:130px}
+.sel-actions{margin-left:auto;align-self:flex-end;display:flex;align-items:center;gap:12px}
+.status{font-size:10px;color:var(--dim);white-space:nowrap}
+.btn{font-family:var(--sans);font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;padding:0 14px;height:36px;border-radius:2px;cursor:pointer;background:var(--surface);color:var(--green);border:1px solid var(--green)}
+.btn:hover{background:var(--green-light)}
+.combo{position:relative}
+.combo-list{position:absolute;left:0;right:0;top:100%;z-index:50;background:#fff;border:1px solid var(--green);border-top:none;max-height:280px;overflow-y:auto;display:none;box-shadow:0 4px 10px rgba(0,0,0,.1)}
+.combo-item{padding:8px 11px;cursor:pointer;display:flex;justify-content:space-between;gap:10px;border-bottom:1px solid var(--surface2);font-size:13px}
+.combo-item:last-child{border-bottom:none}
+.combo-item.hl,.combo-item:hover{background:var(--green-light)}
+.combo-item .sub{font-size:11px;color:var(--dim);white-space:nowrap}
+.combo-empty{padding:10px 11px;font-size:12px;color:var(--dim)}
+.combo-head{padding:7px 11px;font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);background:var(--surface2);border-bottom:1px solid var(--border)}
+.combo-item.idle{color:var(--muted)}
+.combo-item .meta{font-size:11px;color:var(--green);white-space:nowrap;font-variant-numeric:tabular-nums}
+.combo-item.idle .meta{color:var(--dim)}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chips:empty{display:none}
+.chip{background:var(--green-light);border:1px solid var(--green);color:var(--green);font-size:12px;font-weight:500;padding:3px 5px 3px 9px;border-radius:2px;display:inline-flex;align-items:center;gap:6px}
+.chip button{background:none;border:none;color:var(--green);font-size:15px;line-height:1;cursor:pointer}
 
-  // Page sizes mirror what the existing queries in server.js already run at
-  // (50 x 100 nested = same cost class as their 250 x 20), so Shopify's
-  // single-query cost cap isn't a new risk. gqlAll paginates for us.
-  const PAGE = 50;
+main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
+.error-banner{background:#f5e0e0;border:1px solid #d49696;color:var(--danger);font-size:12px;line-height:1.5;padding:10px 16px;border-radius:2px;margin-bottom:16px;display:none}
+.state-panel{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:70px 40px;gap:10px;text-align:center}
+.state-title{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text)}
+.state-sub{font-size:13px;color:var(--muted);max-width:380px;line-height:1.6}
+.spinner{width:16px;height:16px;border:2px solid var(--border2);border-top-color:var(--green);border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 
-  let directoryCache = null, directoryCacheTime = 0, building = null;
-  let draftsCache = null, draftsCacheTime = 0;
+.result-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.result-title{font-size:20px;font-weight:700;letter-spacing:.01em}
+.result-sub{font-size:11px;color:var(--dim)}
 
-  const gidNum = id => (id || "").split("/").pop();
-  const labelOf = n =>
-    n.shippingAddress?.company || n.billingAddress?.company ||
-    n.customer?.displayName || n.email || "Unknown";
-  const money = v => Math.round((parseFloat(v) || 0) * 100) / 100;
+.kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--border);border-radius:3px;overflow:hidden;background:var(--border);gap:1px;box-shadow:var(--shadow)}
+.kpi-card{background:var(--surface);padding:18px 20px}
+.kpi-card.primary{background:var(--green-light)}
+.kpi-label{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+.kpi-card.primary .kpi-label{color:var(--green);font-weight:700}
+.kpi-units{font-size:30px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
+.kpi-units small{font-size:11px;font-weight:500;color:var(--muted);margin-left:5px}
+.kpi-money{font-size:17px;font-weight:700;margin-top:8px;color:var(--green);font-variant-numeric:tabular-nums}
+.kpi-hint{font-size:11px;color:var(--muted);margin-top:8px}
 
-  // ── Queries ────────────────────────────────────────────────────────────────
-  const CUSTOMERS_QUERY = `
-  query AnalyticsCustomers($first: Int!, $after: String, $query: String) {
-    customers(first: $first, after: $after, query: $query, sortKey: NAME) {
-      pageInfo { hasNextPage endCursor }
-      edges { node { id displayName email defaultAddress { company } } }
-    }
-  }`;
+.section-header{display:flex;align-items:center;gap:10px;margin:28px 0 12px}
+.section-dot{width:6px;height:6px;border-radius:50%;background:var(--green);flex-shrink:0}
+.section-title{font-size:10px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);white-space:nowrap}
+.section-line{flex:1;height:1px;background:var(--border)}
+.toggle{font-size:11px;color:var(--muted);display:inline-flex;align-items:center;gap:6px;cursor:pointer;max-width:100%;line-height:1.3}
+.toggle input{accent-color:var(--green)}
+.sku-block{margin-bottom:22px}
+.sku-block-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:8px;flex-wrap:wrap}
+.sku-block-title{font-size:13px;font-weight:700}
+.sku-block-title span{font-weight:400;color:var(--muted)}
 
-  // Lightweight pull used only to rank the customer dropdown by this year's volume.
-  const YTD_QUERY = `
-  query AnalyticsYtd($first: Int!, $after: String, $query: String!) {
-    orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT) {
-      pageInfo { hasNextPage endCursor }
-      edges { node { id customer { id } currentSubtotalPriceSet { shopMoney { amount } } } }
-    }
-  }`;
+.tbl-wrap{border:1px solid var(--border);border-radius:3px;overflow-x:auto;background:var(--surface);box-shadow:var(--shadow);margin-bottom:6px}
+table{width:100%;border-collapse:separate;border-spacing:0;font-size:13px}
+th{background:var(--surface2);text-align:right;font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;cursor:pointer;user-select:none}
+th:hover{color:var(--text)}
+th.sorted{color:var(--green)}
+th:first-child,td:first-child{text-align:left}
+th.dsep,td.dsep{border-left:2px solid var(--border2)}
+td{padding:10px 12px;border-bottom:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+th:first-child,td:first-child{position:sticky;left:0;z-index:2;min-width:150px}
+td:first-child{background:var(--surface);white-space:normal}
+tr.main{cursor:pointer}
+tr.main:hover td{background:#eeeee9}
+tr.total td{font-weight:700;background:var(--surface2);border-bottom:none}
+td .name{font-weight:700;display:block;text-align:left}
+td .desc{font-size:11px;color:var(--muted);display:block;text-align:left;font-weight:400}
+td.strong{font-weight:700;color:var(--green)}
+td.zero{color:var(--dim)}
+tr.detail{display:none}
+tr.detail.show{display:table-row}
+tr.detail td{background:#fff;text-align:left;padding:0;white-space:normal}
+tr.detail td:first-child{position:static}
+.detail-inner{position:sticky;left:0;width:min(900px,calc(100vw - 58px));padding:6px 14px 10px 28px}
+.drow{display:grid;grid-template-columns:70px 90px 100px 1fr 190px;gap:10px;padding:5px 0;font-size:12px;border-bottom:1px dashed var(--border)}
+.drow:last-child{border-bottom:none}
+.d-qty{text-align:right;font-variant-numeric:tabular-nums}
+.badge{font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:2px 6px;border-radius:2px;align-self:center;text-align:center}
+.badge.draft{background:#f3ead9;color:var(--warn)}
+.badge.order{background:var(--green-light);color:var(--green)}
+.note{font-size:11px;color:var(--muted);line-height:1.6;margin-top:22px;padding:12px 14px;border-left:3px solid var(--warn);background:#f3ead9;max-width:1100px}
+.empty{padding:36px;text-align:center;color:var(--dim);font-size:13px}
 
-  // discountedTotalSet = line total after line-level discounts / price overrides
-  // (whole quantity), so unit value = discountedTotalSet / quantity.
-  const DRAFTS_QUERY = `
-  query AnalyticsDrafts($first: Int!, $after: String, $query: String!) {
-    draftOrders(first: $first, after: $after, query: $query, sortKey: UPDATED_AT) {
-      pageInfo { hasNextPage endCursor }
-      edges {
-        node {
-          id name createdAt email tags
-          customer { id displayName }
-          shippingAddress { company }
-          billingAddress { company }
-          lineItems(first: 100) {
-            pageInfo { hasNextPage endCursor }
-            edges { node { sku title quantity discountedTotalSet { shopMoney { amount } } } }
-          }
-        }
-      }
-    }
-  }`;
+@media(max-width:960px){.kpi-grid{grid-template-columns:repeat(2,1fr)}}
+.crumb{margin-bottom:10px}
+.btn.back{height:34px;padding:0 12px;text-transform:none;letter-spacing:.02em;font-size:12px}
+.ov-tools{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.ov-tools input[type=text]{flex:1 1 260px;max-width:420px;background:#fff;border:1px solid var(--border2);color:var(--text);font-family:var(--sans);font-size:13px;padding:8px 10px;border-radius:2px;outline:none;height:36px}
+.ov-tools input[type=text]:focus{border-color:var(--green)}
+.more-row{text-align:center;padding:10px 0 2px}
+tr.main[data-ci]{cursor:pointer}
+.msort{display:none}
+@media(max-width:640px){
+  /* header: brand and title share a row; nav is one swipeable line */
+  header{display:block;position:static}
+  .header-brand{padding:9px 16px;flex-direction:row;align-items:baseline;justify-content:flex-start;gap:10px}
+  .brand-sub{margin-top:0}
+  .header-title{padding:9px 16px;border-right:none;border-bottom:1px solid var(--border)}
+  .header-title p{display:none}
+  .header-right{padding:8px 12px}
+  nav{flex-wrap:nowrap;overflow-x:auto;gap:4px;-webkit-overflow-scrolling:touch;scrollbar-width:none;width:100%}
+  nav::-webkit-scrollbar{display:none}
+  .nav-link{font-size:10px;padding:8px 12px;white-space:nowrap;flex:0 0 auto}
 
-  // discountedUnitPriceSet = unit price after line-level discounts (order-level
-  // discounts are NOT allocated, by design — see the "merchandise value" note on the page).
-  const ORDERS_QUERY = `
-  query AnalyticsOrders($first: Int!, $after: String, $query: String!) {
-    orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT, reverse: true) {
-      pageInfo { hasNextPage endCursor }
-      edges {
-        node {
-          id name createdAt cancelledAt email
-          customer { id displayName }
-          shippingAddress { company }
-          billingAddress { company }
-          lineItems(first: 100) {
-            pageInfo { hasNextPage endCursor }
-            edges {
-              node {
-                sku title quantity currentQuantity unfulfilledQuantity
-                discountedUnitPriceSet { shopMoney { amount } }
-              }
-            }
-          }
-        }
-      }
-    }
-  }`;
+  /* selectors: two-up where it fits, 16px text so iOS does not zoom in on focus */
+  .selector-bar{padding:12px 14px 14px}
+  .sel-row{display:grid;grid-template-columns:1fr 1fr;gap:10px 10px}
+  .sel,.sel.grow,.sel.sku{min-width:0;flex:none}
+  .sel.grow,.sel.sku,.sel-dates,.sel-actions{grid-column:1 / -1}
+  .sel-row > :nth-child(1){order:1}      /* view by */
+  .sel-row > :nth-child(4){order:2}      /* fulfilled period */
+  .sel-row > :nth-child(2){order:3}      /* customer */
+  .sel-row > :nth-child(3){order:4}      /* sku filter */
+  .sel-row > :nth-child(5){order:5}      /* custom dates */
+  .sel-row > :nth-child(6){order:6}      /* status + export */
+  .sel select,.sel input[type=text],.sel input[type=date]{font-size:16px;height:44px}
+  .sel-dates.show{display:grid;grid-template-columns:1fr 1fr}
+  .sel-dates .sel{min-width:0}
+  .sel-actions{margin-left:0;justify-content:space-between}
+  .btn{height:40px;padding:0 16px}
+  .combo-list{max-height:55vh}
+  .ov-tools input[type=text]{font-size:16px;height:44px;max-width:none}
+  .btn.back{height:40px}
+  .combo-item{flex-direction:column;gap:2px;padding:11px 12px;min-height:48px}
+  .combo-item .meta{white-space:normal}
+  .chip{font-size:13px;padding:6px 8px 6px 11px}
+  .chip button{font-size:20px;padding:0 4px}
 
-  // Orders and drafts with more than 100 lines: Shopify returns the first 100 and
-  // says there are more. Fetch the rest so big orders aren't silently undercounted.
-  const DRAFT_LINE_FIELDS = "id sku title quantity discountedTotalSet { shopMoney { amount } }";
-  const DRAFT_MORE_LINES_QUERY = `
-  query AnalyticsDraftMoreLines($id: ID!, $after: String) {
-    draftOrder(id: $id) {
-      lineItems(first: 100, after: $after) {
-        pageInfo { hasNextPage endCursor }
-        edges { node { ${DRAFT_LINE_FIELDS} } }
-      }
-    }
-  }`;
-  async function completeLines(nodes, query, root) {
-    for (const n of nodes) {
-      let pi = n.lineItems?.pageInfo, guard = 0;
-      while (pi?.hasNextPage && guard++ < 30) {
-        const d = await gqlRetry(query, { id: n.id, after: pi.endCursor });
-        const more = d[root]?.lineItems;
-        if (!more) break;
-        n.lineItems.edges = n.lineItems.edges.concat(more.edges);
-        pi = n.lineItems.pageInfo = more.pageInfo;
-      }
-    }
+  main{padding:14px 14px 32px}
+  .result-title{font-size:18px}
+  .kpi-card{padding:14px 14px}
+  .kpi-units{font-size:26px}
+  .kpi-money{font-size:16px}
+  .section-header{margin:22px 0 10px}
+
+  /* table -> one card per row, so nothing hides off the right edge */
+  .msort{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:11px;color:var(--muted)}
+  .msort select{flex:1;font-family:var(--sans);font-size:16px;height:40px;padding:0 8px;background:#fff;border:1px solid var(--border2);border-radius:2px;color:var(--text)}
+  .tbl-wrap{border:none;background:none;box-shadow:none;overflow:visible}
+  table,tbody{display:block}
+  thead{display:none}
+  tr.main,tr.total{display:grid;grid-template-columns:repeat(3,1fr);gap:10px 8px;background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:12px;margin-bottom:8px;box-shadow:var(--shadow)}
+  tr.total{background:var(--surface2)}
+  tr.main td,tr.total td{display:block;padding:0;border:none;text-align:left;background:none;white-space:normal;font-size:15px;min-width:0}
+  tr.main td::before,tr.total td::before{content:attr(data-label);display:block;font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:500;margin-bottom:2px}
+  tr.main td:first-child,tr.total td:first-child{grid-column:1 / -1;position:static;min-width:0;font-size:15px}
+  tr.main td:first-child::before,tr.total td:first-child::before{display:none}
+  tr.main td.dsep,tr.total td.dsep{border-left:none}
+  tr.main:hover td{background:none}
+  tr.main:active{background:var(--green-light)}
+  tr.detail td{display:block;padding:0;border:none}
+  tr.detail.show{display:block;margin:-4px 0 10px;border:1px solid var(--border);border-top:none;background:#fff;border-radius:0 0 3px 3px}
+  .detail-inner{position:static;width:auto;padding:6px 12px 10px}
+  .drow{grid-template-columns:auto 1fr auto;gap:4px 10px;align-items:center}
+  .drow .d-title{grid-column:1 / -1;order:5;text-align:left}
+  .drow .d-qty{grid-column:1 / -1;order:6;text-align:left}
+  .note{margin-top:16px}
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="header-brand"><div class="brand-name">LifeLines</div><div class="brand-sub">Ops Tools</div></div>
+  <div class="header-title"><h1>Analytics</h1><p>B2B Customer &amp; SKU Order Summary</p></div>
+  <div class="header-right">
+    <nav>
+      <a href="/" class="nav-link">Scorecard</a>
+      <a href="/dtc.html" class="nav-link">DTC</a>
+      <a href="/b2b.html" class="nav-link">B2B</a>
+      <a href="/npi.html" class="nav-link">NPI</a>
+      <a href="/care.html" class="nav-link">Care@</a>
+      <a href="/draft-health.html" class="nav-link">Order Engine</a>
+      <a href="/analytics.html" class="nav-link active">Analytics</a>
+    </nav>
+  </div>
+</header>
+
+<div class="selector-bar">
+  <div class="sel-row">
+    <div class="sel" style="flex:0 0 130px">
+      <label for="viewBy">View by</label>
+      <select id="viewBy">
+        <option value="customer">Customer</option>
+        <option value="sku">SKU</option>
+      </select>
+    </div>
+
+    <div class="sel grow">
+      <label for="custInput" id="custLabel">Customer</label>
+      <div class="combo">
+        <input type="text" id="custInput" placeholder="Loading customers…" autocomplete="off" disabled>
+        <div class="combo-list" id="comboList"></div>
+      </div>
+      <div class="chips" id="chips"></div>
+    </div>
+
+    <div class="sel sku">
+      <label for="skuInput" id="skuLabel">Filter SKUs (optional)</label>
+      <input type="text" id="skuInput" placeholder="Paste SKUs, e.g. LL-16-3366, LL-16-3369" autocomplete="off">
+    </div>
+
+    <div class="sel" style="flex:0 0 170px">
+      <label for="period">Fulfilled period</label>
+      <select id="period">
+        <option value="ytd">Year to date</option>
+        <option value="90d">Last 90 days</option>
+        <option value="12m">Last 12 months</option>
+        <option value="custom">Custom range…</option>
+      </select>
+    </div>
+
+    <div class="sel-dates" id="customDates">
+      <div class="sel"><label for="fromDate">From</label><input type="date" id="fromDate"></div>
+      <div class="sel"><label for="toDate">To</label><input type="date" id="toDate"></div>
+    </div>
+
+    <div class="sel-actions">
+      <span class="status" id="status"></span>
+      <button class="btn" id="csvBtn" type="button" style="display:none">Export CSV</button>
+    </div>
+  </div>
+</div>
+
+<main>
+  <div class="error-banner" id="errorBanner"></div>
+  <div id="results"></div>
+</main>
+
+<script>
+var view = 'customer';          // 'customer' | 'sku'
+var directory = [];             // [{key,label,ids,emails}]
+var idToEntry = {};             // numeric id -> directory entry
+var selected = [];              // selected directory entries
+var lastData = null;            // last query response
+var lastReqSkus = [];
+var groupsStore = [];           // groups for detail toggling
+var hlIndex = -1, matches = [];
+var sortState = { key: null, dir: 'desc' };
+var runId = 0, runTimer = null;
+var screen = 'empty';           // 'overview' | 'detail' | 'empty'
+var overview = null, ovTimer = null, ovSort = { key: null, dir: 'desc' }, ovLimit = 100, ovFilter = '', ovIdle = false, ovShown = [];
+var directoryPromise = null;
+var fulPending = false, fulError = '';   // fulfilled history loads after the open numbers
+
+function $(id) { return document.getElementById(id); }
+function esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function num(n) { return (n || 0).toLocaleString('en-US'); }
+function usd(n) { return '$' + Math.round(n || 0).toLocaleString('en-US'); }
+function usdK(n) {
+  n = n || 0;
+  if (n >= 1e6) return '$' + (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+  if (n >= 1e3) return '$' + Math.round(n / 1e3) + 'k';
+  return '$' + Math.round(n);
+}
+function plural(n, one, many) { return n + ' ' + (n === 1 ? one : (many || one + 's')); }
+function ymd(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function fmtDate(s) { return new Date(s + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); }
+
+// JSON fetch that explains itself when the server answers with a web page.
+async function api(url, opts) {
+  var res = await fetch(url, opts);
+  var text = await res.text();
+  var data;
+  try { data = JSON.parse(text); }
+  catch (e) {
+    throw new Error('The server returned a web page instead of data (HTTP ' + res.status + ' from ' + url + '). ' +
+      'The Analytics endpoints are probably not installed: check that analytics.js is deployed and server.js has the ' +
+      'require("./analytics") line, then open /api/analytics/ping — it should show {"ok":true}.');
   }
+  if (!res.ok) throw new Error(data.error || ('Server error (HTTP ' + res.status + ')'));
+  return data;
+}
 
-  // ── Data access ────────────────────────────────────────────────────────────
-  async function getOpenDrafts() {
-    if (draftsCache && Date.now() - draftsCacheTime < DRAFTS_TTL) return draftsCache;
-    const { b2bStore, b2bToken } = CREDS;
-    const drafts = await gqlAll(b2bStore, b2bToken, DRAFTS_QUERY,
-      { first: PAGE, query: "status:open" },
-      d => d.draftOrders.edges, d => d.draftOrders.pageInfo, 120000);
-    await completeLines(drafts, DRAFT_MORE_LINES_QUERY, "draftOrder");
-    draftsCache = drafts;
-    draftsCacheTime = Date.now();
-    return drafts;
-  }
-
-  // Customers grouped by company, so "HomeGoods" with 6 buyer contacts is one
-  // dropdown entry that expands to all 6 customer ids when selected.
-  // ── Parent grouping ────────────────────────────────────────────────────────
-  // Store-level records ("Trudy's Hallmark #101", "New Seasons Market - Orenco")
-  // roll up to one parent in the dropdown. Rules live in analytics-groups.json
-  // next to this file; a missing or broken file just means no explicit rules.
-  const normName = s => String(s || "").toLowerCase().replace(/[’‘`]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
-  function loadGroupRules() {
-    try {
-      const raw = JSON.parse(require("fs").readFileSync(require("path").join(__dirname, "analytics-groups.json"), "utf8"));
-      return {
-        autoStrip: raw.autoStrip !== false,
-        rules: (raw.rules || []).filter(r => r && r.startsWith && r.parent).map(r => ({ p: normName(r.startsWith), parent: String(r.parent).trim() })),
-        never: new Set((raw.neverGroup || []).map(normName)),
-      };
-    } catch (e) {
-      if (e.code !== "ENOENT") console.warn("[analytics] analytics-groups.json unreadable:", e.message);
-      return { autoStrip: true, rules: [], never: new Set() };
-    }
-  }
-  // Looser key used to fold spelling variants of the same name together:
-  // "GRETCHENS Hallmark" / "Gretchen's Hallmark" / "Gretchen’s Hallmark" all match.
-  const looseKey = s => normName(s).replace(/'/g, "").replace(/\band\b/g, "&").replace(/ & /g, " ")
-    .replace(/^the /, "").replace(/\b(inc|llc|ltd|co|corp|company)\b/g, "").replace(/\s+/g, " ").trim();
-  const nicer = (a, b) => {   // which spelling to show: mixed case > ALL CAPS, has apostrophe, then longer
-    const score = x => (x !== x.toUpperCase() ? 4 : 0) + (x !== x.toLowerCase() ? 1 : 0) + (/['’]/.test(x) ? 2 : 0);
-    return score(b) > score(a) ? b : a;
+// ── Setup ────────────────────────────────────────────────────────────────────
+(function init() {
+  var now = new Date();
+  $('fromDate').value = now.getFullYear() + '-01-01';
+  $('toDate').value = ymd(now);
+  $('viewBy').onchange = function() { setView($('viewBy').value); };
+  $('period').onchange = function() {
+    $('customDates').classList.toggle('show', $('period').value === 'custom');
+    if ($('period').value !== 'custom') schedule();
   };
-  function parentOf(label, cfg) {
-    const n = normName(label);
-    if (cfg.never.has(n)) return label;
-    for (const r of cfg.rules) if (r.p && (n === r.p || n.startsWith(r.p + " ") || n.startsWith(r.p))) return r.parent;
-    if (cfg.autoStrip) {
-      const cut = label.split(/\s+#\s*\d|\s+[-–—]\s+/)[0].replace(/[\s,\-–—]+$/, "").trim();
-      if (cut.length >= 3) return cut;
-    }
-    return label;
-  }
-
-  async function buildDirectory() {
-    const groupCfg = loadGroupRules();
-    const { b2bStore, b2bToken } = CREDS;
-    const customers = await gqlAll(b2bStore, b2bToken, CUSTOMERS_QUERY,
-      { first: 250, query: "orders_count:>0" },
-      d => d.customers.edges, d => d.customers.pageInfo, 180000);
-
-    const groups = new Map();
-    const idToGroup = new Map();
-    const add = (id, company, name, email) => {
-      const store = (company || name || email || "Unknown").trim();
-      const label = parentOf(store, groupCfg);
-      const key = looseKey(label) || label.toLowerCase();
-      if (!groups.has(key)) groups.set(key, { key, label, ids: new Set(), emails: new Set(), members: new Set(), ytd: 0, ytdOrders: 0, drafts: 0 });
-      const g = groups.get(key);
-      g.label = nicer(g.label, label);
-      g.members.add(store);
-      if (id) { g.ids.add(id); idToGroup.set(id, g); }
-      if (email) g.emails.add(email.toLowerCase());
-    };
-
-    for (const c of customers) add(gidNum(c.id), c.defaultAddress?.company, c.displayName, c.email);
-
-    // Customers that only exist on an open draft (brand-new accounts), plus an
-    // open-draft count per company so new accounts still rank as "active".
-    try {
-      for (const d of await getOpenDrafts()) {
-        if (!d.customer?.id) continue;
-        add(gidNum(d.customer.id), d.shippingAddress?.company || d.billingAddress?.company, d.customer.displayName, d.email);
-        const g = idToGroup.get(gidNum(d.customer.id));
-        if (g) g.drafts++;
-      }
-    } catch (e) { console.warn("[analytics] drafts merge for directory failed:", e.message); }
-
-    // Year-to-date merchandise volume per company (calendar year, cancelled excluded).
-    // If this fails the directory still works — it just isn't ranked.
-    try {
-      const yearStart = `${new Date().getUTCFullYear()}-01-01`;
-      const orders = await gqlAll(b2bStore, b2bToken, YTD_QUERY,
-        { first: 250, query: `created_at:>=${yearStart} -status:cancelled` },
-        d => d.orders.edges, d => d.orders.pageInfo, 180000);
-      for (const o of orders) {
-        const g = idToGroup.get(gidNum(o.customer?.id));
-        if (!g) continue;
-        g.ytd += parseFloat(o.currentSubtotalPriceSet?.shopMoney?.amount) || 0;
-        g.ytdOrders++;
-      }
-    } catch (e) { console.warn("[analytics] YTD volume for directory failed:", e.message); }
-
-    return [...groups.values()]
-      .map(g => ({
-        key: g.key, label: g.label, ids: [...g.ids], emails: [...g.emails].slice(0, 3),
-        ytd: Math.round(g.ytd), ytdOrders: g.ytdOrders, drafts: g.drafts,
-        locations: g.members.size,
-        members: g.members.size > 1 ? [...g.members].sort().slice(0, 80) : [],
-      }))
-      .sort((a, b) => a.label.localeCompare(b.label));
-  }
-
-  // ── Customer directory: Postgres-backed, refreshed in the background ───────
-  // The list is saved to its own table (analytics_directory, one row) so it
-  // survives deploys and restarts. Requests are always served from memory; a
-  // stale list is returned immediately while a refresh runs behind it. Only the
-  // very first load on a brand-new database ever makes anyone wait.
-  // Fingerprint of everything that changes how the directory is built: the
-  // grouping logic version plus the contents of analytics-groups.json. A saved
-  // directory built under a different fingerprint is still served right away,
-  // but is rebuilt immediately in the background.
-  const GROUPING_VERSION = 3;
-  function groupingSig() {
-    let file = "";
-    try { file = require("fs").readFileSync(require("path").join(__dirname, "analytics-groups.json"), "utf8"); } catch (_) {}
-    return GROUPING_VERSION + ":" + require("crypto").createHash("md5").update(file).digest("hex").slice(0, 10);
-  }
-  let needsRebuildNow = false;
-
-  async function initStore() {
-    if (!db) return;
-    try {
-      await db.query(`CREATE TABLE IF NOT EXISTS analytics_directory (
-        id INTEGER PRIMARY KEY, payload TEXT NOT NULL, updated_at TIMESTAMPTZ DEFAULT NOW())`);
-      const r = await db.query("SELECT payload, updated_at FROM analytics_directory WHERE id = 1");
-      if (r.rows[0]) {
-        const parsed = JSON.parse(r.rows[0].payload);
-        const saved = Array.isArray(parsed) ? parsed : (parsed.list || []);
-        const sig = Array.isArray(parsed) ? null : parsed.sig;
-        if (saved.length && (saved[0].ytd === undefined || saved[0].locations === undefined)) {
-          console.log("[analytics] saved directory predates volume ranking; rebuilding");
-        } else {
-          directoryCache = saved;
-          directoryCacheTime = new Date(r.rows[0].updated_at).getTime();
-          if (sig !== groupingSig()) {
-            needsRebuildNow = true;
-            directoryCacheTime = 0;   // stale on purpose: serve it, refresh behind it right away
-            console.log("[analytics] grouping rules changed; refreshing directory");
-          }
-          console.log(`[analytics] loaded ${directoryCache.length} customers from DB`);
-        }
-      }
-    } catch (e) { console.warn("[analytics] directory store unavailable, using memory only:", e.message); }
-  }
-
-  async function saveDirectory(list) {
-    if (!db) return;
-    try {
-      await db.query(`INSERT INTO analytics_directory (id, payload, updated_at) VALUES (1, $1, NOW())
-        ON CONFLICT (id) DO UPDATE SET payload = $1, updated_at = NOW()`, [JSON.stringify({ sig: groupingSig(), list })]);
-    } catch (e) { console.warn("[analytics] could not save directory:", e.message); }
-  }
-
-  // One refresh at a time; callers that arrive mid-refresh share it.
-  function refreshDirectory() {
-    if (building) return building;
-    building = (async () => {
-      try {
-        const list = await buildDirectory();
-        directoryCache = list;
-        directoryCacheTime = Date.now();
-        await saveDirectory(list);
-        console.log(`[analytics] directory refreshed: ${list.length} customers`);
-        return list;
-      } finally { building = null; }
-    })();
-    return building;
-  }
-
-  const bgRefresh = () => refreshDirectory().catch(e => console.warn("[analytics] background refresh failed:", e.message));
-  const storeReady = initStore();
-  storeReady.then(() => {
-    if (!directoryCache || Date.now() - directoryCacheTime > DIRECTORY_TTL) setTimeout(bgRefresh, needsRebuildNow ? 1000 : 10000);
+  $('fromDate').onchange = schedule;
+  $('toDate').onchange = schedule;
+  $('skuInput').addEventListener('change', schedule);
+  $('skuInput').addEventListener('keydown', function(e) { if (e.key === 'Enter') { e.preventDefault(); schedule(); } });
+  $('csvBtn').onclick = exportCsv;
+  $('results').addEventListener('click', onResultsClick);
+  (function() {   // phones: nav is one swipeable row, so bring the active tab into view
+    var nav = document.querySelector('nav'), a = nav && nav.querySelector('.active');
+    if (a && nav.scrollWidth > nav.clientWidth) nav.scrollLeft = a.offsetLeft - (nav.clientWidth - a.offsetWidth) / 2;
+  })();
+  $('results').addEventListener('change', function(e) {
+    var s = e.target.closest('select[data-msort]');
+    if (!s) return;
+    var k = s.value;
+    sortState = { key: k, dir: k === 'label' ? 'asc' : 'desc' };
+    render();
   });
-  setInterval(() => {
-    if (!directoryCache || Date.now() - directoryCacheTime > DIRECTORY_TTL) bgRefresh();
-  }, 15 * 60 * 1000);
-
-  // ── GET customer directory (dropdown source) ───────────────────────────────
-  app.get("/api/analytics/customers", async (req, res) => {
-    const { b2bStore, b2bToken } = CREDS;
-    if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
-    try {
-      await storeReady;
-      if (req.query.refresh === "true" || !directoryCache) {
-        const list = await refreshDirectory();
-        return res.json({ customers: await withStoreVolume(list), cached: false });
-      }
-      if (Date.now() - directoryCacheTime > DIRECTORY_TTL) bgRefresh(); // serve now, refresh behind
-      res.json({ customers: await withStoreVolume(directoryCache), cached: true, updatedAt: new Date(directoryCacheTime).toISOString() });
-    } catch (err) {
-      console.error("[analytics] directory error:", err);
-      if (directoryCache) return res.json({ customers: directoryCache, cached: true, stale: true });
-      const hint = /access denied|scope/i.test(err.message)
-        ? " (B2B token needs the read_customers scope)" : "";
-      res.status(500).json({ error: err.message + hint });
-    }
+  $('results').addEventListener('change', function(e) { if (e.target.id === 'splitToggle') { splitView = e.target.checked; render(); } });
+  wireCombo();
+  $('results').addEventListener('input', function(e) {
+    if (e.target.id === 'ovFilter') { ovFilter = e.target.value; ovLimit = 100; renderOverviewTable(); }
   });
+  $('results').addEventListener('change', function(e) {
+    if (e.target.id === 'ovIdle') { ovIdle = e.target.checked; ovLimit = 100; renderOverviewTable(); return; }
+    var s = e.target.closest('select[data-ovsort]');
+    if (s) { ovSort = { key: s.value, dir: s.value === 'label' ? 'asc' : 'desc' }; renderOverviewTable(); }
+  });
+  window.addEventListener('hashchange', applyHash);
+  $('results').innerHTML = '<div class="state-panel"><div class="spinner"></div><div class="state-sub">Loading…</div></div>';
+  directoryPromise = loadDirectory();
+  directoryPromise.then(function() { if (location.hash.length > 1) applyHash(); else maybeRun(); });
+})();
 
-  // ── Order store (Postgres) ─────────────────────────────────────────────────
-  // Order lines live in two tables of their own (analytics_orders / analytics_lines)
-  // so a lookup is one SQL query instead of dozens of Shopify requests. Nothing
-  // here touches the existing `orders` table or its sync.
-  //
-  // Loading happens in the background, in this order:
-  //   1. every open (unfulfilled / partial) order of any age
-  //   2. month by month, newest first, back ANALYTICS_BACKFILL_MONTHS (default 24)
-  //   3. forever after: orders changed since the last sync, every 5 minutes
-  // A lookup is answered from the store only when the store provably covers it
-  // (open orders loaded, and the requested period is inside the loaded months).
-  // Otherwise it quietly falls back to the live Shopify search.
-  const STORE_MONTHS = Math.max(1, parseInt(process.env.ANALYTICS_BACKFILL_MONTHS || "24", 10) || 24);
-  const SYNC_INTERVAL = Number(process.env.ANALYTICS_SYNC_INTERVAL_MS) || 5 * 60 * 1000;
-  const READ_SYNC_DEBOUNCE = process.env.ANALYTICS_READ_SYNC_DEBOUNCE_MS !== undefined ? Number(process.env.ANALYTICS_READ_SYNC_DEBOUNCE_MS) : 10 * 1000;   // a lookup tops the store up if the last sync is older than this
-  const READ_SYNC_BUDGET = 8000;          // ...but never waits longer than this for it
-  const sleep = ms => new Promise(r => setTimeout(r, ms));
-  const iso = d => d.toISOString().replace(/\.\d{3}Z$/, "Z");
+var splitView = true;   // draft / unfulfilled split shown by default; the checkbox collapses it to the compact view
 
-  const LINE_FIELDS = "id sku title quantity currentQuantity unfulfilledQuantity discountedUnitPriceSet { shopMoney { amount } }";
-  const STORE_ORDERS_QUERY = `
-  query AnalyticsStoreOrders($first: Int!, $after: String, $query: String!) {
-    orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT) {
-      pageInfo { hasNextPage endCursor }
-      edges {
-        node {
-          id name createdAt updatedAt cancelledAt email
-          customer { id displayName }
-          shippingAddress { company }
-          billingAddress { company }
-          lineItems(first: 100) {
-            pageInfo { hasNextPage endCursor }
-            edges { node { ${LINE_FIELDS} } }
-          }
-        }
+function setView(v) {
+  view = v;
+  if (v === 'customer') {
+    $('custLabel').textContent = 'Customer';
+    $('skuLabel').textContent = 'Filter SKUs (optional)';
+    $('skuInput').placeholder = 'Paste SKUs, e.g. LL-16-3366, LL-16-3369';
+  } else {
+    $('custLabel').textContent = 'Customer (optional)';
+    $('skuLabel').textContent = 'SKUs';
+    $('skuInput').placeholder = 'Paste one or more SKUs from the email';
+  }
+  sortState = { key: null, dir: 'desc' };
+  ovSort = { key: null, dir: 'desc' }; ovLimit = 100; ovFilter = '';
+  lastData = null;
+  $('csvBtn').style.display = 'none';
+  schedule();
+}
+
+async function loadDirectory() {
+  try {
+    var data = await api('/api/analytics/customers');
+    directory = (data.customers || []).map(function(c) {
+      c.hay = (c.label + ' ' + (c.members || []).join(' ') + ' ' + (c.emails || []).join(' ')).toLowerCase();
+      c.ids.forEach(function(id) { idToEntry[id] = c; });
+      return c;
+    });
+    $('custInput').disabled = false;
+    var active = directory.filter(isActive).length;
+    $('custInput').placeholder = window.matchMedia('(max-width:640px)').matches
+      ? 'Type a company name…'
+      : 'Type a company name…  (' + active.toLocaleString() + ' active this year, ' + directory.length.toLocaleString() + ' total)';
+  } catch (err) {
+    $('custInput').placeholder = 'Customer list unavailable';
+    showError('Could not load customers: ' + err.message);
+  }
+}
+
+// ── Fuzzy combobox ───────────────────────────────────────────────────────────
+function fuzzy(q, s) {
+  var toks = q.split(/\s+/).filter(Boolean), total = 0;
+  for (var t = 0; t < toks.length; t++) {
+    var tok = toks[t], i = s.indexOf(tok);
+    if (i >= 0) {
+      total += 100 - Math.min(i, 50) + ((i === 0 || s.charAt(i - 1) === ' ') ? 20 : 0);
+    } else {
+      var p = 0, last = -1, gaps = 0;
+      for (var c = 0; c < tok.length; c++) {
+        var j = s.indexOf(tok.charAt(c), p);
+        if (j < 0) return 0;
+        if (last >= 0) gaps += j - last - 1;
+        last = j; p = j + 1;
       }
-    }
-  }`;
-  const MORE_LINES_QUERY = `
-  query AnalyticsMoreLines($id: ID!, $after: String) {
-    order(id: $id) {
-      lineItems(first: 100, after: $after) {
-        pageInfo { hasNextPage endCursor }
-        edges { node { ${LINE_FIELDS} } }
-      }
-    }
-  }`;
-
-  const STORE_DRAFTS_QUERY = `
-  query AnalyticsStoreDrafts($first: Int!, $after: String, $query: String!) {
-    draftOrders(first: $first, after: $after, query: $query, sortKey: UPDATED_AT) {
-      pageInfo { hasNextPage endCursor }
-      edges {
-        node {
-          id name createdAt updatedAt email
-          customer { id displayName }
-          shippingAddress { company }
-          billingAddress { company }
-          lineItems(first: 100) {
-            pageInfo { hasNextPage endCursor }
-            edges { node { ${DRAFT_LINE_FIELDS} } }
-          }
-        }
-      }
-    }
-  }`;
-  const DRAFT_IDS_QUERY = `
-  query AnalyticsDraftIds($first: Int!, $after: String, $query: String!) {
-    draftOrders(first: $first, after: $after, query: $query) {
-      pageInfo { hasNextPage endCursor }
-      edges { node { id } }
-    }
-  }`;
-
-  const st = { draftsLoaded: false, draftsWatermark: null, ready: false, openLoaded: false, coveredFrom: null, watermark: null, lastSyncAt: 0, phase: "starting", error: null };
-  const storeEnabled = !!db && typeof db.connect === "function";
-
-  async function gqlRetry(query, vars) {
-    for (let attempt = 0; ; attempt++) {
-      try { return await gql(CREDS.b2bStore, CREDS.b2bToken, query, vars); }
-      catch (e) {
-        if (attempt >= 3 || !/throttl|timeout|HTTP (429|5\d\d)|fetch failed|ECONN|ETIMEDOUT/i.test(e.message)) throw e;
-        await sleep(1500 * (attempt + 1));
-      }
+      if (gaps > tok.length * 2) return 0;
+      total += Math.max(1, 30 - gaps);
     }
   }
+  return total;
+}
 
-  // Walks every page of an order search. No page cap (unlike gqlAll), so a big
-  // window can't silently truncate. With a deadline it stops early and says so.
-  async function pageOrders(search, onPage, { deadline = Infinity } = {}) {
-    let after = null, n = 0;
-    for (;;) {
-      const d = await gqlRetry(STORE_ORDERS_QUERY, { first: PAGE, after, query: search });
-      const conn = d.orders;
-      const nodes = conn.edges.map(e => e.node);
-      if (nodes.length) await onPage(nodes);
-      n += nodes.length;
-      if (!conn.pageInfo.hasNextPage) return { n, complete: true };
-      after = conn.pageInfo.endCursor;
-      if (Date.now() > deadline) return { n, complete: false };
-    }
+function wireCombo() {
+  var input = $('custInput'), list = $('comboList');
+  input.addEventListener('input', renderCombo);
+  input.addEventListener('focus', renderCombo);
+  input.addEventListener('keydown', function(e) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); moveHl(1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); moveHl(-1); }
+    else if (e.key === 'Enter') { if (hlIndex >= 0 && matches[hlIndex]) { e.preventDefault(); pick(matches[hlIndex]); } }
+    else if (e.key === 'Escape') { list.style.display = 'none'; }
+  });
+  list.addEventListener('mousedown', function(e) {
+    var el = e.target.closest('.combo-item');
+    if (el) { e.preventDefault(); pick(matches[parseInt(el.getAttribute('data-i'), 10)]); }
+  });
+  document.addEventListener('click', function(e) {
+    if (!e.target.closest('.combo')) list.style.display = 'none';
+  });
+  $('chips').addEventListener('click', function(e) {
+    var b = e.target.closest('button[data-key]');
+    if (!b) return;
+    selected = selected.filter(function(c) { return c.key !== b.getAttribute('data-key'); });
+    renderChips();
+    schedule();
+  });
+}
+
+function isActive(c) { return (c.ytd || 0) > 0 || (c.drafts || 0) > 0; }
+
+function locNote(c) { return c.locations > 1 ? c.locations + ' locations · ' : ''; }
+
+function comboMeta(c) {
+  if (c.ytd > 0 && c.locations > 1) return locNote(c) + usdK(c.ytd) + ' YTD · ' + plural(c.ytdOrders, 'order');
+  if (c.ytd > 0) return usdK(c.ytd) + ' YTD · ' + plural(c.ytdOrders, 'order');
+  if (c.drafts > 0) return locNote(c) + plural(c.drafts, 'open draft');
+  return locNote(c) + 'no orders this year';
+}
+
+function renderCombo() {
+  var q = $('custInput').value.trim().toLowerCase(), list = $('comboList');
+  var chosen = {};
+  selected.forEach(function(c) { chosen[c.key] = true; });
+  var pool = directory.filter(function(c) { return !chosen[c.key]; });
+  var head = '';
+  if (!q) {
+    // Nothing typed: show who's actually buying this year, biggest first.
+    matches = pool.filter(isActive)
+      .sort(function(a, b) { return (b.ytd || 0) - (a.ytd || 0) || (b.drafts || 0) - (a.drafts || 0); })
+      .slice(0, 15);
+    if (matches.length) head = '<div class="combo-head">Top customers this year · type to search all ' + directory.length.toLocaleString() + '</div>';
+    else matches = pool.slice(0, 15);   // no volume data available: fall back to A–Z
+  } else {
+    // Typing: best text match wins, with a nudge toward customers that buy.
+    matches = pool
+      .map(function(c) {
+        var s = fuzzy(q, c.hay);
+        if (s > 0 && c.ytd > 0) s += Math.min(25, Math.log10(c.ytd + 1) * 4);
+        else if (s > 0 && c.drafts > 0) s += 5;
+        return { c: c, s: s };
+      })
+      .filter(function(x) { return x.s > 0; })
+      .sort(function(a, b) { return b.s - a.s; })
+      .slice(0, 15).map(function(x) { return x.c; });
   }
+  hlIndex = matches.length ? 0 : -1;
+  list.innerHTML = matches.length
+    ? head + matches.map(function(c, i) {
+        return '<div class="combo-item' + (i === 0 ? ' hl' : '') + (isActive(c) ? '' : ' idle') + '" data-i="' + i + '"><span>' + esc(c.label) + '</span>' +
+          '<span class="meta">' + esc(comboMeta(c)) + '</span></div>';
+      }).join('')
+    : '<div class="combo-empty">No matching customers</div>';
+  list.style.display = 'block';
+}
 
-  async function upsertOrders(nodesIn) {
-    const byId = new Map();
-    for (const n of nodesIn) byId.set(gidNum(n.id), n);   // a page can repeat an order; keep the last
-    if (!byId.size) return;
-    const O = { id: [], name: [], cust: [], label: [], created: [], updated: [], cancelled: [], email: [] };
-    const L = { oid: [], lid: [], sku: [], title: [], qty: [], cur: [], unf: [], price: [] };
-    for (const [oid, n] of byId) {
-      O.id.push(oid); O.name.push(n.name || ""); O.cust.push(n.customer?.id ? gidNum(n.customer.id) : null);
-      O.label.push(labelOf(n)); O.created.push(n.createdAt); O.updated.push(n.updatedAt || n.createdAt);
-      O.cancelled.push(!!n.cancelledAt); O.email.push(n.email || null);
-      let edges = n.lineItems?.edges || [], pi = n.lineItems?.pageInfo, guard = 0;
-      while (pi?.hasNextPage && guard++ < 30) {   // orders with more than 100 lines
-        const d = await gqlRetry(MORE_LINES_QUERY, { id: n.id, after: pi.endCursor });
-        const more = d.order?.lineItems;
-        if (!more) break;
-        edges = edges.concat(more.edges); pi = more.pageInfo;
-      }
-      for (const e of edges) {
-        const li = e.node;
-        L.oid.push(oid); L.lid.push(gidNum(li.id)); L.sku.push((li.sku || "").toUpperCase()); L.title.push(li.title || "");
-        L.qty.push(li.quantity || 0); L.cur.push(li.currentQuantity ?? li.quantity ?? 0);
-        L.unf.push(Math.max(0, li.unfulfilledQuantity || 0));
-        L.price.push(parseFloat(li.discountedUnitPriceSet?.shopMoney?.amount) || 0);
-      }
-    }
-    const client = await db.connect();
-    try {
-      await client.query("BEGIN");
-      await client.query("DELETE FROM analytics_lines WHERE order_id = ANY($1::text[])", [O.id]);
-      await client.query(
-        `INSERT INTO analytics_orders (id, name, customer_id, label, created_at, updated_at, cancelled, email)
-         SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::timestamptz[], $7::boolean[], $8::text[])
-         ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, customer_id = EXCLUDED.customer_id, label = EXCLUDED.label,
-           created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at, cancelled = EXCLUDED.cancelled, email = EXCLUDED.email`,
-        [O.id, O.name, O.cust, O.label, O.created, O.updated, O.cancelled, O.email]);
-      if (L.oid.length) await client.query(
-        `INSERT INTO analytics_lines (order_id, line_id, sku, title, quantity, current_quantity, unfulfilled_quantity, unit_price)
-         SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::int[], $6::int[], $7::int[], $8::numeric[])
-         ON CONFLICT (order_id, line_id) DO NOTHING`,
-        [L.oid, L.lid, L.sku, L.title, L.qty, L.cur, L.unf, L.price]);
-      await client.query("COMMIT");
-    } catch (e) {
-      try { await client.query("ROLLBACK"); } catch (_) {}
-      throw e;
-    } finally { client.release(); }
+function moveHl(d) {
+  if (!matches.length) return;
+  hlIndex = (hlIndex + d + matches.length) % matches.length;
+  var items = $('comboList').querySelectorAll('.combo-item');
+  items.forEach(function(el, i) { el.classList.toggle('hl', i === hlIndex); });
+  if (items[hlIndex]) items[hlIndex].scrollIntoView({ block: 'nearest' });
+}
+
+function pick(c) {
+  if (!c) return;
+  selected.push(c);
+  $('custInput').value = '';
+  $('comboList').style.display = 'none';
+  renderChips();
+  schedule();
+}
+
+function renderChips() {
+  $('chips').innerHTML = selected.map(function(c) {
+    return '<span class="chip">' + esc(c.label) + '<button type="button" data-key="' + esc(c.key) + '" aria-label="Remove ' + esc(c.label) + '">&times;</button></span>';
+  }).join('');
+}
+
+// ── Query ────────────────────────────────────────────────────────────────────
+function parseSkus(text) {
+  var found = (text.match(/[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+/g) || []).map(function(s) { return s.toUpperCase(); });
+  if (!found.length) {
+    found = text.split(/[\s,;]+/).filter(function(s) { return /\d/.test(s); }).map(function(s) { return s.toUpperCase(); });
   }
+  return found.filter(function(s, i) { return found.indexOf(s) === i; });
+}
 
-  const setState = (k, v) => db.query(
-    "INSERT INTO analytics_state (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2", [k, String(v)]);
+function periodRange() {
+  var p = $('period').value, now = new Date(), to = ymd(now), from;
+  if (p === 'ytd') from = now.getFullYear() + '-01-01';
+  else if (p === '90d') { var d = new Date(now); d.setDate(d.getDate() - 90); from = ymd(d); }
+  else if (p === '12m') { var d2 = new Date(now); d2.setFullYear(d2.getFullYear() - 1); from = ymd(d2); }
+  else { from = $('fromDate').value || (now.getFullYear() + '-01-01'); to = $('toDate').value || to; }
+  return { from: from, to: to };
+}
 
-  async function initOrderStore() {
-    if (!storeEnabled) { st.phase = "disabled (no database)"; return false; }
-    try {
-      await db.query(`
-        CREATE TABLE IF NOT EXISTS analytics_orders (
-          id TEXT PRIMARY KEY, name TEXT, customer_id TEXT, label TEXT,
-          created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ, cancelled BOOLEAN DEFAULT FALSE, email TEXT);
-        CREATE TABLE IF NOT EXISTS analytics_lines (
-          order_id TEXT NOT NULL, line_id TEXT NOT NULL, sku TEXT, title TEXT,
-          quantity INTEGER, current_quantity INTEGER, unfulfilled_quantity INTEGER, unit_price NUMERIC(14,4),
-          PRIMARY KEY (order_id, line_id));
-        CREATE TABLE IF NOT EXISTS analytics_state (key TEXT PRIMARY KEY, value TEXT);
-        CREATE TABLE IF NOT EXISTS analytics_drafts (
-          id TEXT PRIMARY KEY, name TEXT, customer_id TEXT, label TEXT, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ, email TEXT);
-        CREATE TABLE IF NOT EXISTS analytics_draft_lines (
-          draft_id TEXT NOT NULL, line_id TEXT NOT NULL, sku TEXT, title TEXT, quantity INTEGER, total NUMERIC(14,4),
-          PRIMARY KEY (draft_id, line_id));
-        CREATE INDEX IF NOT EXISTS idx_an_drafts_cust ON analytics_drafts (customer_id);
-        CREATE INDEX IF NOT EXISTS idx_an_dlines_sku ON analytics_draft_lines (sku);
-        CREATE INDEX IF NOT EXISTS idx_an_orders_cust ON analytics_orders (customer_id, created_at);
-        CREATE INDEX IF NOT EXISTS idx_an_lines_sku ON analytics_lines (sku);
-        CREATE INDEX IF NOT EXISTS idx_an_lines_open ON analytics_lines (order_id) WHERE unfulfilled_quantity > 0;`);
-      const r = await db.query("SELECT key, value FROM analytics_state");
-      const m = {}; r.rows.forEach(x => { m[x.key] = x.value; });
-      st.openLoaded = m.open_loaded === "1";
-      st.coveredFrom = m.covered_from || null;
-      st.watermark = m.sync_watermark || null;
-      st.draftsLoaded = m.drafts_loaded === "1";
-      st.draftsWatermark = m.drafts_watermark || null;
-      st.lastSyncAt = m.last_sync_at ? Date.parse(m.last_sync_at) : 0;
-      st.ready = true; st.phase = "idle";
+function schedule() {
+  clearTimeout(runTimer);
+  runTimer = setTimeout(maybeRun, 200);
+}
+
+function maybeRun() {
+  var skus = parseSkus($('skuInput').value);
+  var isDetail = view === 'customer' ? selected.length > 0 : skus.length > 0;
+  hideError();
+  syncHash(skus);
+  if (isDetail) { clearTimeout(ovTimer); runQuery(skus); }
+  else runOverview(skus);
+}
+
+// ── URL hash: #v=sku&c=<customer keys>&s=<skus> ─────────────────────────────
+// Makes the browser / phone back button step between the landing table and a
+// customer, and gives every customer a link you can send to someone.
+function stateHash(skus) {
+  var parts = [];
+  if (view === 'sku') parts.push('v=sku');
+  if (selected.length) parts.push('c=' + selected.map(function(c) { return encodeURIComponent(c.key); }).join(','));
+  if (skus.length) parts.push('s=' + skus.map(encodeURIComponent).join(','));
+  return parts.join('&');
+}
+function syncHash(skus) {
+  var want = stateHash(skus), cur = location.hash.replace(/^#/, '');
+  if (want === cur) return;
+  if (want) location.hash = want;
+  else history.pushState(null, '', location.pathname + location.search);
+}
+function applyHash() {
+  var raw = location.hash.replace(/^#/, ''), cur = stateHash(parseSkus($('skuInput').value));
+  if (raw === cur) return;
+  var p = {};
+  raw.split('&').forEach(function(kv) { var i = kv.indexOf('='); if (i > 0) p[kv.slice(0, i)] = kv.slice(i + 1); });
+  var v = p.v === 'sku' ? 'sku' : 'customer';
+  if (v !== view) { $('viewBy').value = v; setViewQuiet(v); }
+  selected = (p.c ? p.c.split(',') : []).map(function(k) {
+    k = decodeURIComponent(k);
+    for (var i = 0; i < directory.length; i++) if (directory[i].key === k) return directory[i];
+    var m = /^x:(\d+)$/.exec(k);
+    return m ? { key: k, label: 'Customer ' + m[1], ids: [m[1]], emails: [] } : null;
+  }).filter(Boolean);
+  $('skuInput').value = p.s ? p.s.split(',').map(decodeURIComponent).join(', ') : '';
+  renderChips();
+  sortState = { key: null, dir: 'desc' };
+  maybeRun();
+}
+function setViewQuiet(v) {   // setView without scheduling (applyHash runs the query itself)
+  view = v;
+  $('custLabel').textContent = v === 'customer' ? 'Customer' : 'Customer (optional)';
+  $('skuLabel').textContent = v === 'customer' ? 'Filter SKUs (optional)' : 'SKUs';
+  $('skuInput').placeholder = v === 'customer' ? 'Paste SKUs, e.g. LL-16-3366, LL-16-3369' : 'Paste one or more SKUs from the email';
+  ovSort = { key: null, dir: 'desc' }; ovLimit = 100; ovFilter = '';
+}
+
+// ── Landing tables (all customers / all SKUs) ────────────────────────────────
+function backCrumb() {
+  return '<div class="crumb"><button type="button" class="btn back" data-act="back">← ' +
+    (view === 'customer' ? 'All customers' : 'All SKUs') + '</button></div>';
+}
+
+async function runOverview(skus) {
+  var my = ++runId;
+  clearTimeout(ovTimer);
+  screen = 'overview';
+  lastData = null; fulPending = false; fulError = '';
+  $('csvBtn').style.display = 'none';
+  $('status').textContent = '';
+  if (!overview || overview.view !== view) {
+    $('results').innerHTML = '<div class="state-panel"><div class="spinner"></div><div class="state-sub">Loading ' + (view === 'customer' ? 'customers' : 'SKUs') + '…</div></div>';
+  }
+  try {
+    try { await directoryPromise; } catch (e) {}
+    var cids = [];
+    if (view === 'sku') selected.forEach(function(c) { cids = cids.concat(c.ids); });
+    var url = '/api/analytics/overview?view=' + view +
+      (view === 'customer' && skus.length ? '&skus=' + encodeURIComponent(skus.join(',')) : '') +
+      (cids.length ? '&cids=' + cids.join(',') : '');
+    var data = await api(url);
+    if (my !== runId) return;
+    if (!data.ready) {
+      overview = null;
+      renderOverviewLoading(data.status || {});
+      ovTimer = setTimeout(function() { if (my === runId && screen === 'overview') runOverview(skus); }, 15000);
+      return;
+    }
+    overview = data; overview.skus = skus;
+    renderOverview();
+    $('status').textContent = 'As of ' + new Date(data.asOf).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    $('csvBtn').style.display = 'inline-block';
+  } catch (err) {
+    if (my !== runId) return;
+    showError(err.message);
+    renderEmpty();
+  }
+}
+
+function renderOverviewLoading(s) {
+  var msg;
+  if (s.enabled === false) {
+    msg = 'The overview needs the order store, which is not available (no database connection). You can still look up one customer at a time with the search above.';
+  } else {
+    msg = 'The order store is still loading its history' + (s.phase ? ' (' + esc(s.phase) + ')' : '') + '. It has loaded back to ' +
+      esc(s.coveredFrom ? fmtDate(s.coveredFrom) : 'nothing yet') + ' and needs ' + esc(s.needFrom ? fmtDate(s.needFrom) : 'the start of the year') +
+      '. This is a one-time load after a deploy; this page checks again every 15 seconds. You can already look up a single customer with the search above.';
+    if (s.error) msg += ' Last error: ' + esc(s.error);
+  }
+  $('results').innerHTML = '<div class="state-panel"><div class="spinner"></div><div class="state-title">Loading order history</div><div class="state-sub">' + msg + '</div></div>';
+}
+
+function ovCustomerGroups(rows) {
+  var map = {}, list = [];
+  rows.forEach(function(r) {
+    var e = idToEntry[r.cid], key = e ? e.key : 'x:' + r.cid, g = map[key];
+    if (!g) {
+      g = map[key] = { key: key, label: e ? e.label : (r.label || 'Customer ' + r.cid), locations: e ? (e.locations || 1) : 1, entry: e || null, ids: [],
+        ytdValue: 0, ytdUnits: 0, ytdOrders: 0, unfUnits: 0, unfValue: 0, unfOrders: 0, draftUnits: 0, draftValue: 0, draftCount: 0 };
+      list.push(g);
+    }
+    g.ids.push(r.cid);
+    ['ytdValue', 'ytdUnits', 'ytdOrders', 'unfUnits', 'unfValue', 'unfOrders', 'draftUnits', 'draftValue', 'draftCount'].forEach(function(k) { g[k] += r[k] || 0; });
+  });
+  list.forEach(function(g) {
+    g.openUnits = g.unfUnits + g.draftUnits; g.openValue = g.unfValue + g.draftValue; g.openOrders = g.unfOrders + g.draftCount;
+    g.hay = (g.label + ' ' + (g.entry ? (g.entry.members || []).join(' ') : '')).toLowerCase();
+  });
+  return list;
+}
+function ovSkuGroups(rows) {
+  return rows.map(function(r) {
+    return { key: r.sku, label: r.sku || '(no SKU)', sub: r.title, sku: r.sku, ytdValue: r.ytdValue, ytdUnits: r.ytdUnits,
+      unfUnits: r.unfUnits, unfValue: r.unfValue, draftUnits: r.draftUnits, draftValue: r.draftValue, openCustomers: r.openCustomers,
+      openUnits: r.unfUnits + r.draftUnits, openValue: r.unfValue + r.draftValue, hay: ((r.sku || '') + ' ' + (r.title || '')).toLowerCase() };
+  });
+}
+function ovCols() {
+  if (view === 'sku') return [
+    { k: 'openUnits', h: 'Open units', f: num, strong: true },
+    { k: 'openValue', h: 'Open $', f: usd, strong: true },
+    { k: 'openCustomers', h: 'Customers', f: num },
+    { k: 'ytdUnits', h: 'YTD units', f: num, sep: true },
+    { k: 'ytdValue', h: 'YTD $', f: usd },
+  ];
+  return [
+    { k: 'ytdValue', h: 'YTD $', f: usd, strong: true },
+    { k: 'ytdOrders', h: 'YTD orders', f: num },
+    { k: 'openValue', h: 'On order $', f: usd, strong: true, sep: true },
+    { k: 'openUnits', h: 'On order units', f: num },
+    { k: 'draftValue', h: 'Drafts $', f: usd },
+    { k: 'unfValue', h: 'Unfulfilled $', f: usd },
+    { k: 'openOrders', h: 'Open orders', f: num },
+  ];
+}
+
+function renderOverview() {
+  var rows = overview.rows, hasSku = view === 'customer' && overview.skus.length > 0;
+  var all = view === 'sku' ? ovSkuGroups(rows) : ovCustomerGroups(rows);
+  overview.groups = all;
+  var sum = function(k) { return all.reduce(function(a, g) { return a + (g[k] || 0); }, 0); };
+  var html = '';
+  var title = view === 'customer'
+    ? (hasSku ? 'Customers with ' + overview.skus.join(', ') : 'All customers')
+    : (selected.length ? 'SKUs for ' + selected.map(function(c) { return c.label; }).join(' + ') : 'All SKUs');
+  html += '<div class="result-head"><span class="result-title">' + esc(title) + '</span>' +
+    '<span class="result-sub">Year to date · ' + esc(fmtDate(overview.yearStart)) + ' – today</span></div>';
+  var nOpenOrders = sum('openOrders');
+  html += '<div class="kpi-grid">' +
+    tile('On order now', sum('openUnits'), sum('openValue'), view === 'customer' ? plural(nOpenOrders, 'order') + ' · ' + plural(sum('draftCount'), 'draft') + ', ' + sum('unfOrders') + ' unfulfilled' : plural(all.length, 'SKU') + ' with activity', true) +
+    tile('Open drafts', sum('draftUnits'), sum('draftValue'), view === 'customer' ? plural(sum('draftCount'), 'draft') : 'drafts') +
+    tile('Unfulfilled', sum('unfUnits'), sum('unfValue'), view === 'customer' ? plural(sum('unfOrders'), 'order') : 'unfulfilled orders') +
+    tile('Year to date', sum('ytdUnits'), sum('ytdValue'), view === 'customer' ? plural(sum('ytdOrders'), 'order') : 'orders placed this year') +
+    '</div>';
+
+  var hidden = 0;
+  if (view === 'customer' && !hasSku) hidden = all.filter(function(g) { return g.ytdValue <= 0 && g.openUnits > 0; }).length;
+  html += '<div class="section-header"><span class="section-dot"></span><span class="section-title">' + (view === 'customer' ? 'By customer' : 'By SKU') + '</span><div class="section-line"></div></div>';
+  html += '<div class="ov-tools"><input type="text" id="ovFilter" placeholder="' + (view === 'customer' ? 'Filter customers…' : 'Filter SKUs or products…') + '" value="' + esc(ovFilter) + '" autocomplete="off">' +
+    (hidden ? '<label class="toggle"><input type="checkbox" id="ovIdle"' + (ovIdle ? ' checked' : '') + '> Include ' + plural(hidden, 'customer') + ' with open orders or drafts but nothing placed this year</label>' : '') +
+    '</div><div id="ovTable"></div>';
+  html += '<div class="note"><b>Heads up:</b> Year-to-date is the merchandise value of non-cancelled orders placed since Jan 1 (units × unit price after line-level discounts; order-level discounts, tax and shipping not included). ' +
+    'On order = open drafts + unfulfilled orders. ' + (view === 'customer' && !hasSku ? 'Customers with no orders this year are left out of the table. ' : '') +
+    'Orders received in MarketTime that haven\'t transferred to Shopify yet are not included. ' +
+    'Click a row for the detail' + (view === 'customer' ? ' by SKU' : ' by customer') + ', or a column heading to sort.</div>';
+  $('results').innerHTML = html;
+  renderOverviewTable();
+}
+
+function ovSortSpec() {
+  return ovSort.key ? { key: ovSort.key, asc: ovSort.dir === 'asc' }
+                    : { key: view === 'customer' ? 'ytdValue' : 'openValue', asc: false };
+}
+
+// Rows the table shows: activity rule, then the text filter, then the sort. Shared with the CSV export.
+function ovVisible() {
+  var hasSku = view === 'customer' && overview.skus.length > 0, sp = ovSortSpec(), f = ovFilter.trim().toLowerCase();
+  var rows = overview.groups.filter(function(g) {
+    if (view === 'sku' || hasSku) return g.ytdValue > 0 || g.openUnits > 0;     // anything with activity
+    return g.ytdValue > 0 || (ovIdle && g.openUnits > 0);                        // customers: must have YTD $ (unless included)
+  });
+  if (f) rows = rows.filter(function(g) { return g.hay.indexOf(f) !== -1; });
+  var dir = sp.asc ? 1 : -1;
+  return rows.slice().sort(function(a, b) {
+    if (sp.key === 'label') return dir * a.label.localeCompare(b.label);
+    return dir * ((a[sp.key] || 0) - (b[sp.key] || 0)) || a.label.localeCompare(b.label);
+  });
+}
+
+function renderOverviewTable() {
+  if (!overview || !overview.groups) return;
+  var C = ovCols(), sp = ovSortSpec(), f = ovFilter.trim();
+  var rows = ovVisible(), total = rows.length, cap = f ? Math.max(ovLimit, 300) : ovLimit;
+  ovShown = rows.slice(0, cap);
+  var arrow = function(k) { return sp.key === k ? (sp.asc ? ' ▲' : ' ▼') : ''; };
+  var head = '<tr><th data-ovk="label" class="' + (sp.key === 'label' ? 'sorted' : '') + '">' + (view === 'customer' ? 'Customer' : 'SKU') + arrow('label') + '</th>' +
+    C.map(function(c) { return '<th data-ovk="' + c.k + '" class="' + (c.sep ? 'dsep ' : '') + (sp.key === c.k ? 'sorted' : '') + '">' + c.h + arrow(c.k) + '</th>'; }).join('') + '</tr>';
+  var body = ovShown.map(function(g, i) {
+    var sub = view === 'customer' ? (g.locations > 1 ? g.locations + ' locations' : '') : g.sub;
+    return '<tr class="main" data-ci="' + i + '"><td><span class="name">' + esc(g.label) + '</span>' + (sub ? '<span class="desc">' + esc(sub) + '</span>' : '') + '</td>' +
+      C.map(function(c) {
+        var v = g[c.k] || 0, cls = [];
+        if (c.sep) cls.push('dsep');
+        if (!v) cls.push('zero'); else if (c.strong) cls.push('strong');
+        return '<td' + (cls.length ? ' class="' + cls.join(' ') + '"' : '') + ' data-label="' + esc(c.h) + '">' + c.f(v) + '</td>';
+      }).join('') + '</tr>';
+  }).join('');
+  if (!ovShown.length) body = '<tr><td colspan="' + (C.length + 1) + '" class="empty">' + (f ? 'Nothing matches “' + esc(ovFilter) + '”.' : 'Nothing to show.') + '</td></tr>';
+  var noun = view === 'customer' ? 'customers' : 'SKUs';
+  var msort = '<div class="msort"><label>Sort by</label><select data-ovsort>' +
+    [{ k: 'label', h: view === 'customer' ? 'Customer' : 'SKU' }].concat(C).map(function(c) { return '<option value="' + c.k + '"' + (c.k === sp.key ? ' selected' : '') + '>' + esc(c.h) + '</option>'; }).join('') + '</select></div>';
+  var more = total > ovShown.length ? '<div class="more-row"><button type="button" class="btn" data-act="more">Show all ' + total.toLocaleString() + ' ' + noun + '</button></div>' : '';
+  var count = '<div class="result-sub" style="margin:0 0 6px">' + total.toLocaleString() + ' ' + noun + (f ? ' match' : '') + (total > ovShown.length ? ' · showing top ' + ovShown.length : '') + '</div>';
+  $('ovTable').innerHTML = count + msort + '<div class="tbl-wrap"><table><thead>' + head + '</thead><tbody>' + body + '</tbody></table></div>' + more;
+}
+
+function handleOverviewClick(e) {
+  var btn = e.target.closest('button[data-act]');
+  if (btn) {
+    var act = btn.getAttribute('data-act');
+    if (act === 'back') {
+      if (view === 'customer') { selected = []; renderChips(); }
+      else { $('skuInput').value = ''; }
+      sortState = { key: null, dir: 'desc' };
+      schedule(); window.scrollTo(0, 0);
       return true;
-    } catch (e) {
-      console.warn("[analytics] order store unavailable, using live Shopify lookups:", e.message);
-      st.phase = "unavailable"; st.error = e.message;
-      return false;
     }
+    if (act === 'more') { ovLimit = 100000; renderOverviewTable(); return true; }
   }
-  const orderStoreReady = initOrderStore();
-
-  async function loadOpenOrders() {
-    st.phase = "loading open orders";
-    let total = 0;
-    await pageOrders("-status:cancelled (fulfillment_status:unfulfilled OR fulfillment_status:partial)",
-      async nodes => { await upsertOrders(nodes); total += nodes.length; });
-    await setState("open_loaded", "1");
-    st.openLoaded = true;
-    console.log(`[analytics] store: loaded ${total} open orders`);
+  if (screen !== 'overview') return false;
+  var th = e.target.closest('th[data-ovk]');
+  if (th) {
+    var k = th.getAttribute('data-ovk'), sp = ovSortSpec();
+    ovSort = { key: k, dir: sp.key === k ? (sp.asc ? 'desc' : 'asc') : (k === 'label' ? 'asc' : 'desc') };
+    renderOverviewTable();
+    return true;
   }
-
-  // One month at a time, newest first, so recent periods become usable first
-  // and a restart resumes where it left off.
-  async function backfillNextMonth() {
-    const now = new Date();
-    const upper = st.coveredFrom ? new Date(st.coveredFrom + "T00:00:00Z")
-      : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
-    const lower = new Date(Date.UTC(upper.getUTCFullYear(), upper.getUTCMonth() - 1, 1));
-    st.phase = `backfilling ${lower.toISOString().slice(0, 7)}`;
-    let total = 0;
-    await pageOrders(`-status:cancelled created_at:>=${iso(lower)} created_at:<${iso(upper)}`,
-      async nodes => { await upsertOrders(nodes); total += nodes.length; });
-    st.coveredFrom = lower.toISOString().slice(0, 10);
-    await setState("covered_from", st.coveredFrom);
-    console.log(`[analytics] store: loaded ${total} orders for ${st.coveredFrom.slice(0, 7)}`);
+  var tr = e.target.closest('tr.main[data-ci]');
+  if (!tr) return false;
+  var g = ovShown[parseInt(tr.getAttribute('data-ci'), 10)];
+  if (!g) return true;
+  if (view === 'customer') {
+    selected = [g.entry || { key: g.key, label: g.label, ids: g.ids, emails: [], locations: g.locations }];
+    renderChips();
+  } else {
+    if (!g.sku) return true;
+    $('skuInput').value = g.sku;
   }
+  sortState = { key: null, dir: 'desc' };
+  schedule(); window.scrollTo(0, 0);
+  return true;
+}
 
-  let incPromise = null;
-  function incrementalSync(budgetMs) {
-    if (incPromise) return incPromise;
-    incPromise = (async () => {
-      const started = Date.now();
-      const deadline = budgetMs ? started + budgetMs : Infinity;
-      try {
-        const since = new Date(Date.parse(st.watermark) - 2 * 60 * 1000);   // 2 min overlap
-        let count = 0;
-        const r = await pageOrders(`updated_at:>=${iso(since)}`,
-          async nodes => { await upsertOrders(nodes); count += nodes.length; }, { deadline });
-        if (r.complete) {
-          st.watermark = new Date(started - 2 * 60 * 1000).toISOString();
-          st.lastSyncAt = Date.now();
-          await setState("sync_watermark", st.watermark);
-          await setState("last_sync_at", new Date(st.lastSyncAt).toISOString());
-          if (count > 200) console.log(`[analytics] store: synced ${count} changed orders`);
-        }
-        return r.complete;
-      } finally { incPromise = null; }
-    })();
-    return incPromise;
-  }
-
-  async function pageDrafts(search, onPage, { deadline = Infinity } = {}) {
-    let after = null, n = 0;
-    for (;;) {
-      const d = await gqlRetry(STORE_DRAFTS_QUERY, { first: PAGE, after, query: search });
-      const conn = d.draftOrders;
-      const nodes = conn.edges.map(e => e.node);
-      if (nodes.length) await onPage(nodes);
-      n += nodes.length;
-      if (!conn.pageInfo.hasNextPage) return { n, complete: true };
-      after = conn.pageInfo.endCursor;
-      if (Date.now() > deadline) return { n, complete: false };
-    }
-  }
-
-  async function upsertDrafts(nodesIn) {
-    const byId = new Map();
-    for (const n of nodesIn) byId.set(gidNum(n.id), n);
-    if (!byId.size) return;
-    await completeLines([...byId.values()], DRAFT_MORE_LINES_QUERY, "draftOrder");
-    const D = { id: [], name: [], cust: [], label: [], created: [], updated: [], email: [] };
-    const L = { did: [], lid: [], sku: [], title: [], qty: [], total: [] };
-    for (const [did, n] of byId) {
-      D.id.push(did); D.name.push(n.name || ""); D.cust.push(n.customer?.id ? gidNum(n.customer.id) : null);
-      D.label.push(labelOf(n)); D.created.push(n.createdAt); D.updated.push(n.updatedAt || n.createdAt); D.email.push(n.email || null);
-      for (const e of n.lineItems?.edges || []) {
-        const li = e.node;
-        L.did.push(did); L.lid.push(gidNum(li.id)); L.sku.push((li.sku || "").toUpperCase()); L.title.push(li.title || "");
-        L.qty.push(li.quantity || 0); L.total.push(parseFloat(li.discountedTotalSet?.shopMoney?.amount) || 0);
-      }
-    }
-    const client = await db.connect();
-    try {
-      await client.query("BEGIN");
-      await client.query("DELETE FROM analytics_draft_lines WHERE draft_id = ANY($1::text[])", [D.id]);
-      await client.query(
-        `INSERT INTO analytics_drafts (id, name, customer_id, label, created_at, updated_at, email)
-         SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::timestamptz[], $7::text[])
-         ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, customer_id = EXCLUDED.customer_id, label = EXCLUDED.label,
-           created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at, email = EXCLUDED.email`,
-        [D.id, D.name, D.cust, D.label, D.created, D.updated, D.email]);
-      if (L.did.length) await client.query(
-        `INSERT INTO analytics_draft_lines (draft_id, line_id, sku, title, quantity, total)
-         SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::int[], $6::numeric[])
-         ON CONFLICT (draft_id, line_id) DO NOTHING`,
-        [L.did, L.lid, L.sku, L.title, L.qty, L.total]);
-      await client.query("COMMIT");
-    } catch (e) {
-      try { await client.query("ROLLBACK"); } catch (_) {}
-      throw e;
-    } finally { client.release(); }
-  }
-
-  // Deleted and completed drafts never show up in an "updated since" search, so
-  // every so often list the ids of everything still open (cheap: ids only, no
-  // lines) and drop whatever is no longer in that list.
-  async function reconcileDrafts() {
-    const ids = [];
-    let after = null;
-    for (;;) {
-      const d = await gqlRetry(DRAFT_IDS_QUERY, { first: 250, after, query: "status:open" });
-      d.draftOrders.edges.forEach(e => ids.push(gidNum(e.node.id)));
-      if (!d.draftOrders.pageInfo.hasNextPage) break;
-      after = d.draftOrders.pageInfo.endCursor;
-    }
-    const client = await db.connect();
-    try {
-      await client.query("BEGIN");
-      await client.query("DELETE FROM analytics_draft_lines WHERE draft_id <> ALL($1::text[])", [ids]);
-      const r = await client.query("DELETE FROM analytics_drafts WHERE id <> ALL($1::text[])", [ids]);
-      await client.query("COMMIT");
-      return r.rowCount;
-    } catch (e) {
-      try { await client.query("ROLLBACK"); } catch (_) {}
-      throw e;
-    } finally { client.release(); }
-  }
-
-  let draftPromise = null;
-  // full load the first time, then "updated since" (+ optional reconcile)
-  function syncDrafts({ budgetMs, reconcile } = {}) {
-    if (draftPromise) return draftPromise;
-    draftPromise = (async () => {
-      const started = Date.now();
-      const deadline = budgetMs ? started + budgetMs : Infinity;
-      try {
-        if (!st.draftsLoaded) {
-          st.phase = "loading open drafts";
-          const n = await pageDrafts("status:open", upsertDrafts);
-          st.draftsWatermark = new Date(started - 2 * 60 * 1000).toISOString();
-          st.draftsLoaded = true;
-          await setState("drafts_watermark", st.draftsWatermark);
-          await setState("drafts_loaded", "1");
-          console.log(`[analytics] store: loaded ${n.n} open drafts`);
-          return true;
-        }
-        const since = new Date(Date.parse(st.draftsWatermark) - 2 * 60 * 1000);
-        const r = await pageDrafts(`status:open updated_at:>=${iso(since)}`, upsertDrafts, { deadline });
-        if (r.complete) {
-          st.draftsWatermark = new Date(started - 2 * 60 * 1000).toISOString();
-          await setState("drafts_watermark", st.draftsWatermark);
-          if (reconcile) {
-            const gone = await reconcileDrafts();
-            if (gone) console.log(`[analytics] store: dropped ${gone} drafts that are no longer open`);
-          }
-        }
-        return r.complete;
-      } finally { draftPromise = null; }
-    })();
-    return draftPromise;
-  }
-
-  let storeBusy = null;
-  function storeCycle() {
-    if (storeBusy) return storeBusy;
-    storeBusy = (async () => {
-      let nextMs = SYNC_INTERVAL;
-      try {
-        if (!(await orderStoreReady)) return;
-        if (!st.watermark) {   // first ever run: everything changing from now on is caught by the incremental sync
-          st.watermark = new Date().toISOString();
-          await setState("sync_watermark", st.watermark);
-        }
-        const target = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() - STORE_MONTHS, 1)).toISOString().slice(0, 10);
-        let more = false;
-        if (!st.openLoaded) { await loadOpenOrders(); more = true; }
-        else if (!st.draftsLoaded) { await syncDrafts(); more = true; }
-        else if (!st.coveredFrom || st.coveredFrom > target) { await backfillNextMonth(); more = st.coveredFrom > target; }
-        if (!more || Date.now() - st.lastSyncAt > SYNC_INTERVAL) {
-          st.phase = "syncing";
-          await incrementalSync();
-          if (st.draftsLoaded) await syncDrafts({ reconcile: true });
-        }
-        st.phase = "idle"; st.error = null;
-        if (more) nextMs = 1000;
-      } catch (e) {
-        st.error = e.message; st.phase = "retrying";
-        console.warn("[analytics] store sync error:", e.message);
-        nextMs = 30000;
-      } finally {
-        storeBusy = null;
-        setTimeout(storeCycle, nextMs).unref?.();
-      }
-    })();
-    return storeBusy;
-  }
-  if (storeEnabled) setTimeout(storeCycle, Number(process.env.ANALYTICS_STORE_START_MS) || 15000).unref?.();   // after startup, once the directory has had its head start
-
-  // Can this request be answered from the store?
-  function storeUsable(fromStr, phase) {
-    if (!storeEnabled || !st.ready || !st.openLoaded || !st.watermark) return false;
-    if (phase === "open") return true;               // open orders are loaded for all ages
-    return !!st.coveredFrom && fromStr >= st.coveredFrom;
-  }
-
-  // Top the store up with whatever changed in the last few minutes so a lookup
-  // right after an order is placed still sees it. Bounded: never blocks long.
-  async function freshen() {
-    if (Date.now() - st.lastSyncAt < READ_SYNC_DEBOUNCE) return;
-    try {
-      await Promise.race([
-        Promise.all([incrementalSync(READ_SYNC_BUDGET), st.draftsLoaded ? syncDrafts({ budgetMs: READ_SYNC_BUDGET }) : null]),
-        sleep(READ_SYNC_BUDGET + 500),
-      ]);
-    }
-    catch (e) { console.warn("[analytics] freshen failed, serving store as-is:", e.message); }
-  }
-
-  async function queryStore({ customerIds, skus, fromStr, toExclusiveStr }) {
-    const params = [], where = ["NOT o.cancelled"];
-    if (customerIds.length) { params.push(customerIds); where.push(`o.customer_id = ANY($${params.length}::text[])`); }
-    if (skus.length) { params.push(skus); where.push(`l.sku = ANY($${params.length}::text[])`); }
-    params.push(fromStr + "T00:00:00Z", toExclusiveStr + "T00:00:00Z");
-    const a = params.length - 1, b = params.length;
-    const inRange = `(o.created_at >= $${a}::timestamptz AND o.created_at < $${b}::timestamptz)`;
-    const r = await db.query(
-      `SELECT o.name, o.created_at, o.customer_id, o.label, l.sku, l.title,
-              l.current_quantity, l.unfulfilled_quantity, l.unit_price, ${inRange} AS in_range
-         FROM analytics_orders o JOIN analytics_lines l ON l.order_id = o.id
-        WHERE ${where.join(" AND ")}
-          AND (l.unfulfilled_quantity > 0 OR (${inRange} AND l.current_quantity - l.unfulfilled_quantity > 0))`, params);
-    return r.rows;
-  }
-
-  async function queryStoreDrafts({ customerIds, skus }) {
-    const params = [], where = ["l.quantity > 0"];
-    if (customerIds.length) { params.push(customerIds); where.push(`d.customer_id = ANY($${params.length}::text[])`); }
-    if (skus.length) { params.push(skus); where.push(`l.sku = ANY($${params.length}::text[])`); }
-    const r = await db.query(
-      `SELECT d.name, d.created_at, d.customer_id, d.label, l.sku, l.title, l.quantity, l.total
-         FROM analytics_drafts d JOIN analytics_draft_lines l ON l.draft_id = d.id
-        WHERE ${where.join(" AND ")}`, params);
-    return r.rows;
-  }
-
-  app.get("/api/analytics/sync-status", async (req, res) => {
-    const out = {
-      enabled: storeEnabled, ready: st.ready, phase: st.phase, error: st.error,
-      openOrdersLoaded: st.openLoaded, openDraftsLoaded: st.draftsLoaded, coveredFrom: st.coveredFrom, targetMonths: STORE_MONTHS,
-      lastSync: st.lastSyncAt ? new Date(st.lastSyncAt).toISOString() : null,
-    };
-    try {
-      if (st.ready) {
-        const r = await db.query("SELECT (SELECT COUNT(*) FROM analytics_orders) AS orders, (SELECT COUNT(*) FROM analytics_lines) AS lines");
-        out.orders = Number(r.rows[0].orders); out.lines = Number(r.rows[0].lines);
-      }
-    } catch (_) {}
-    res.json(out);
+function exportOverviewCsv() {
+  if (!overview || !overview.groups) return;
+  var C = ovCols(), isSku = view === 'sku';
+  var lines = [[isSku ? 'SKU' : 'Customer'].concat(isSku ? ['Product'] : []).concat(C.map(function(c) { return c.h; })).map(csvEsc).join(',')];
+  ovVisible().forEach(function(g) {
+    lines.push([g.label].concat(isSku ? [g.sub || ''] : [])
+      .concat(C.map(function(c) { return Math.round((g[c.k] || 0) * 100) / 100; })).map(csvEsc).join(','));
   });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
+  a.download = (isSku ? 'analytics-skus-' : 'analytics-customers-ytd-') + ymd(new Date()) + '.csv';
+  document.body.appendChild(a); a.click(); a.remove();
+}
 
-  // ── Overview aggregates (landing tables) ───────────────────────────────────
-  // One SQL pass over the store gives every customer (or SKU) at once. Needs the
-  // store to cover the whole year plus all open orders and drafts; otherwise the
-  // endpoint says "not ready yet" with progress and the page keeps retrying.
-  const yearStartStr = () => `${new Date().getUTCFullYear()}-01-01`;
-  function overviewReady() {
-    return storeEnabled && st.ready && st.openLoaded && st.draftsLoaded && !!st.coveredFrom && st.coveredFrom <= yearStartStr();
-  }
-  const r2 = v => Math.round((Number(v) || 0) * 100) / 100;
-
-  // Filters shared by the order and draft halves: SKU list and customer-id list.
-  function ovFilters(alias, lineAlias, skus, cids, startIdx) {
-    const params = [], where = [];
-    if (skus.length) { params.push(skus); where.push(`${lineAlias}.sku = ANY($${startIdx + params.length - 1}::text[])`); }
-    if (cids.length) { params.push(cids); where.push(`${alias}.customer_id = ANY($${startIdx + params.length - 1}::text[])`); }
-    return { params, sql: where.length ? " AND " + where.join(" AND ") : "" };
-  }
-
-  async function overviewByCustomer(yearStart, skus = [], cids = []) {
-    const yS = yearStart + "T00:00:00Z";
-    const fo = ovFilters("o", "l", skus, cids, 2);
-    const orders = await db.query(
-      `SELECT o.customer_id AS cid, MAX(o.label) AS label,
-              COALESCE(SUM(CASE WHEN o.created_at >= $1::timestamptz THEN l.current_quantity * l.unit_price END), 0) AS ytd_value,
-              COALESCE(SUM(CASE WHEN o.created_at >= $1::timestamptz THEN l.current_quantity END), 0) AS ytd_units,
-              COUNT(DISTINCT CASE WHEN o.created_at >= $1::timestamptz AND l.current_quantity > 0 THEN o.id END) AS ytd_orders,
-              COALESCE(SUM(l.unfulfilled_quantity), 0) AS unf_units,
-              COALESCE(SUM(l.unfulfilled_quantity * l.unit_price), 0) AS unf_value,
-              COUNT(DISTINCT CASE WHEN l.unfulfilled_quantity > 0 THEN o.id END) AS unf_orders
-         FROM analytics_orders o JOIN analytics_lines l ON l.order_id = o.id
-        WHERE NOT o.cancelled AND o.customer_id IS NOT NULL
-          AND (o.created_at >= $1::timestamptz OR l.unfulfilled_quantity > 0)${fo.sql}
-        GROUP BY o.customer_id`, [yS, ...fo.params]);
-    const fd = ovFilters("d", "l", skus, cids, 1);
-    const drafts = await db.query(
-      `SELECT d.customer_id AS cid, MAX(d.label) AS label,
-              COALESCE(SUM(l.quantity), 0) AS draft_units, COALESCE(SUM(l.total), 0) AS draft_value,
-              COUNT(DISTINCT d.id) AS draft_count
-         FROM analytics_drafts d JOIN analytics_draft_lines l ON l.draft_id = d.id
-        WHERE d.customer_id IS NOT NULL AND l.quantity > 0${fd.sql}
-        GROUP BY d.customer_id`, fd.params);
-    const map = new Map();
-    const row = (cid, label) => {
-      if (!map.has(cid)) map.set(cid, { cid, label: label || "", ytdValue: 0, ytdUnits: 0, ytdOrders: 0, unfUnits: 0, unfValue: 0, unfOrders: 0, draftUnits: 0, draftValue: 0, draftCount: 0 });
-      return map.get(cid);
-    };
-    for (const x of orders.rows) {
-      const o = row(x.cid, x.label);
-      o.ytdValue = r2(x.ytd_value); o.ytdUnits = Number(x.ytd_units); o.ytdOrders = Number(x.ytd_orders);
-      o.unfUnits = Number(x.unf_units); o.unfValue = r2(x.unf_value); o.unfOrders = Number(x.unf_orders);
-    }
-    for (const x of drafts.rows) {
-      const o = row(x.cid, x.label);
-      o.draftUnits = Number(x.draft_units); o.draftValue = r2(x.draft_value); o.draftCount = Number(x.draft_count);
-    }
-    return [...map.values()];
-  }
-
-  async function overviewBySku(yearStart, cids = []) {
-    const yS = yearStart + "T00:00:00Z";
-    const fo = ovFilters("o", "l", [], cids, 2);
-    const orders = await db.query(
-      `SELECT l.sku, MAX(l.title) AS title,
-              COALESCE(SUM(CASE WHEN o.created_at >= $1::timestamptz THEN l.current_quantity * l.unit_price END), 0) AS ytd_value,
-              COALESCE(SUM(CASE WHEN o.created_at >= $1::timestamptz THEN l.current_quantity END), 0) AS ytd_units,
-              COALESCE(SUM(l.unfulfilled_quantity), 0) AS unf_units,
-              COALESCE(SUM(l.unfulfilled_quantity * l.unit_price), 0) AS unf_value
-         FROM analytics_orders o JOIN analytics_lines l ON l.order_id = o.id
-        WHERE NOT o.cancelled AND (o.created_at >= $1::timestamptz OR l.unfulfilled_quantity > 0)${fo.sql}
-        GROUP BY l.sku`, [yS, ...fo.params]);
-    const fd = ovFilters("d", "l", [], cids, 1);
-    const drafts = await db.query(
-      `SELECT l.sku, MAX(l.title) AS title, COALESCE(SUM(l.quantity), 0) AS draft_units, COALESCE(SUM(l.total), 0) AS draft_value
-         FROM analytics_drafts d JOIN analytics_draft_lines l ON l.draft_id = d.id
-        WHERE l.quantity > 0${fd.sql} GROUP BY l.sku`, fd.params);
-    // distinct customers with this SKU open, drafts and orders combined
-    const oc = ovFilters("o", "l", [], cids, 1), dc = ovFilters("d", "l", [], cids, 1 + oc.params.length);
-    const custs = await db.query(
-      `SELECT sku, COUNT(DISTINCT cid) AS n FROM (
-         SELECT l.sku, o.customer_id AS cid FROM analytics_orders o JOIN analytics_lines l ON l.order_id = o.id
-          WHERE NOT o.cancelled AND l.unfulfilled_quantity > 0${oc.sql}
-         UNION ALL
-         SELECT l.sku, d.customer_id FROM analytics_drafts d JOIN analytics_draft_lines l ON l.draft_id = d.id
-          WHERE l.quantity > 0${dc.sql}
-       ) x GROUP BY sku`, [...oc.params, ...dc.params]);
-    const map = new Map();
-    const row = (sku, title) => {
-      if (!map.has(sku)) map.set(sku, { sku, title: title || "", ytdValue: 0, ytdUnits: 0, unfUnits: 0, unfValue: 0, draftUnits: 0, draftValue: 0, openCustomers: 0 });
-      const o = map.get(sku); if (!o.title && title) o.title = title; return o;
-    };
-    for (const x of orders.rows) { const o = row(x.sku, x.title); o.ytdValue = r2(x.ytd_value); o.ytdUnits = Number(x.ytd_units); o.unfUnits = Number(x.unf_units); o.unfValue = r2(x.unf_value); }
-    for (const x of drafts.rows) { const o = row(x.sku, x.title); o.draftUnits = Number(x.draft_units); o.draftValue = r2(x.draft_value); }
-    for (const x of custs.rows) row(x.sku).openCustomers = Number(x.n);
-    return [...map.values()];
-  }
-
-  app.get("/api/analytics/overview", async (req, res) => {
-    try {
-      const yearStart = yearStartStr();
-      if (!overviewReady()) {
-        return res.json({ ready: false, status: {
-          enabled: storeEnabled, phase: st.phase, error: st.error, openOrdersLoaded: st.openLoaded, openDraftsLoaded: st.draftsLoaded,
-          coveredFrom: st.coveredFrom, needFrom: yearStart } });
-      }
-      const view = req.query.view === "sku" ? "sku" : "customer";
-      const skus = [...new Set(String(req.query.skus || "").split(",").map(x => x.trim().toUpperCase()).filter(x => x && SKU_RE.test(x)))];
-      const cids = [...new Set(String(req.query.cids || "").split(",").map(x => x.trim()).filter(x => /^\d+$/.test(x)))];
-      await freshen();
-      const t = Date.now();
-      const rows = view === "sku" ? await overviewBySku(yearStart, cids) : await overviewByCustomer(yearStart, skus, cids);
-      res.json({ ready: true, view, yearStart, asOf: st.lastSyncAt ? new Date(st.lastSyncAt).toISOString() : new Date().toISOString(), ms: Date.now() - t, rows });
-    } catch (err) {
-      console.error("[analytics] overview error:", err);
-      res.status(500).json({ error: err.message });
+// One order can show up in both halves (a partly shipped order); fold them back together.
+function mergeRecords(list) {
+  var map = {}, out = [];
+  list.forEach(function(r) {
+    var k = r.type + '|' + r.name + '|' + r.sku + '|' + r.customerId;
+    if (!map[k]) { map[k] = Object.assign({}, r); out.push(map[k]); }
+    else {
+      var m = map[k];
+      m.open += r.open; m.fulfilled += r.fulfilled;
+      m.openValue = Math.round(((m.openValue || 0) + (r.openValue || 0)) * 100) / 100;
+      m.fulfilledValue = Math.round(((m.fulfilledValue || 0) + (r.fulfilledValue || 0)) * 100) / 100;
     }
   });
+  return out;
+}
 
-  // The dropdown ranks by YTD volume; when the store is ready use its numbers so
-  // the dropdown and the landing table always agree.
-  async function withStoreVolume(list) {
-    if (!overviewReady()) return list;
-    try {
-      const byId = new Map((await overviewByCustomer(yearStartStr())).map(r => [r.cid, r]));
-      return list.map(c => {
-        let ytd = 0, ytdOrders = 0, drafts = 0;
-        for (const id of c.ids) { const r = byId.get(id); if (r) { ytd += r.ytdValue; ytdOrders += r.ytdOrders; drafts += r.draftCount; } }
-        return { ...c, ytd: Math.round(ytd), ytdOrders, drafts };
+async function runQuery(skus) {
+  var my = ++runId;
+  screen = 'detail';
+  var ids = [];
+  selected.forEach(function(c) { ids = ids.concat(c.ids); });
+  var r = periodRange();
+  lastReqSkus = skus;
+  lastData = null;
+  fulPending = true; fulError = '';
+  $('csvBtn').style.display = 'none';
+  $('status').textContent = 'Searching drafts and orders…';
+  $('results').innerHTML = '<div class="state-panel"><div class="spinner"></div><div class="state-sub">Searching drafts and orders…</div></div>';
+
+  function req(phase) {
+    return api('/api/analytics/query', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customerIds: ids, skus: skus, from: r.from, to: r.to, phase: phase, live: /[?&]live=1\b/.test(location.search) }),
+    });
+  }
+  // Both halves start now; the open half finishes first and paints immediately.
+  var fulP = req('fulfilled');
+  fulP.catch(function() {});         // handled below; avoids an unhandled rejection if open fails first
+  try {
+    var open = await req('open');
+    if (my !== runId) return;
+    lastData = { asOf: open.asOf, source: open.source, timing: open.timing, range: open.range, records: open.records };
+    render();
+    $('status').textContent = 'Open orders loaded · loading fulfilled history…';
+  } catch (err) {
+    if (my !== runId) return;
+    fulPending = false;
+    showError(err.message);
+    $('status').textContent = '';
+    renderEmpty();
+    return;
+  }
+  try {
+    var ful = await fulP;
+    if (my !== runId) return;
+    lastData.records = mergeRecords(lastData.records.concat(ful.records));
+  } catch (err) {
+    if (my !== runId) return;
+    fulError = err.message;
+    showError('Fulfilled history could not load: ' + err.message);
+  }
+  fulPending = false;
+  render();
+  $('status').textContent = 'As of ' + new Date(lastData.asOf).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) +
+    (lastData.source === 'live' ? ' · live from Shopify' : '') +
+    (/[?&]debug=1\b/.test(location.search) && lastData.timing
+      ? ' · server ' + lastData.timing.totalMs + 'ms (orders ' + lastData.timing.orders + ' ' + lastData.timing.ordersMs + 'ms, drafts ' + lastData.timing.drafts + ' ' + lastData.timing.draftsMs + 'ms)' : '') +
+    (fulError ? ' · fulfilled unavailable' : '');
+  $('csvBtn').style.display = lastData.records.length ? 'inline-block' : 'none';
+}
+
+// ── Rendering ────────────────────────────────────────────────────────────────
+function renderEmpty() {
+  var t = view === 'customer' ? 'Pick a customer' : 'Enter SKUs';
+  var s = view === 'customer'
+    ? 'Choose one or more customers above to see what they have on order, SKU by SKU.'
+    : 'Paste one or more SKUs above to see which customers have them on order.';
+  $('results').innerHTML = '<div class="state-panel"><div class="state-title">' + t + '</div><div class="state-sub">' + s + '</div></div>';
+}
+
+function companyOf(r) {
+  var e = idToEntry[r.customerId];
+  return e ? { key: e.key, label: e.label, locations: e.locations } : { key: 'x:' + r.label.toLowerCase(), label: r.label };
+}
+
+// Order counts are distinct drafts/orders, never summed across rows, because
+// one order can carry several SKUs.
+function totals(recs) {
+  var a = { drafts: 0, unf: 0, ful: 0, total: 0, draftsV: 0, unfV: 0, fulV: 0, totalV: 0 };
+  var od = {}, oo = {}, of = {};
+  recs.forEach(function(r) {
+    if (r.type === 'draft') { a.drafts += r.open; a.draftsV += r.openValue || 0; if (r.open) od[r.name] = 1; }
+    else { a.unf += r.open; a.unfV += r.openValue || 0; if (r.open) oo[r.name] = 1; }
+    a.ful += r.fulfilled; a.fulV += r.fulfilledValue || 0;
+    if (r.fulfilled) of[r.name] = 1;
+  });
+  a.total = a.drafts + a.unf;
+  a.totalV = a.draftsV + a.unfV;
+  a.nDrafts = Object.keys(od).length;
+  a.nUnf = Object.keys(oo).length;
+  a.orders = a.nDrafts + a.nUnf;
+  a.nFul = Object.keys(of).length;
+  return a;
+}
+
+function cols() {
+  if (splitView) return [
+    { k: 'drafts', h: 'Draft units', f: num },
+    { k: 'unf', h: 'Unfulfilled units', f: num },
+    { k: 'total', h: 'Open units', f: num, strong: true },
+    { k: 'ful', h: 'Fulfilled units', f: num },
+    { k: 'draftsV', h: 'Draft $', f: usd, sep: true },
+    { k: 'unfV', h: 'Unfulfilled $', f: usd },
+    { k: 'totalV', h: 'Open $', f: usd, strong: true },
+    { k: 'fulV', h: 'Fulfilled $', f: usd },
+    { k: 'orders', h: 'Orders', f: num, sep: true },
+  ];
+  return [
+    { k: 'total', h: 'Open units', f: num, strong: true },
+    { k: 'totalV', h: 'Open $', f: usd, strong: true },
+    { k: 'orders', h: 'Orders', f: num },
+    { k: 'ful', h: 'Fulfilled units', f: num, sep: true },
+    { k: 'fulV', h: 'Fulfilled $', f: usd },
+  ];
+}
+
+function tile(label, units, money, hint, primary, state) {
+  // state: 'loading' | 'error' for the Fulfilled tile while its history is still coming in
+  if (state) {
+    return '<div class="kpi-card"><div class="kpi-label">' + label + '</div>' +
+      '<div class="kpi-units" style="color:var(--dim)">' + (state === 'loading' ? '…' : '—') + '</div>' +
+      '<div class="kpi-money" style="color:var(--dim)">&nbsp;</div>' +
+      '<div class="kpi-hint">' + (state === 'loading' ? 'loading fulfilled history…' : 'could not load') + '</div></div>';
+  }
+  return '<div class="kpi-card' + (primary ? ' primary' : '') + '"><div class="kpi-label">' + label + '</div>' +
+    '<div class="kpi-units">' + num(units) + '<small>units</small></div>' +
+    '<div class="kpi-money">' + usd(money) + '</div>' +
+    '<div class="kpi-hint">' + hint + '</div></div>';
+}
+
+function render() {
+  if (!lastData) return renderEmpty();
+  var recs = lastData.records;
+  groupsStore = [];
+  var all = totals(recs);
+  var html = '';
+
+  var title = view === 'customer'
+    ? selected.map(function(c) { return c.label; }).join(' + ')
+    : (selected.length ? selected.map(function(c) { return c.label; }).join(' + ') + ' · ' : '') + lastReqSkus.join(', ');
+  html += backCrumb();
+  html += '<div class="result-head"><span class="result-title">' + esc(title) + '</span>' +
+    '<span class="result-sub">Fulfilled counts orders placed ' + esc(fmtDate(lastData.range.from)) + ' – ' + esc(fmtDate(lastData.range.to)) + '</span></div>';
+
+  html += '<div class="kpi-grid">' +
+    tile('On order now', all.total, all.totalV, plural(all.orders, 'order') + ' · ' + plural(all.nDrafts, 'draft') + ', ' + all.nUnf + ' unfulfilled', true) +
+    tile('Open drafts', all.drafts, all.draftsV, plural(all.nDrafts, 'draft')) +
+    tile('Unfulfilled', all.unf, all.unfV, plural(all.nUnf, 'order')) +
+    tile('Fulfilled', all.ful, all.fulV, plural(all.nFul, 'order'), false, fulPending ? 'loading' : (fulError ? 'error' : '')) +
+    '</div>';
+
+  html += '<div class="section-header"><span class="section-dot"></span><span class="section-title">' +
+    (view === 'customer' ? 'By SKU' : 'By customer') + '</span><div class="section-line"></div>' +
+    '<label class="toggle"><input type="checkbox" id="splitToggle"' + (splitView ? ' checked' : '') + '> Show draft / unfulfilled split</label></div>';
+
+  if (view === 'customer') {
+    var bySku = {}, order = [];
+    lastReqSkus.forEach(function(s) { bySku[s] = { label: s, sub: '', recs: [] }; order.push(s); });
+    recs.forEach(function(r) {
+      if (!bySku[r.sku]) { bySku[r.sku] = { label: r.sku, sub: '', recs: [] }; order.push(r.sku); }
+      bySku[r.sku].sub = bySku[r.sku].sub || r.title;
+      bySku[r.sku].recs.push(r);
+    });
+    var groups = order.map(function(k) { return bySku[k]; });
+    // Keep the pasted SKU order unless the reader clicks a column to sort.
+    var useDefault = !sortState.key && !lastReqSkus.length;
+    html += table('SKU', groups, false, useDefault);
+  } else {
+    lastReqSkus.forEach(function(s) {
+      var sr = recs.filter(function(r) { return r.sku === s; });
+      var byCo = {}, keys = [];
+      sr.forEach(function(r) {
+        var co = companyOf(r);
+        if (!byCo[co.key]) { byCo[co.key] = { label: co.label, sub: co.locations > 1 ? co.locations + ' locations' : '', recs: [] }; keys.push(co.key); }
+        byCo[co.key].recs.push(r);
       });
-    } catch (e) { console.warn("[analytics] store volume overlay failed:", e.message); return list; }
+      var desc = sr.length ? sr[0].title : '';
+      html += '<div class="sku-block"><div class="sku-block-head"><span class="sku-block-title">' + esc(s) +
+        (desc ? ' <span>— ' + esc(desc) + '</span>' : '') + '</span><span class="result-sub">' + plural(keys.length, 'customer') + '</span></div>' +
+        table('Customer', keys.map(function(k) { return byCo[k]; }), true, !sortState.key) + '</div>';
+    });
   }
 
-  // ── POST query ─────────────────────────────────────────────────────────────
-  // body: { customerIds: [numeric], skus: [string], from: 'YYYY-MM-DD', to: 'YYYY-MM-DD' }
-  // Returns flat line-level records; the page pivots them either by SKU
-  // (customer view) or by customer (SKU view) and counts distinct orders itself.
-  //   draft record : open = draft line quantity, openValue = discounted line total
-  //   order record : open = unfulfilledQuantity, fulfilled = currentQuantity - unfulfilledQuantity
-  //                  (fulfilled only counted when the order was created inside from..to)
-  //                  values = units × discounted unit price (line-level discounts only)
-  app.post("/api/analytics/query", async (req, res) => {
-    const { b2bStore, b2bToken } = CREDS;
-    if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
+  html += '<div class="note"><b>Heads up:</b> This covers drafts and orders in Shopify. Orders received in MarketTime that haven\'t transferred to Shopify yet are not included. ' +
+    'Open = open drafts + unfulfilled orders. Orders counts distinct drafts and orders with open units. ' +
+    'Dollars are merchandise value (units × unit price after line-level discounts); order-level discounts, tax and shipping are not included, so they won\'t match invoice totals. ' +
+    'Click a row to see the drafts and orders behind it, or a column heading to sort.</div>';
+  $('results').innerHTML = html;
+}
 
-    try {
-      const customerIds = (req.body.customerIds || []).map(String).filter(s => /^\d+$/.test(s));
-      const skus = [...new Set((req.body.skus || []).map(s => String(s).trim().toUpperCase()).filter(s => SKU_RE.test(s)))];
-      if (!customerIds.length && !skus.length) {
-        return res.status(400).json({ error: "Pick at least one customer or one SKU." });
-      }
+function sortGroups(groups, useDefault) {
+  var arr = groups.map(function(g) { g.t = totals(g.recs); return g; });
+  var key = sortState.key, dir = sortState.dir === 'asc' ? 1 : -1;
+  if (!key) {
+    if (useDefault) arr.sort(function(a, b) { return b.t.totalV - a.t.totalV || b.t.total - a.t.total; });
+    return arr;
+  }
+  if (key === 'label') arr.sort(function(a, b) { return dir * a.label.localeCompare(b.label); });
+  else arr.sort(function(a, b) { return dir * (a.t[key] - b.t[key]); });
+  return arr;
+}
 
-      const year = new Date().getUTCFullYear();
-      const fromStr = /^\d{4}-\d{2}-\d{2}$/.test(req.body.from || "") ? req.body.from : `${year}-01-01`;
-      const toStr = /^\d{4}-\d{2}-\d{2}$/.test(req.body.to || "") ? req.body.to : new Date().toISOString().slice(0, 10);
-      const fromMs = Date.parse(fromStr + "T00:00:00Z");
-      const toExclusive = new Date(Date.parse(toStr + "T00:00:00Z") + 864e5);
-      const toExclusiveStr = toExclusive.toISOString().slice(0, 10);
+function table(firstCol, groupsIn, hideSub, useDefault) {
+  var groups = sortGroups(groupsIn, useDefault);
+  var C = cols();
+  var span = C.length + 1;
+  var allRecs = [];
+  var body = groups.map(function(g) {
+    var t = g.t, gi = groupsStore.length;
+    groupsStore.push(g);
+    allRecs = allRecs.concat(g.recs);
+    var rows = '<tr class="main" data-g="' + gi + '"><td><span class="name">' + esc(g.label) + '</span>' +
+      (g.sub && !hideSub ? '<span class="desc">' + esc(g.sub) + '</span>' : '') + '</td>' +
+      C.map(function(c) {
+        var cls = [];
+        if (c.sep) cls.push('dsep');
+        var waiting = (fulPending || fulError) && (c.k === 'ful' || c.k === 'fulV');
+        if (waiting || !t[c.k]) cls.push('zero'); else if (c.strong) cls.push('strong');
+        return '<td' + (cls.length ? ' class="' + cls.join(' ') + '"' : '') + ' data-label="' + esc(c.h) + '">' + (waiting ? (fulPending ? '…' : '—') : c.f(t[c.k])) + '</td>';
+      }).join('') + '</tr>';
+    rows += '<tr class="detail" id="d' + gi + '"><td colspan="' + span + '"><div class="detail-inner">' + detail(g.recs) + '</div></td></tr>';
+    return rows;
+  }).join('');
+  if (!groups.length) body = '<tr><td colspan="' + span + '" class="empty">Nothing on order.</td></tr>';
+  var foot = '';
+  if (groups.length > 1) {
+    var gt = totals(allRecs);
+    foot = '<tr class="total"><td>Total</td>' + C.map(function(c) {
+      var waiting = (fulPending || fulError) && (c.k === 'ful' || c.k === 'fulV');
+      return '<td' + (c.sep ? ' class="dsep"' : '') + ' data-label="' + esc(c.h) + '">' + (waiting ? (fulPending ? '…' : '—') : c.f(gt[c.k])) + '</td>';
+    }).join('') + '</tr>';
+  }
+  var head = '<tr><th data-k="label" class="' + (sortState.key === 'label' ? 'sorted' : '') + '">' + esc(firstCol) + arrow('label') + '</th>' +
+    C.map(function(c) {
+      return '<th data-k="' + c.k + '" class="' + (c.sep ? 'dsep ' : '') + (sortState.key === c.k ? 'sorted' : '') + '">' + c.h + arrow(c.k) + '</th>';
+    }).join('') + '</tr>';
+  var curKey = sortState.key || (useDefault ? 'totalV' : C[0].k);   // default order is biggest Open $ first
+  var msort = '<div class="msort"><label>Sort by</label><select data-msort>' +
+    [{ k: 'label', h: firstCol }].concat(C).map(function(c) {
+      return '<option value="' + c.k + '"' + (c.k === curKey ? ' selected' : '') + '>' + esc(c.h) + '</option>';
+    }).join('') + '</select></div>';
+  return msort + '<div class="tbl-wrap"><table><thead>' + head + '</thead><tbody>' + body + foot + '</tbody></table></div>';
+}
 
-      const idSet = new Set(customerIds);
-      const skuSet = new Set(skus);
-      const records = [];
+function arrow(k) {
+  if (sortState.key !== k) return '';
+  return sortState.dir === 'asc' ? ' ▲' : ' ▼';
+}
 
-      // The page asks for the two halves in parallel so "on order" can show
-      // up while the (much larger) fulfilled-history search is still running.
-      //   phase "open"      : drafts + unfulfilled/partial orders  (open units only)
-      //   phase "fulfilled" : orders in the date range             (fulfilled units only)
-      //   anything else     : both, in one response
-      const phase = req.body.phase === "open" || req.body.phase === "fulfilled" ? req.body.phase : "all";
-      const wantOpen = phase !== "fulfilled";
-      const wantFul = phase !== "open";
+function onResultsClick(e) {
+  if (handleOverviewClick(e)) return;
+  var th = e.target.closest('th[data-k]');
+  if (th) {
+    var k = th.getAttribute('data-k');
+    if (sortState.key === k) sortState.dir = sortState.dir === 'desc' ? 'asc' : 'desc';
+    else sortState = { key: k, dir: k === 'label' ? 'asc' : 'desc' };
+    render();
+    return;
+  }
+  var tr = e.target.closest('tr.main');
+  if (!tr) return;
+  var d = document.getElementById('d' + tr.getAttribute('data-g'));
+  if (d) d.classList.toggle('show');
+}
 
-      const T0 = Date.now(), timing = {};
-      const useStore = req.body.live !== true && storeUsable(fromStr, phase);
-      const useStoreDrafts = req.body.live !== true && storeEnabled && st.ready && st.draftsLoaded;
-      if (useStore || useStoreDrafts) { const t = Date.now(); await freshen(); timing.freshenMs = Date.now() - t; }
+function detail(recs) {
+  if (!recs.length) return '<div class="result-sub" style="padding:8px 0">No drafts or orders found.</div>';
+  return recs.slice().sort(function(a, b) { return new Date(b.createdAt) - new Date(a.createdAt); }).map(function(r) {
+    var parts = [];
+    if (r.open) parts.push(num(r.open) + ' open · ' + usd(r.openValue));
+    if (r.fulfilled) parts.push(num(r.fulfilled) + ' fulfilled · ' + usd(r.fulfilledValue));
+    return '<div class="drow"><span class="badge ' + r.type + '">' + (r.type === 'draft' ? 'Draft' : 'Order') + '</span>' +
+      '<span><b>' + esc(r.name) + '</b></span>' +
+      '<span>' + esc(new Date(r.createdAt).toLocaleDateString()) + '</span>' +
+      '<span class="d-title" style="color:var(--muted)">' + esc(r.label) + (view === 'sku' ? '' : ' · ' + esc(r.sku)) + '</span>' +
+      '<span class="d-qty">' + parts.join('<br>') + '</span></div>';
+  }).join('');
+}
 
-      // Drafts: from the store when it has them, otherwise the cached live pull.
-      let t1 = Date.now();
-      if (wantOpen && useStoreDrafts) {
-        for (const r of await queryStoreDrafts({ customerIds, skus })) {
-          records.push({
-            type: "draft", name: r.name, createdAt: new Date(r.created_at).toISOString(),
-            customerId: r.customer_id || "", label: r.label || "Unknown",
-            sku: r.sku || "—", title: r.title || "",
-            open: r.quantity, fulfilled: 0,
-            openValue: money(r.total), fulfilledValue: 0,
-          });
-        }
-        timing.drafts = "store";
-      } else if (wantOpen) {
-        for (const d of await getOpenDrafts()) {
-          if (idSet.size && !idSet.has(gidNum(d.customer?.id))) continue;
-          for (const e of d.lineItems?.edges || []) {
-            const li = e.node;
-            const sku = (li.sku || "").toUpperCase();
-            if (skuSet.size && !skuSet.has(sku)) continue;
-            if (!li.quantity) continue;
-            records.push({
-              type: "draft", name: d.name, createdAt: d.createdAt,
-              customerId: gidNum(d.customer?.id), label: labelOf(d),
-              sku: sku || "—", title: li.title || "",
-              open: li.quantity, fulfilled: 0,
-              openValue: money(li.discountedTotalSet?.shopMoney?.amount), fulfilledValue: 0,
-            });
-          }
-        }
-        timing.drafts = "live";
-      }
-      timing.draftsMs = Date.now() - t1;
-
-      // One place that turns an order line into a record, for both data sources.
-      const addOrderRecord = o => {
-        const open = wantOpen ? o.rawOpen : 0;
-        const fulfilled = wantFul && o.inRange ? Math.max(0, o.current - o.rawOpen) : 0;
-        if (!open && !fulfilled) return;
-        records.push({
-          type: "order", name: o.name, createdAt: o.createdAt,
-          customerId: o.customerId, label: o.label,
-          sku: o.sku || "—", title: o.title || "",
-          open, fulfilled,
-          openValue: money(open * o.unit), fulfilledValue: money(fulfilled * o.unit),
-        });
-      };
-
-      let source = "live", asOf = new Date().toISOString();
-      t1 = Date.now();
-      if (useStore) {
-        // Fast path: Postgres.
-        const rows = await queryStore({ customerIds, skus, fromStr, toExclusiveStr });
-        for (const r of rows) {
-          addOrderRecord({
-            name: r.name, createdAt: new Date(r.created_at).toISOString(), customerId: r.customer_id || "",
-            label: r.label || "Unknown", sku: r.sku, title: r.title,
-            rawOpen: Math.max(0, r.unfulfilled_quantity || 0), current: r.current_quantity || 0,
-            unit: parseFloat(r.unit_price) || 0, inRange: !!r.in_range,
-          });
-        }
-        source = "store";
-        if (st.lastSyncAt) asOf = new Date(st.lastSyncAt).toISOString();
-      } else {
-        // Fallback: live Shopify search (same behavior as before the store existed).
-        // Orders — two searches per customer chunk, deduped by order id:
-        //   A) anything still unfulfilled/partial, any age (this is "on order")
-        //   B) anything created inside the date range (this feeds "fulfilled")
-        const skuClause = skus.length ? "(" + skus.map(s => `sku:"${s}"`).join(" OR ") + ")" : "";
-        const chunks = customerIds.length
-          ? Array.from({ length: Math.ceil(customerIds.length / ID_CHUNK) }, (_, i) => customerIds.slice(i * ID_CHUNK, (i + 1) * ID_CHUNK))
-          : [[]];
-
-        const orderMap = new Map();
-        const jobs = [];
-        for (const chunk of chunks) {
-          const custClause = chunk.length ? "(" + chunk.map(i => `customer_id:${i}`).join(" OR ") + ")" : "";
-          const base = ["-status:cancelled", custClause, skuClause].filter(Boolean).join(" ");
-          if (wantOpen) jobs.push(`${base} (fulfillment_status:unfulfilled OR fulfillment_status:partial)`);
-          // Only orders that can have shipped units; skips never-fulfilled orders in the range.
-          if (wantFul) jobs.push(`${base} (fulfillment_status:fulfilled OR fulfillment_status:partial) created_at:>=${fromStr} created_at:<${toExclusiveStr}`);
-        }
-        // A few searches at a time; three is a deliberate ceiling for Shopify's cost throttle.
-        let next = 0;
-        const worker = async () => {
-          while (next < jobs.length) {
-            const q = jobs[next++];
-            const nodes = await gqlAll(b2bStore, b2bToken, ORDERS_QUERY,
-              { first: PAGE, query: q },
-              d => d.orders.edges, d => d.orders.pageInfo, 120000);
-            for (const n of nodes) orderMap.set(n.id, n);
-          }
-        };
-        await Promise.all(Array.from({ length: Math.min(3, jobs.length) }, worker));
-        await completeLines([...orderMap.values()], MORE_LINES_QUERY, "order");
-
-        for (const o of orderMap.values()) {
-          if (o.cancelledAt) continue;
-          if (idSet.size && !idSet.has(gidNum(o.customer?.id))) continue;
-          const inRange = new Date(o.createdAt).getTime() >= fromMs && new Date(o.createdAt) < toExclusive;
-          for (const e of o.lineItems?.edges || []) {
-            const li = e.node;
-            const sku = (li.sku || "").toUpperCase();
-            if (skuSet.size && !skuSet.has(sku)) continue;
-            addOrderRecord({
-              name: o.name, createdAt: o.createdAt, customerId: gidNum(o.customer?.id), label: labelOf(o),
-              sku, title: li.title,
-              rawOpen: Math.max(0, li.unfulfilledQuantity ?? 0), current: li.currentQuantity ?? li.quantity ?? 0,
-              unit: parseFloat(li.discountedUnitPriceSet?.shopMoney?.amount) || 0, inRange,
-            });
-          }
-        }
-      }
-
-      timing.ordersMs = Date.now() - t1; timing.orders = source; timing.totalMs = Date.now() - T0;
-      console.log(`[analytics] query ${phase} ${customerIds.length} cust/${skus.length} sku: ${timing.totalMs}ms (orders ${source} ${timing.ordersMs}ms, drafts ${timing.drafts || "-"} ${timing.draftsMs}ms, freshen ${timing.freshenMs || 0}ms)`);
-      res.json({
-        asOf,
-        source,
-        timing,
-        phase,
-        range: { from: fromStr, to: toStr },
-        records,
-      });
-    } catch (err) {
-      console.error("[analytics] query error:", err);
-      const hint = /access denied|scope/i.test(err.message)
-        ? " (B2B token may be missing read_customers)" : "";
-      res.status(500).json({ error: err.message + hint });
-    }
+// ── Export ───────────────────────────────────────────────────────────────────
+function csvEsc(v) {
+  var s = String(v == null ? '' : v);
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function exportCsv() {
+  if (screen === 'overview') return exportOverviewCsv();
+  if (!lastData || !lastData.records.length) return;
+  var lines = [['Type', 'Document', 'Created', 'Customer', 'SKU', 'Product', 'Open Qty', 'Open $', 'Fulfilled Qty', 'Fulfilled $'].map(csvEsc).join(',')];
+  lastData.records.forEach(function(r) {
+    lines.push([r.type, r.name, r.createdAt.slice(0, 10), companyOf(r).label, r.sku, r.title,
+      r.open, (r.openValue || 0).toFixed(2), r.fulfilled, (r.fulfilledValue || 0).toFixed(2)].map(csvEsc).join(','));
   });
-};
+  var blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'analytics-' + new Date().toISOString().slice(0, 10) + '.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function showError(msg) { var el = $('errorBanner'); el.textContent = 'Error: ' + msg; el.style.display = 'block'; }
+function hideError() { $('errorBanner').style.display = 'none'; }
+</script>
+</body>
+</html>
