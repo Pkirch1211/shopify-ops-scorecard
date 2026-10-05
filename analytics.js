@@ -25,6 +25,7 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
   const PAGE = 50;
 
   let directoryCache = null, directoryCacheTime = 0, building = null;
+  const dirInfo = { lastOk: null, lastError: null, lastErrorAt: null };
   let draftsCache = null, draftsCacheTime = 0;
 
   const gidNum = id => (id || "").split("/").pop();
@@ -307,6 +308,7 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
         directoryCache = list;
         directoryCacheTime = Date.now();
         await saveDirectory(list);
+        dirInfo.lastOk = new Date().toISOString(); dirInfo.lastError = null;
         console.log(`[analytics] directory refreshed: ${list.length} customers`);
         return list;
       } finally { building = null; }
@@ -316,6 +318,7 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
 
   const bgRefresh = () => refreshDirectory().catch(e => {
     console.warn("[analytics] background refresh failed:", e.message);
+    dirInfo.lastError = e.message; dirInfo.lastErrorAt = new Date().toISOString();
     setTimeout(() => { if (!building && (!directoryCache || Date.now() - directoryCacheTime > DIRECTORY_TTL)) bgRefresh(); }, 2 * 60 * 1000).unref?.();   // retry in 2 min, not 15
   });
   const storeReady = initStore();
@@ -791,6 +794,18 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
       openOrdersLoaded: st.openLoaded, openDraftsLoaded: st.draftsLoaded, coveredFrom: st.coveredFrom, targetMonths: STORE_MONTHS,
       lastSync: st.lastSyncAt ? new Date(st.lastSyncAt).toISOString() : null,
     };
+    try {   // customer-list (grouping) diagnostics
+      const cfg = loadGroupRules();
+      out.directory = {
+        entries: directoryCache ? directoryCache.length : null,
+        builtThisBoot: !!dirInfo.lastOk, lastOk: dirInfo.lastOk, building: !!building,
+        lastError: dirInfo.lastError, lastErrorAt: dirInfo.lastErrorAt,
+        savedAt: directoryCacheTime ? new Date(directoryCacheTime).toISOString() : null,
+        groupRules: cfg.rules.length,
+        hasTjxRule: cfg.rules.some(r => r.parent === "TJX Companies"),
+        hasFaireRule: cfg.rules.some(r => r.parent === "Faire"),
+      };
+    } catch (_) {}
     try {
       if (st.ready) {
         const r = await db.query("SELECT (SELECT COUNT(*) FROM analytics_orders) AS orders, (SELECT COUNT(*) FROM analytics_lines) AS lines");
