@@ -707,10 +707,6 @@ function renderOverview() {
   html += '<div class="ov-tools"><input type="text" id="ovFilter" placeholder="' + (view === 'customer' ? 'Filter customers…' : 'Filter SKUs or products…') + '" value="' + esc(ovFilter) + '" autocomplete="off">' +
     (hidden ? '<label class="toggle"><input type="checkbox" id="ovIdle"' + (ovIdle ? ' checked' : '') + '> Include ' + plural(hidden, 'customer') + ' with open orders or drafts but nothing placed this year</label>' : '') +
     '</div><div id="ovTable"></div>';
-  html += '<div class="note"><b>Heads up:</b> Year-to-date is the merchandise value of non-cancelled orders placed since Jan 1 (units × unit price after line-level discounts; order-level discounts, tax and shipping not included). ' +
-    'On order = open drafts + unfulfilled orders. ' + (view === 'customer' && !hasSku ? 'Customers with no orders this year are left out of the table. ' : '') +
-    'Orders received in MarketTime that haven\'t transferred to Shopify yet are not included. ' +
-    'Click a row for the detail' + (view === 'customer' ? ' by SKU' : ' by customer') + ', or a column heading to sort.</div>';
   $('results').innerHTML = html;
   renderOverviewTable();
 }
