@@ -1,7 +1,31 @@
 {
-  "_readme": "Rolls individual store records up into one parent in the Analytics dropdown. Rules are checked top to bottom; first match wins. 'startsWith' ignores case, punctuation and extra spaces. After the rules, autoStrip trims store numbers and ' - Location' suffixes (e.g. \"Trudy's Hallmark #100\" -> \"Trudy's Hallmark\"). Names that match nothing stay as their own entry. Edit, commit, and the next directory refresh (or ?refresh=true) picks it up.",
+  "_readme": "Rolls individual store records up into one parent in the Analytics dropdown. Rules are checked top to bottom; first match wins. Each rule has a parent plus ONE of: 'startsWith' (name begins with), 'contains' (whole words anywhere in the name) or 'regex' (case-insensitive, matched on the raw name). 'startsWith'/'contains' ignore case, punctuation and extra spaces. After the rules, autoStrip trims store numbers and ' - Location' suffixes (e.g. \"Trudy's Hallmark #100\" -> \"Trudy's Hallmark\"). Names that match nothing stay as their own entry. Edit, commit, and the next directory refresh (or ?refresh=true) picks it up.",
   "autoStrip": true,
   "rules": [
+    {
+      "regex": "^[a-z]{3}:\\s.*\\bdc\\s*#",
+      "parent": "TJX Companies"
+    },
+    {
+      "startsWith": "tjx",
+      "parent": "TJX Companies"
+    },
+    {
+      "startsWith": "tjmaxx",
+      "parent": "TJX Companies"
+    },
+    {
+      "startsWith": "t j maxx",
+      "parent": "TJX Companies"
+    },
+    {
+      "startsWith": "homegoods",
+      "parent": "TJX Companies"
+    },
+    {
+      "startsWith": "marshalls",
+      "parent": "TJX Companies"
+    },
     {
       "startsWith": "learning express",
       "parent": "Learning Express"
