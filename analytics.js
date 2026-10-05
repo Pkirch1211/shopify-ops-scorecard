@@ -148,11 +148,12 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
       const raw = JSON.parse(require("fs").readFileSync(require("path").join(__dirname, "analytics-groups.json"), "utf8"));
       return {
         autoStrip: raw.autoStrip !== false,
-        rules: (raw.rules || []).filter(r => r && r.parent && (r.startsWith || r.contains || r.regex)).map(r => {
+        rules: (raw.rules || []).filter(r => r && r.parent && (r.startsWith || r.contains || r.regex || r.customerName || r.email)).map(r => {
           let re = null;
           if (r.regex) { try { re = new RegExp(r.regex, "i"); } catch (e) { console.warn("[analytics] bad regex in analytics-groups.json:", r.regex); } }
           if (r.regex && !re) return null;
-          return { p: r.startsWith ? normName(r.startsWith) : "", c: r.contains ? normName(r.contains) : "", re, parent: String(r.parent).trim() };
+          return { p: r.startsWith ? normName(r.startsWith) : "", c: r.contains ? normName(r.contains) : "", re,
+            cn: r.customerName ? normName(r.customerName) : "", em: r.email ? String(r.email).trim().toLowerCase() : "", parent: String(r.parent).trim() };
         }).filter(Boolean),
         never: new Set((raw.neverGroup || []).map(normName)),
       };
@@ -169,10 +170,13 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
     const score = x => (x !== x.toUpperCase() ? 4 : 0) + (x !== x.toLowerCase() ? 1 : 0) + (/['’]/.test(x) ? 2 : 0);
     return score(b) > score(a) ? b : a;
   };
-  function parentOf(label, cfg) {
+  function parentOf(label, cfg, who) {   // who = { name, email } of the Shopify customer record (optional)
     const n = normName(label);
     if (cfg.never.has(n)) return label;
     for (const r of cfg.rules) {
+      // customer-record rules: for marketplace accounts (Faire) whose default address is overwritten with each retailer
+      if (who && r.cn && normName(who.name) === r.cn) return r.parent;
+      if (who && r.em && String(who.email || "").trim().toLowerCase() === r.em) return r.parent;
       if (r.p && n.startsWith(r.p)) return r.parent;
       if (r.c && (" " + n + " ").includes(" " + r.c + " ")) return r.parent;
       if (r.re && r.re.test(String(label))) return r.parent;   // regex runs on the raw name
@@ -195,7 +199,7 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
     const idToGroup = new Map();
     const add = (id, company, name, email) => {
       const store = (company || name || email || "Unknown").trim();
-      const label = parentOf(store, groupCfg);
+      const label = parentOf(store, groupCfg, { name, email });
       const key = looseKey(label) || label.toLowerCase();
       if (!groups.has(key)) groups.set(key, { key, label, ids: new Set(), emails: new Set(), members: new Set(), ytd: 0, ytdOrders: 0, drafts: 0 });
       const g = groups.get(key);
