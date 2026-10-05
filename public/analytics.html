@@ -556,7 +556,7 @@ async function runQuery(skus) {
   function req(phase) {
     return api('/api/analytics/query', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ customerIds: ids, skus: skus, from: r.from, to: r.to, phase: phase }),
+      body: JSON.stringify({ customerIds: ids, skus: skus, from: r.from, to: r.to, phase: phase, live: /[?&]live=1\b/.test(location.search) }),
     });
   }
   // Both halves start now; the open half finishes first and paints immediately.
@@ -565,7 +565,7 @@ async function runQuery(skus) {
   try {
     var open = await req('open');
     if (my !== runId) return;
-    lastData = { asOf: open.asOf, range: open.range, records: open.records };
+    lastData = { asOf: open.asOf, source: open.source, range: open.range, records: open.records };
     render();
     $('status').textContent = 'Open orders loaded · loading fulfilled history…';
   } catch (err) {
@@ -588,6 +588,7 @@ async function runQuery(skus) {
   fulPending = false;
   render();
   $('status').textContent = 'As of ' + new Date(lastData.asOf).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) +
+    (lastData.source === 'live' ? ' · live from Shopify' : '') +
     (fulError ? ' · fulfilled unavailable' : '');
   $('csvBtn').style.display = lastData.records.length ? 'inline-block' : 'none';
 }
