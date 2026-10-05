@@ -39,7 +39,7 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
   query AnalyticsCustomers($first: Int!, $after: String, $query: String) {
     customers(first: $first, after: $after, query: $query, sortKey: NAME) {
       pageInfo { hasNextPage endCursor }
-      edges { node { id displayName email defaultAddress { company } } }
+      edges { node { id displayName email defaultAddress { company } companyContactProfiles { company { name } } } }
     }
   }`;
 
@@ -144,9 +144,64 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
   // roll up to one parent in the dropdown. Rules live in analytics-groups.json
   // next to this file; a missing or broken file just means no explicit rules.
   const normName = s => String(s || "").toLowerCase().replace(/[’‘`]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
+  // Built-in defaults, used when analytics-groups.json is not deployed next to this file.
+  // If the file IS there it replaces these completely, so edit one or the other, not both.
+  const DEFAULT_GROUPS = {
+    "_readme": "Rolls individual store records up into one parent in the Analytics dropdown. Rules are checked top to bottom; first match wins. Each rule has a parent plus ONE of: 'startsWith' (name begins with), 'contains' (whole words anywhere in the name) or 'regex' (case-insensitive, matched on the raw name). 'startsWith'/'contains' ignore case, punctuation and extra spaces. After the rules, autoStrip trims store numbers and ' - Location' suffixes (e.g. \"Trudy's Hallmark #100\" -> \"Trudy's Hallmark\"). Names that match nothing stay as their own entry. Edit, commit, and the next directory refresh (or ?refresh=true) picks it up. Marketplace accounts whose address changes with every order (Faire): use 'customerName' (the Shopify customer name) or 'email' (the customer's email) instead \u2014 they match the customer record, not the address.",
+    "autoStrip": true,
+    "rules": [
+      {
+        "customerName": "Faire Marketplace",
+        "parent": "Faire"
+      },
+      {
+        "email": "faire@lifelines.com",
+        "parent": "Faire"
+      },
+      {
+        "regex": "^[a-z]{3}:\\s.*\\bdc\\s*#",
+        "parent": "TJX Companies"
+      },
+      {
+        "startsWith": "tjx",
+        "parent": "TJX Companies"
+      },
+      {
+        "startsWith": "tjmaxx",
+        "parent": "TJX Companies"
+      },
+      {
+        "startsWith": "t j maxx",
+        "parent": "TJX Companies"
+      },
+      {
+        "startsWith": "homegoods",
+        "parent": "TJX Companies"
+      },
+      {
+        "startsWith": "marshalls",
+        "parent": "TJX Companies"
+      },
+      {
+        "startsWith": "learning express",
+        "parent": "Learning Express"
+      },
+      {
+        "startsWith": "new seasons market",
+        "parent": "New Seasons Market"
+      },
+      {
+        "startsWith": "hobbytown",
+        "parent": "HobbyTown"
+      }
+    ],
+    "neverGroup": []
+  };
   function loadGroupRules() {
     try {
-      const raw = JSON.parse(require("fs").readFileSync(require("path").join(__dirname, "analytics-groups.json"), "utf8"));
+      let raw;
+      try { raw = JSON.parse(require("fs").readFileSync(require("path").join(__dirname, "analytics-groups.json"), "utf8")); }
+      catch (e) { if (e.code !== "ENOENT") throw e; raw = DEFAULT_GROUPS; }
       return {
         autoStrip: raw.autoStrip !== false,
         rules: (raw.rules || []).filter(r => r && r.parent && (r.startsWith || r.contains || r.regex || r.customerName || r.email)).map(r => {
@@ -183,7 +238,7 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
       if (r.re && r.re.test(String(label))) return r.parent;   // regex runs on the raw name
     }
     if (cfg.autoStrip) {
-      const cut = label.split(/\s+#\s*\d|\s+[-–—]\s+/)[0].replace(/[\s,\-–—]+$/, "").trim();
+      const cut = label.split(/\s+#\s*(?:\d|wh\b)|\s+[-–—]\s+/i)[0].replace(/[\s,\-–—]+$/, "").trim();
       if (cut.length >= 3) return cut;
     }
     return label;
@@ -210,14 +265,19 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
       if (email) g.emails.add(email.toLowerCase());
     };
 
-    for (const c of customers) add(gidNum(c.id), c.defaultAddress?.company, c.displayName, c.email);
+    // Name to show: the address company, else the B2B company the contact belongs to (so a buyer
+    // like "Noreen Batdorf" lists under "Norman's Hallmark"), else the person's own name.
+    for (const c of customers) add(gidNum(c.id), c.defaultAddress?.company || c.companyContactProfiles?.[0]?.company?.name, c.displayName, c.email);
 
     // Customers that only exist on an open draft (brand-new accounts), plus an
     // open-draft count per company so new accounts still rank as "active".
     try {
       for (const d of await getOpenDrafts()) {
         if (!d.customer?.id) continue;
-        add(gidNum(d.customer.id), d.shippingAddress?.company || d.billingAddress?.company, d.customer.displayName, d.email);
+        // A customer already in the list stays where it is: a draft shipped to some other
+        // address ("Trudy's Hallmark #WH") must not create a second entry for the same id.
+        if (!idToGroup.has(gidNum(d.customer.id)))
+          add(gidNum(d.customer.id), d.shippingAddress?.company || d.billingAddress?.company, d.customer.displayName, d.email);
         const g = idToGroup.get(gidNum(d.customer.id));
         if (g) g.drafts++;
       }
@@ -260,7 +320,7 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
   const GROUPING_VERSION = 3;
   function groupingSig() {
     let file = "";
-    try { file = require("fs").readFileSync(require("path").join(__dirname, "analytics-groups.json"), "utf8"); } catch (_) {}
+    try { file = require("fs").readFileSync(require("path").join(__dirname, "analytics-groups.json"), "utf8"); } catch (_) { file = JSON.stringify(DEFAULT_GROUPS); }
     return GROUPING_VERSION + ":" + require("crypto").createHash("md5").update(file).digest("hex").slice(0, 10);
   }
   let needsRebuildNow = false;
@@ -813,6 +873,74 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
       }
     } catch (_) {}
     res.json(out);
+  });
+
+  // ── Data audit: /api/analytics/audit ───────────────────────────────────────
+  // Read-only sanity checks on the customer list and the order store, so
+  // duplicates and gaps can be seen instead of guessed at.
+  app.get("/api/analytics/audit", async (req, res) => {
+    const out = { checkedAt: new Date().toISOString() };
+    try {
+      await storeReady;
+      const list = directoryCache || [];
+      // 1) customer list: one customer id must live in exactly one entry
+      const seen = new Map(), multi = [];
+      for (const c of list) for (const id of c.ids) {
+        if (seen.has(id) && seen.get(id) !== c.label) multi.push({ id, entries: [seen.get(id), c.label] });
+        else seen.set(id, c.label);
+      }
+      const keyCount = new Map();
+      for (const c of list) keyCount.set(c.key, (keyCount.get(c.key) || 0) + 1);
+      // 2) near-duplicate names: same first two words once case/punctuation/store numbers are ignored
+      const stem = l => normName(l).replace(/\b(inc|llc|ltd|co|corp|company|the)\b/g, "").replace(/[0-9#]+/g, "").replace(/\s+/g, " ").trim().split(" ").slice(0, 2).join(" ").replace(/'/g, "");
+      const byStem = new Map();
+      for (const c of list) { const k = stem(c.label); if (k.length >= 4) { if (!byStem.has(k)) byStem.set(k, []); byStem.get(k).push(c.label); } }
+      const near = [...byStem.values()].filter(a => a.length > 1).sort((a, b) => b.length - a.length);
+      out.customerList = {
+        entries: list.length,
+        idsInMoreThanOneEntry: multi.length, idsInMoreThanOneEntrySample: multi.slice(0, 15),
+        duplicateKeys: [...keyCount].filter(([, n]) => n > 1).length,
+        similarNameGroups: near.length,
+        similarNameGroupsSample: near.slice(0, 40),
+      };
+      // 3) order store
+      if (st.ready) {
+        const q = async sql => (await db.query(sql)).rows;
+        const dupNames = await q(`SELECT name, COUNT(*) AS n FROM analytics_orders GROUP BY name HAVING COUNT(*) > 1 ORDER BY n DESC LIMIT 15`);
+        const dupDraftNames = await q(`SELECT name, COUNT(*) AS n FROM analytics_drafts GROUP BY name HAVING COUNT(*) > 1 ORDER BY n DESC LIMIT 15`);
+        const noLines = await q(`SELECT COUNT(*) AS n FROM analytics_orders o WHERE NOT EXISTS (SELECT 1 FROM analytics_lines l WHERE l.order_id = o.id)`);
+        const orphanLines = await q(`SELECT (SELECT COUNT(*) FROM analytics_lines l WHERE NOT EXISTS (SELECT 1 FROM analytics_orders o WHERE o.id = l.order_id)) AS ol,
+                                            (SELECT COUNT(*) FROM analytics_draft_lines l WHERE NOT EXISTS (SELECT 1 FROM analytics_drafts d WHERE d.id = l.draft_id)) AS odl`);
+        const custs = await q(`SELECT customer_id AS cid, MAX(label) AS label, COUNT(*) AS n FROM (
+                                 SELECT customer_id, label FROM analytics_orders WHERE customer_id IS NOT NULL
+                                 UNION ALL SELECT customer_id, label FROM analytics_drafts WHERE customer_id IS NOT NULL) x GROUP BY customer_id`);
+        const orphans = custs.filter(r => !seen.has(r.cid));
+        const noCust = await q(`SELECT (SELECT COUNT(*) FROM analytics_orders WHERE customer_id IS NULL) AS o, (SELECT COUNT(*) FROM analytics_drafts WHERE customer_id IS NULL) AS d`);
+        out.store = {
+          orders: (await q(`SELECT COUNT(*) AS n FROM analytics_orders`))[0].n * 1, drafts: (await q(`SELECT COUNT(*) AS n FROM analytics_drafts`))[0].n * 1,
+          orderNamesUsedTwice: dupNames.map(r => ({ name: r.name, times: Number(r.n) })),
+          draftNamesUsedTwice: dupDraftNames.map(r => ({ name: r.name, times: Number(r.n) })),
+          ordersWithNoLines: Number(noLines[0].n),
+          lineRowsWithNoParent: Number(orphanLines[0].ol) + Number(orphanLines[0].odl),
+          ordersWithNoCustomer: Number(noCust[0].o), draftsWithNoCustomer: Number(noCust[0].d),
+          customerIdsMissingFromList: orphans.length,
+          customerIdsMissingFromListSample: orphans.sort((a, b) => b.n - a.n).slice(0, 15).map(r => ({ id: r.cid, label: r.label, records: Number(r.n) })),
+        };
+        // 4) landing-table totals must equal the sum of its rows
+        if (overviewReady()) {
+          const rows = await overviewByCustomer(yearStartStr());
+          const skuRows = await overviewBySku(yearStartStr());
+          const sum = (a, k) => r2(a.reduce((t, x) => t + x[k], 0));
+          out.totalsCrossCheck = {
+            ytdValue_byCustomer: sum(rows, "ytdValue"), ytdValue_bySku: sum(skuRows, "ytdValue"),
+            openValue_byCustomer: r2(sum(rows, "unfValue") + sum(rows, "draftValue")), openValue_bySku: r2(sum(skuRows, "unfValue") + sum(skuRows, "draftValue")),
+          };
+          out.totalsCrossCheck.ytdMatches = Math.abs(out.totalsCrossCheck.ytdValue_byCustomer - out.totalsCrossCheck.ytdValue_bySku) < 1;
+          out.totalsCrossCheck.openMatches = Math.abs(out.totalsCrossCheck.openValue_byCustomer - out.totalsCrossCheck.openValue_bySku) < 1;
+        } else out.totalsCrossCheck = "store not fully loaded yet";
+      } else out.store = "order store not available";
+      res.json(out);
+    } catch (e) { console.error("[analytics] audit error:", e); res.status(500).json({ error: e.message }); }
   });
 
   // ── Overview aggregates (landing tables) ───────────────────────────────────
