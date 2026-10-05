@@ -318,10 +318,10 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
       await storeReady;
       if (req.query.refresh === "true" || !directoryCache) {
         const list = await refreshDirectory();
-        return res.json({ customers: await withStoreVolume(list), cached: false });
+        return res.json({ customers: list, cached: false });
       }
       if (Date.now() - directoryCacheTime > DIRECTORY_TTL) bgRefresh(); // serve now, refresh behind
-      res.json({ customers: await withStoreVolume(directoryCache), cached: true, updatedAt: new Date(directoryCacheTime).toISOString() });
+      res.json({ customers: directoryCache, cached: true, updatedAt: new Date(directoryCacheTime).toISOString() });
     } catch (err) {
       console.error("[analytics] directory error:", err);
       if (directoryCache) return res.json({ customers: directoryCache, cached: true, stale: true });
@@ -782,137 +782,6 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
     } catch (_) {}
     res.json(out);
   });
-
-  // ── Overview aggregates (landing tables) ───────────────────────────────────
-  // One SQL pass over the store gives every customer (or SKU) at once. Needs the
-  // store to cover the whole year plus all open orders and drafts; otherwise the
-  // endpoint says "not ready yet" with progress and the page keeps retrying.
-  const yearStartStr = () => `${new Date().getUTCFullYear()}-01-01`;
-  function overviewReady() {
-    return storeEnabled && st.ready && st.openLoaded && st.draftsLoaded && !!st.coveredFrom && st.coveredFrom <= yearStartStr();
-  }
-  const r2 = v => Math.round((Number(v) || 0) * 100) / 100;
-
-  // Filters shared by the order and draft halves: SKU list and customer-id list.
-  function ovFilters(alias, lineAlias, skus, cids, startIdx) {
-    const params = [], where = [];
-    if (skus.length) { params.push(skus); where.push(`${lineAlias}.sku = ANY($${startIdx + params.length - 1}::text[])`); }
-    if (cids.length) { params.push(cids); where.push(`${alias}.customer_id = ANY($${startIdx + params.length - 1}::text[])`); }
-    return { params, sql: where.length ? " AND " + where.join(" AND ") : "" };
-  }
-
-  async function overviewByCustomer(yearStart, skus = [], cids = []) {
-    const yS = yearStart + "T00:00:00Z";
-    const fo = ovFilters("o", "l", skus, cids, 2);
-    const orders = await db.query(
-      `SELECT o.customer_id AS cid, MAX(o.label) AS label,
-              COALESCE(SUM(CASE WHEN o.created_at >= $1::timestamptz THEN l.current_quantity * l.unit_price END), 0) AS ytd_value,
-              COALESCE(SUM(CASE WHEN o.created_at >= $1::timestamptz THEN l.current_quantity END), 0) AS ytd_units,
-              COUNT(DISTINCT CASE WHEN o.created_at >= $1::timestamptz AND l.current_quantity > 0 THEN o.id END) AS ytd_orders,
-              COALESCE(SUM(l.unfulfilled_quantity), 0) AS unf_units,
-              COALESCE(SUM(l.unfulfilled_quantity * l.unit_price), 0) AS unf_value,
-              COUNT(DISTINCT CASE WHEN l.unfulfilled_quantity > 0 THEN o.id END) AS unf_orders
-         FROM analytics_orders o JOIN analytics_lines l ON l.order_id = o.id
-        WHERE NOT o.cancelled AND o.customer_id IS NOT NULL
-          AND (o.created_at >= $1::timestamptz OR l.unfulfilled_quantity > 0)${fo.sql}
-        GROUP BY o.customer_id`, [yS, ...fo.params]);
-    const fd = ovFilters("d", "l", skus, cids, 1);
-    const drafts = await db.query(
-      `SELECT d.customer_id AS cid, MAX(d.label) AS label,
-              COALESCE(SUM(l.quantity), 0) AS draft_units, COALESCE(SUM(l.total), 0) AS draft_value,
-              COUNT(DISTINCT d.id) AS draft_count
-         FROM analytics_drafts d JOIN analytics_draft_lines l ON l.draft_id = d.id
-        WHERE d.customer_id IS NOT NULL AND l.quantity > 0${fd.sql}
-        GROUP BY d.customer_id`, fd.params);
-    const map = new Map();
-    const row = (cid, label) => {
-      if (!map.has(cid)) map.set(cid, { cid, label: label || "", ytdValue: 0, ytdUnits: 0, ytdOrders: 0, unfUnits: 0, unfValue: 0, unfOrders: 0, draftUnits: 0, draftValue: 0, draftCount: 0 });
-      return map.get(cid);
-    };
-    for (const x of orders.rows) {
-      const o = row(x.cid, x.label);
-      o.ytdValue = r2(x.ytd_value); o.ytdUnits = Number(x.ytd_units); o.ytdOrders = Number(x.ytd_orders);
-      o.unfUnits = Number(x.unf_units); o.unfValue = r2(x.unf_value); o.unfOrders = Number(x.unf_orders);
-    }
-    for (const x of drafts.rows) {
-      const o = row(x.cid, x.label);
-      o.draftUnits = Number(x.draft_units); o.draftValue = r2(x.draft_value); o.draftCount = Number(x.draft_count);
-    }
-    return [...map.values()];
-  }
-
-  async function overviewBySku(yearStart, cids = []) {
-    const yS = yearStart + "T00:00:00Z";
-    const fo = ovFilters("o", "l", [], cids, 2);
-    const orders = await db.query(
-      `SELECT l.sku, MAX(l.title) AS title,
-              COALESCE(SUM(CASE WHEN o.created_at >= $1::timestamptz THEN l.current_quantity * l.unit_price END), 0) AS ytd_value,
-              COALESCE(SUM(CASE WHEN o.created_at >= $1::timestamptz THEN l.current_quantity END), 0) AS ytd_units,
-              COALESCE(SUM(l.unfulfilled_quantity), 0) AS unf_units,
-              COALESCE(SUM(l.unfulfilled_quantity * l.unit_price), 0) AS unf_value
-         FROM analytics_orders o JOIN analytics_lines l ON l.order_id = o.id
-        WHERE NOT o.cancelled AND (o.created_at >= $1::timestamptz OR l.unfulfilled_quantity > 0)${fo.sql}
-        GROUP BY l.sku`, [yS, ...fo.params]);
-    const fd = ovFilters("d", "l", [], cids, 1);
-    const drafts = await db.query(
-      `SELECT l.sku, MAX(l.title) AS title, COALESCE(SUM(l.quantity), 0) AS draft_units, COALESCE(SUM(l.total), 0) AS draft_value
-         FROM analytics_drafts d JOIN analytics_draft_lines l ON l.draft_id = d.id
-        WHERE l.quantity > 0${fd.sql} GROUP BY l.sku`, fd.params);
-    // distinct customers with this SKU open, drafts and orders combined
-    const oc = ovFilters("o", "l", [], cids, 1), dc = ovFilters("d", "l", [], cids, 1 + oc.params.length);
-    const custs = await db.query(
-      `SELECT sku, COUNT(DISTINCT cid) AS n FROM (
-         SELECT l.sku, o.customer_id AS cid FROM analytics_orders o JOIN analytics_lines l ON l.order_id = o.id
-          WHERE NOT o.cancelled AND l.unfulfilled_quantity > 0${oc.sql}
-         UNION ALL
-         SELECT l.sku, d.customer_id FROM analytics_drafts d JOIN analytics_draft_lines l ON l.draft_id = d.id
-          WHERE l.quantity > 0${dc.sql}
-       ) x GROUP BY sku`, [...oc.params, ...dc.params]);
-    const map = new Map();
-    const row = (sku, title) => {
-      if (!map.has(sku)) map.set(sku, { sku, title: title || "", ytdValue: 0, ytdUnits: 0, unfUnits: 0, unfValue: 0, draftUnits: 0, draftValue: 0, openCustomers: 0 });
-      const o = map.get(sku); if (!o.title && title) o.title = title; return o;
-    };
-    for (const x of orders.rows) { const o = row(x.sku, x.title); o.ytdValue = r2(x.ytd_value); o.ytdUnits = Number(x.ytd_units); o.unfUnits = Number(x.unf_units); o.unfValue = r2(x.unf_value); }
-    for (const x of drafts.rows) { const o = row(x.sku, x.title); o.draftUnits = Number(x.draft_units); o.draftValue = r2(x.draft_value); }
-    for (const x of custs.rows) row(x.sku).openCustomers = Number(x.n);
-    return [...map.values()];
-  }
-
-  app.get("/api/analytics/overview", async (req, res) => {
-    try {
-      const yearStart = yearStartStr();
-      if (!overviewReady()) {
-        return res.json({ ready: false, status: {
-          enabled: storeEnabled, phase: st.phase, error: st.error, openOrdersLoaded: st.openLoaded, openDraftsLoaded: st.draftsLoaded,
-          coveredFrom: st.coveredFrom, needFrom: yearStart } });
-      }
-      const view = req.query.view === "sku" ? "sku" : "customer";
-      const skus = [...new Set(String(req.query.skus || "").split(",").map(x => x.trim().toUpperCase()).filter(x => x && SKU_RE.test(x)))];
-      const cids = [...new Set(String(req.query.cids || "").split(",").map(x => x.trim()).filter(x => /^\d+$/.test(x)))];
-      await freshen();
-      const t = Date.now();
-      const rows = view === "sku" ? await overviewBySku(yearStart, cids) : await overviewByCustomer(yearStart, skus, cids);
-      res.json({ ready: true, view, yearStart, asOf: st.lastSyncAt ? new Date(st.lastSyncAt).toISOString() : new Date().toISOString(), ms: Date.now() - t, rows });
-    } catch (err) {
-      console.error("[analytics] overview error:", err);
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // The dropdown ranks by YTD volume; when the store is ready use its numbers so
-  // the dropdown and the landing table always agree.
-  async function withStoreVolume(list) {
-    if (!overviewReady()) return list;
-    try {
-      const byId = new Map((await overviewByCustomer(yearStartStr())).map(r => [r.cid, r]));
-      return list.map(c => {
-        let ytd = 0, ytdOrders = 0, drafts = 0;
-        for (const id of c.ids) { const r = byId.get(id); if (r) { ytd += r.ytdValue; ytdOrders += r.ytdOrders; drafts += r.draftCount; } }
-        return { ...c, ytd: Math.round(ytd), ytdOrders, drafts };
-      });
-    } catch (e) { console.warn("[analytics] store volume overlay failed:", e.message); return list; }
-  }
 
   // ── POST query ─────────────────────────────────────────────────────────────
   // body: { customerIds: [numeric], skus: [string], from: 'YYYY-MM-DD', to: 'YYYY-MM-DD' }
