@@ -770,8 +770,7 @@ function renderSalesSmallReady() {
 // Built on demand: DRAFT_EXPORT_COLUMNS is declared further down the file.
 function smallReadyExportColumns() {
   return DRAFT_EXPORT_COLUMNS.concat([
-  { header: 'Ship Address',              type: 'text',  get: function(r) { return r.shipAddress || ''; } },
-  { header: 'Other Draft Same Location', type: 'text',  group: 'match', align: 'center',
+  { header: 'Other Draft Same Location', type: 'text',  group: 'match', align: 'center', flagY: true,
     get: function(r) { return r._match ? 'Y' : 'N'; } },
   { header: 'Matching Draft #',          type: 'text',  group: 'match',
     get: function(r) { return r._match ? r._match.name : ''; } },
@@ -870,6 +869,8 @@ var XLSX_DATE_FMT = 'mm-dd-yy';
 var XLSX_MATCH_HEADER_FILL = 'FF8A5C2A';
 var XLSX_MATCH_BODY_FILL = 'FFFBF6EE';
 var XLSX_MATCH_BORDER = 'FF8A5C2A';
+var XLSX_FLAG_FILL = 'FFFFC7CE';
+var XLSX_FLAG_FONT = 'FF9C0006';
 var XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 var excelJsPromise = null;
 
@@ -962,6 +963,11 @@ function buildXlsxWorkbook(sheetName, columns, rows) {
         cell.border = { bottom: { style: 'thin', color: { argb: XLSX_BORDER } } };
       }
       if (c.align) cell.alignment = { horizontal: c.align };
+      // Excel's standard "Light Red Fill with Dark Red Text" on Y flags.
+      if (c.flagY && vals[i] === 'Y') {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: XLSX_FLAG_FILL } };
+        cell.font = { name: XLSX_FONT, size: 11, bold: true, color: { argb: XLSX_FLAG_FONT } };
+      }
       if (c.type === 'money') cell.numFmt = XLSX_MONEY_FMT;
       else if (c.type === 'date') cell.numFmt = XLSX_DATE_FMT;
     });
