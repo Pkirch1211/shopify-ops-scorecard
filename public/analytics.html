@@ -88,7 +88,10 @@ main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
 .sku-block-title{font-size:13px;font-weight:700}
 .sku-block-title span{font-weight:400;color:var(--muted)}
 
-.tbl-wrap{border:1px solid var(--border);border-radius:3px;overflow-x:auto;background:var(--surface);box-shadow:var(--shadow);margin-bottom:6px}
+.tbl-wrap{border:1px solid var(--border);border-radius:3px;overflow:auto;max-height:calc(100vh - var(--hdr,0px) - 24px);background:var(--surface);box-shadow:var(--shadow);margin-bottom:6px}
+/* freeze pane: header row stays put while the rows scroll (first column is already frozen sideways) */
+thead th{position:sticky;top:0;z-index:3;box-shadow:0 1px 0 var(--border)}
+thead th:first-child{z-index:5}
 table{width:100%;border-collapse:separate;border-spacing:0;font-size:13px}
 th{background:var(--surface2);text-align:right;font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;cursor:pointer;user-select:none}
 th:hover{color:var(--text)}
@@ -174,7 +177,7 @@ tr.main[data-ci]{cursor:pointer}
   /* table -> one card per row, so nothing hides off the right edge */
   .msort{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:11px;color:var(--muted)}
   .msort select{flex:1;font-family:var(--sans);font-size:16px;height:40px;padding:0 8px;background:#fff;border:1px solid var(--border2);border-radius:2px;color:var(--text)}
-  .tbl-wrap{border:none;background:none;box-shadow:none;overflow:visible}
+  .tbl-wrap{border:none;background:none;box-shadow:none;overflow:visible;max-height:none}
   table,tbody{display:block}
   thead{display:none}
   tr.main,tr.total{display:grid;grid-template-columns:repeat(3,1fr);gap:10px 8px;background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:12px;margin-bottom:8px;box-shadow:var(--shadow)}
@@ -276,6 +279,11 @@ var hlIndex = -1, matches = [];
 var sortState = { key: null, dir: 'desc' };
 var runId = 0, runTimer = null;
 var screen = 'empty';           // 'overview' | 'detail' | 'empty'
+(function() {   // height of the sticky top bar, so the frozen table header sits just below it
+  function setHdr() { var h = document.querySelector('header'); if (h) document.documentElement.style.setProperty('--hdr', (getComputedStyle(h).position === 'sticky' ? h.offsetHeight : 0) + 'px'); }
+  setHdr(); window.addEventListener('resize', setHdr); window.addEventListener('load', setHdr);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(setHdr);
+})();
 var overview = null, ovTimer = null, ovSort = { key: null, dir: 'desc' }, ovLimit = 100, ovFilter = '', ovIdle = false, ovShown = [];
 var directoryPromise = null;
 var fulPending = false, fulError = '';   // fulfilled history loads after the open numbers
