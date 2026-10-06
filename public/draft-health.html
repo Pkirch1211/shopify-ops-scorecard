@@ -761,14 +761,14 @@ function renderSalesSmallReady() {
   }
 }
 
-// Ready to Release export = the standard draft columns, plus a highlighted
+// Ready to Release Under $75 (sales) export = the standard draft columns, plus a highlighted
 // "same location" block: is another open draft headed to this ship-to, which
 // one (first in list order if several), and that draft's in-stock value.
 // Matching uses the exact same rules as the Consolidation panel
 // (computeAddressGroups): server-side addressKey, excluded-customer drafts
 // ignored, drafts with no address never match.
 // Built on demand: DRAFT_EXPORT_COLUMNS is declared further down the file.
-function readyExportColumns() {
+function smallReadyExportColumns() {
   return DRAFT_EXPORT_COLUMNS.concat([
   { header: 'Ship Address',              type: 'text',  get: function(r) { return r.shipAddress || ''; } },
   { header: 'Other Draft Same Location', type: 'text',  group: 'match', align: 'center',
@@ -794,15 +794,15 @@ function findSameLocationMatch(r) {
 function exportReadyToRelease() {
   var rows = allDrafts.filter(function(r) { return r.status === 'instock-ready' && (r.totalPrice || 0) >= BACKORDER_HOLD_VALUE; });
   if (!rows.length) return;
-  // Wrap rather than mutate allDrafts rows.
-  var out = rows.map(function(r) { return Object.assign({}, r, { _match: findSameLocationMatch(r) }); });
-  exportTable('ready-to-release', readyExportColumns(), out);
+  doExport(rows, 'ready-to-release');
 }
 
 function exportReadySmallValue() {
   var rows = getReadySmallValueRows();
   if (!rows.length) return;
-  doExport(rows, 'ready-release-under-75-sales');
+  // Wrap rather than mutate allDrafts rows.
+  var out = rows.map(function(r) { return Object.assign({}, r, { _match: findSameLocationMatch(r) }); });
+  exportTable('ready-release-under-75-sales', smallReadyExportColumns(), out);
 }
 
 function exportInvShortage() {
