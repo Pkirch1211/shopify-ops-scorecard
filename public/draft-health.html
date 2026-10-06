@@ -761,10 +761,42 @@ function renderSalesSmallReady() {
   }
 }
 
+// Ready to Release export = the standard draft columns, plus a highlighted
+// "same location" block: is another open draft headed to this ship-to, which
+// one (first in list order if several), and that draft's in-stock value.
+// Matching uses the exact same rules as the Consolidation panel
+// (computeAddressGroups): server-side addressKey, excluded-customer drafts
+// ignored, drafts with no address never match.
+// Built on demand: DRAFT_EXPORT_COLUMNS is declared further down the file.
+function readyExportColumns() {
+  return DRAFT_EXPORT_COLUMNS.concat([
+  { header: 'Ship Address',              type: 'text',  get: function(r) { return r.shipAddress || ''; } },
+  { header: 'Other Draft Same Location', type: 'text',  group: 'match', align: 'center',
+    get: function(r) { return r._match ? 'Y' : 'N'; } },
+  { header: 'Matching Draft #',          type: 'text',  group: 'match',
+    get: function(r) { return r._match ? r._match.name : ''; } },
+  { header: 'Matching In-Stock Value',   type: 'money', group: 'match',
+    get: function(r) { return r._match ? r._match.instockValue : null; } },
+  ]);
+}
+
+function findSameLocationMatch(r) {
+  if (!r.addressKey) return null;
+  for (var i = 0; i < allDrafts.length; i++) {
+    var o = allDrafts[i];
+    if (o.name === r.name) continue;
+    if (o.status === 'excluded-customer') continue;
+    if (o.addressKey === r.addressKey) return o;
+  }
+  return null;
+}
+
 function exportReadyToRelease() {
   var rows = allDrafts.filter(function(r) { return r.status === 'instock-ready' && (r.totalPrice || 0) >= BACKORDER_HOLD_VALUE; });
   if (!rows.length) return;
-  doExport(rows, 'ready-to-release');
+  // Wrap rather than mutate allDrafts rows.
+  var out = rows.map(function(r) { return Object.assign({}, r, { _match: findSameLocationMatch(r) }); });
+  exportTable('ready-to-release', readyExportColumns(), out);
 }
 
 function exportReadySmallValue() {
@@ -833,6 +865,11 @@ var XLSX_HEADER_FILL = 'FF4A6741';
 var XLSX_BORDER = 'FFD4D4CC';
 var XLSX_MONEY_FMT = '_([$$-409]* #,##0_);_([$$-409]* \\(#,##0\\);_([$$-409]* "-"??_);_(@_)';
 var XLSX_DATE_FMT = 'mm-dd-yy';
+// Highlighted column block (columns with group: 'match') — dashboard --warn
+// amber header, boxed with a medium outline / thin inner gridlines.
+var XLSX_MATCH_HEADER_FILL = 'FF8A5C2A';
+var XLSX_MATCH_BODY_FILL = 'FFFBF6EE';
+var XLSX_MATCH_BORDER = 'FF8A5C2A';
 var XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 var excelJsPromise = null;
 
@@ -876,13 +913,34 @@ function buildXlsxWorkbook(sheetName, columns, rows) {
 
   // Header row: leave room for the autofilter dropdown arrow.
   var widths = columns.map(function(c) { return c.header.length + 3; });
+  // Highlighted block bounds (0-based column indexes), if any column opts in.
+  var mFirst = -1, mLast = -1;
+  columns.forEach(function(c, i) { if (c.group === 'match') { if (mFirst < 0) mFirst = i; mLast = i; } });
+  var lastRowIdx = rows.length; // 0 = header row
+  function matchBorder(i, rowIdx) {
+    var thin = { style: 'thin', color: { argb: XLSX_MATCH_BORDER } };
+    var med = { style: 'medium', color: { argb: XLSX_MATCH_BORDER } };
+    return {
+      left: i === mFirst ? med : thin,
+      right: i === mLast ? med : thin,
+      top: rowIdx === 0 ? med : thin,
+      bottom: rowIdx === lastRowIdx ? med : thin,
+    };
+  }
+
   var headerRow = ws.addRow(columns.map(function(c) { return c.header; }));
-  headerRow.eachCell(function(cell) {
+  headerRow.eachCell(function(cell, colNumber) {
+    var c = columns[colNumber - 1];
+    var isMatch = c && c.group === 'match';
     cell.font = { name: XLSX_FONT, size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
-    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: XLSX_HEADER_FILL } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: isMatch ? XLSX_MATCH_HEADER_FILL : XLSX_HEADER_FILL } };
+    if (isMatch) {
+      cell.border = matchBorder(colNumber - 1, 0);
+      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+    }
   });
 
-  rows.forEach(function(r) {
+  rows.forEach(function(r, ri) {
     var vals = columns.map(function(c, i) {
       var v = xlsxCellValue(c, c.get(r));
       var len = 0;
@@ -897,7 +955,13 @@ function buildXlsxWorkbook(sheetName, columns, rows) {
     columns.forEach(function(c, i) {
       var cell = row.getCell(i + 1);
       cell.font = { name: XLSX_FONT, size: 11 };
-      cell.border = { bottom: { style: 'thin', color: { argb: XLSX_BORDER } } };
+      if (c.group === 'match') {
+        cell.border = matchBorder(i, ri + 1);
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: XLSX_MATCH_BODY_FILL } };
+      } else {
+        cell.border = { bottom: { style: 'thin', color: { argb: XLSX_BORDER } } };
+      }
+      if (c.align) cell.alignment = { horizontal: c.align };
       if (c.type === 'money') cell.numFmt = XLSX_MONEY_FMT;
       else if (c.type === 'date') cell.numFmt = XLSX_DATE_FMT;
     });
