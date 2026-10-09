@@ -120,7 +120,13 @@ tr.detail td:first-child{position:static}
 .badge{font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:2px 6px;border-radius:2px;align-self:center;text-align:center}
 .badge.draft{background:#f3ead9;color:var(--warn)}
 .badge.order{background:var(--green-light);color:var(--green)}
-.note{font-size:11px;color:var(--muted);line-height:1.6;margin-top:22px;padding:12px 14px;border-left:3px solid var(--warn);background:#f3ead9;max-width:1100px}
+.note{font-size:11px;color:var(--muted);line-height:1.6;margin-top:18px;max-width:1100px}
+.note summary{cursor:pointer;color:var(--dim);font-size:11px;list-style:none;display:inline-flex;align-items:center;gap:5px}
+.note summary::-webkit-details-marker{display:none}
+.note summary::before{content:'\24D8';font-size:12px}
+.note summary:hover{color:var(--text)}
+.note[open] summary{margin-bottom:6px}
+.note .note-body{padding:10px 14px;border-left:3px solid var(--warn);background:#f3ead9}
 .empty{padding:36px;text-align:center;color:var(--dim);font-size:13px}
 .ctag{display:inline-block;margin-left:6px;font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:1px 5px;border-radius:2px;background:#f3ead9;color:var(--warn);vertical-align:middle;white-space:nowrap}
 
@@ -1037,11 +1043,11 @@ function render() {
     });
   }
 
-  html += '<div class="note"><b>Heads up:</b> This covers drafts and orders in Shopify. Orders received in MarketTime that haven\'t transferred to Shopify yet are not included. ' +
+  html += '<details class="note"><summary>About these numbers</summary><div class="note-body">This covers drafts and orders in Shopify. Orders received in MarketTime that haven\'t transferred to Shopify yet are not included. ' +
     'Open = open drafts + unfulfilled orders. Orders counts distinct drafts and orders with open units. ' +
     'Dollars are merchandise value (units × unit price after line-level discounts); order-level discounts, tax and shipping are not included, so they won\'t match invoice totals. ' +
     'Custom line items (e.g. port pickups entered outside inventory) are matched to their catalog SKU by the SKU or UPC typed on the line, or by a clear product-name match, and tagged CUSTOM LINES; ones that can\'t be matched show under their own title. ' +
-    'Click a row to see the drafts and orders behind it, or a column heading to sort.</div>';
+    'Click a row to see the drafts and orders behind it, or a column heading to sort.</div></details>';
   $('results').innerHTML = html;
 }
 
