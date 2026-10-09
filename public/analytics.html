@@ -113,9 +113,10 @@ tr.detail.show{display:table-row}
 tr.detail td{background:#fff;text-align:left;padding:0;white-space:normal}
 tr.detail td:first-child{position:static}
 .detail-inner{position:sticky;left:0;width:min(900px,calc(100vw - 58px));padding:6px 14px 10px 28px}
-.drow{display:grid;grid-template-columns:70px 90px 100px 1fr 190px;gap:10px;padding:5px 0;font-size:12px;border-bottom:1px dashed var(--border)}
+.drow{display:grid;grid-template-columns:70px 90px 100px 1fr 170px 190px;gap:10px;padding:5px 0;font-size:12px;border-bottom:1px dashed var(--border)}
 .drow:last-child{border-bottom:none}
 .d-qty{text-align:right;font-variant-numeric:tabular-nums}
+.d-ful{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .badge{font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:2px 6px;border-radius:2px;align-self:center;text-align:center}
 .badge.draft{background:#f3ead9;color:var(--warn)}
 .badge.order{background:var(--green-light);color:var(--green)}
@@ -196,6 +197,8 @@ tr.main[data-ci]{cursor:pointer}
   .drow{grid-template-columns:auto 1fr auto;gap:4px 10px;align-items:center}
   .drow .d-title{grid-column:1 / -1;order:5;text-align:left}
   .drow .d-qty{grid-column:1 / -1;order:6;text-align:left}
+  .drow .d-ful{grid-column:1 / -1;order:7;text-align:left}
+  .drow .d-ful:empty{display:none}
   .note{margin-top:16px}
 }
 </style>
@@ -304,6 +307,13 @@ function usdK(n) {
 function isCustomSrc(s) { return s === 'title' || s === 'barcode' || s === 'fuzzy' || s === 'unmatched'; }
 function skuKey(r) { return r.sku || ('~' + (r.title || '')); }
 function ctag(on) { return on ? ' <span class="ctag">custom lines</span>' : ''; }
+function shortDate(s) { return new Date(s).toLocaleDateString(); }
+// Order-level ship dates: one fulfillment shows its date, several show first – last.
+function fulText(r) {
+  if (!r.fulfilled || !r.fulfilledAt) return '';
+  var a = shortDate(r.fulfilledAt), b = r.lastFulfilledAt ? shortDate(r.lastFulfilledAt) : a;
+  return 'Fulfilled ' + (a === b ? a : a + ' – ' + b);
+}
 function plural(n, one, many) { return n + ' ' + (n === 1 ? one : (many || one + 's')); }
 function ymd(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
 function fmtDate(s) { return new Date(s + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); }
@@ -835,6 +845,7 @@ function mergeRecords(list) {
     else {
       var m = map[k];
       m.open += r.open; m.fulfilled += r.fulfilled;
+      if (!m.fulfilledAt && r.fulfilledAt) { m.fulfilledAt = r.fulfilledAt; m.lastFulfilledAt = r.lastFulfilledAt; }
       m.openValue = Math.round(((m.openValue || 0) + (r.openValue || 0)) * 100) / 100;
       m.fulfilledValue = Math.round(((m.fulfilledValue || 0) + (r.fulfilledValue || 0)) * 100) / 100;
     }
@@ -1120,6 +1131,7 @@ function detail(recs) {
       '<span>' + esc(new Date(r.createdAt).toLocaleDateString()) + '</span>' +
       '<span class="d-title" style="color:var(--muted)">' + esc(r.label) + (view === 'sku' ? '' : ' · ' + esc(r.sku || 'no SKU')) +
         (isCustomSrc(r.skuSource) ? ' <span class="ctag">custom line</span>' : '') + '</span>' +
+      '<span class="d-ful">' + esc(fulText(r)) + '</span>' +
       '<span class="d-qty">' + parts.join('<br>') + '</span></div>';
   }).join('');
 }
@@ -1132,10 +1144,11 @@ function csvEsc(v) {
 function exportCsv() {
   if (screen === 'overview') return exportOverviewCsv();
   if (!lastData || !lastData.records.length) return;
-  var lines = [['Type', 'Document', 'Created', 'Customer', 'SKU', 'Product', 'Open Qty', 'Open $', 'Fulfilled Qty', 'Fulfilled $'].map(csvEsc).join(',')];
+  var lines = [['Type', 'Document', 'Created', 'Customer', 'SKU', 'Product', 'Open Qty', 'Open $', 'Fulfilled Qty', 'Fulfilled $', 'First Fulfilled', 'Last Fulfilled'].map(csvEsc).join(',')];
   lastData.records.forEach(function(r) {
     lines.push([r.type, r.name, r.createdAt.slice(0, 10), companyOf(r).label, r.sku, r.title,
-      r.open, (r.openValue || 0).toFixed(2), r.fulfilled, (r.fulfilledValue || 0).toFixed(2)].map(csvEsc).join(','));
+      r.open, (r.openValue || 0).toFixed(2), r.fulfilled, (r.fulfilledValue || 0).toFixed(2),
+      r.fulfilledAt ? ymd(new Date(r.fulfilledAt)) : '', r.lastFulfilledAt ? ymd(new Date(r.lastFulfilledAt)) : ''].map(csvEsc).join(','));
   });
   var blob = new Blob([lines.join('\n')], { type: 'text/csv' });
   var a = document.createElement('a');
