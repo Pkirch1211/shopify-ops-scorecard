@@ -11,7 +11,7 @@
 //
 // Required Shopify scopes on the B2B token: read_orders, read_draft_orders,
 // read_customers (the last one is new — needed for the customer dropdown and
-// for customer_id order search).
+// for customer_id order search), read_products (catalog lookup for custom lines).
 
 module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
   const DIRECTORY_TTL = 60 * 60 * 1000; // customer list is refreshed in the background after this
@@ -33,6 +33,126 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
     n.shippingAddress?.company || n.billingAddress?.company ||
     n.customer?.displayName || n.email || "Unknown";
   const money = v => Math.round((parseFloat(v) || 0) * 100) / 100;
+
+  // ── Catalog index: resolves custom line items back to real SKUs ────────────
+  // Port-pickup / outside-network orders are entered as custom line items (no
+  // variant) so they don't decrement inventory. Shopify gives those lines no SKU
+  // unless someone typed one into the SKU field, and often the SKU or UPC was
+  // typed into the title instead. This matches them back to the catalog for
+  // reporting only — nothing is written to Shopify.
+  //
+  // Resolution order (first hit wins, strict before loose):
+  //   1. SKU field filled in            -> kept as-is ("sku")
+  //   2. a catalog SKU typed as / in the title -> "title"
+  //   3. a catalog UPC typed in the title      -> "barcode"
+  //   4. product-name match with a clear winner -> "fuzzy"
+  //   otherwise                                  -> "unmatched" (shown as its own row, never guessed)
+  const CATALOG_TTL = 6 * 60 * 60 * 1000;
+  const CATALOG_RETRY_MS = 10 * 60 * 1000;
+  const CATALOG_QUERY = `
+  query AnalyticsCatalog($first: Int!, $after: String) {
+    productVariants(first: $first, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      edges { node { sku barcode title product { title } } }
+    }
+  }`;
+  let catalog = null, catalogBuilding = null, catalogFailAt = 0, catalogError = null;
+  const nameTokens = s => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(t => t.length > 1);
+
+  async function buildCatalog() {
+    const variants = await gqlAll(CREDS.b2bStore, CREDS.b2bToken, CATALOG_QUERY, { first: 250 },
+      d => d.productVariants.edges, d => d.productVariants.pageInfo, 180000);
+    const bySku = new Map(), byBarcode = new Map(), names = [];
+    for (const v of variants) {
+      const sku = (v.sku || "").trim().toUpperCase();
+      if (!sku) continue;
+      const pt = v.product?.title || "";
+      const name = (!v.title || v.title === "Default Title") ? pt : `${pt} - ${v.title}`;
+      const entry = { sku, name: name || sku };
+      bySku.set(sku, entry);
+      const bc = String(v.barcode || "").replace(/\D/g, "");
+      if (bc.length >= 8) byBarcode.set(bc, entry);
+      const tokens = new Set(nameTokens(name));
+      if (tokens.size) names.push({ entry, tokens });
+    }
+    return { bySku, byBarcode, names, builtAt: Date.now(), variants: variants.length };
+  }
+
+  // Never throws. Returns the catalog (possibly stale while a refresh runs
+  // behind it) or null if it has never loaded. After a failure it waits
+  // CATALOG_RETRY_MS before trying again so a missing scope can't hammer Shopify.
+  async function getCatalog() {
+    if (catalog && Date.now() - catalog.builtAt < CATALOG_TTL) return catalog;
+    if (catalogFailAt && Date.now() - catalogFailAt < CATALOG_RETRY_MS) return catalog;
+    if (!catalogBuilding) {
+      catalogBuilding = buildCatalog()
+        .then(c => {
+          catalog = c; catalogError = null; catalogFailAt = 0;
+          console.log(`[analytics] catalog loaded: ${c.bySku.size} SKUs`);
+          return c;
+        })
+        .catch(e => {
+          catalogFailAt = Date.now(); catalogError = e.message;
+          const hint = /access denied|scope/i.test(e.message) ? " (B2B token needs read_products)" : "";
+          console.warn("[analytics] catalog load failed:", e.message + hint);
+          return catalog;
+        })
+        .finally(() => { catalogBuilding = null; });
+    }
+    return catalog || (await catalogBuilding) || null;
+  }
+
+  // rawSku/rawTitle as Shopify gave them. Returns { sku, title, source }.
+  // source null = catalog not available yet; the store re-checks those later.
+  function resolveLine(rawSku, rawTitle, cat) {
+    const sku = String(rawSku || "").trim().toUpperCase();
+    const title = String(rawTitle || "").trim();
+    if (sku) {
+      // SKU typed into the SKU field (e.g. legacy 165005): keep it, and fill in the
+      // product name when the title is blank or just repeats the SKU.
+      const hit = cat && cat.bySku.get(sku);
+      const bare = !title || title.toUpperCase() === sku;
+      return { sku, title: hit && bare ? hit.name : (rawTitle || ""), source: "sku" };
+    }
+    if (!cat) return { sku: "", title: rawTitle || "", source: null };
+
+    // 2. catalog SKU typed as the title, or anywhere in it (only if exactly one distinct SKU)
+    const up = title.toUpperCase();
+    let hit = cat.bySku.get(up);
+    if (!hit) {
+      const found = new Map();
+      for (const tok of up.match(/[A-Z0-9][A-Z0-9._-]*[A-Z0-9]/g) || []) {
+        if (tok.length >= 4 && cat.bySku.has(tok)) found.set(tok, cat.bySku.get(tok));
+      }
+      if (found.size === 1) hit = [...found.values()][0];
+    }
+    if (hit) return { sku: hit.sku, title: hit.name, source: "title" };
+
+    // 3. UPC / EAN typed in the title
+    const codes = new Map();
+    for (const num of title.match(/\b\d{8,14}\b/g) || []) {
+      const e = cat.byBarcode.get(num);
+      if (e) codes.set(e.sku, e);
+    }
+    if (codes.size === 1) { const e = [...codes.values()][0]; return { sku: e.sku, title: e.name, source: "barcode" }; }
+
+    // 4. product-name match: needs a strong score AND a clear lead over the runner-up,
+    //    so a vague title ("Custom item") stays unmatched instead of landing on the wrong SKU.
+    const q = new Set(nameTokens(title));
+    if (q.size >= 2) {
+      let best = null, bestScore = 0, second = 0;
+      for (const c of cat.names) {
+        let inter = 0;
+        for (const t of q) if (c.tokens.has(t)) inter++;
+        if (!inter) continue;
+        const score = inter / (q.size + c.tokens.size - inter);
+        if (score > bestScore) { second = bestScore; bestScore = score; best = c.entry; }
+        else if (score > second) second = score;
+      }
+      if (best && bestScore >= 0.6 && bestScore - second >= 0.15) return { sku: best.sku, title: best.name, source: "fuzzy" };
+    }
+    return { sku: "", title: rawTitle || "", source: "unmatched" };
+  }
 
   // ── Queries ────────────────────────────────────────────────────────────────
   const CUSTOMERS_QUERY = `
@@ -422,6 +542,9 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
   // A lookup is answered from the store only when the store provably covers it
   // (open orders loaded, and the requested period is inside the loaded months).
   // Otherwise it quietly falls back to the live Shopify search.
+  //
+  // Line SKUs are stored already resolved (see resolveLine): sku = the catalog SKU
+  // when a custom line could be matched, sku_source = how it was matched.
   const STORE_MONTHS = Math.min(12, Math.max(1, parseInt(process.env.ANALYTICS_BACKFILL_MONTHS || "12", 10) || 12));   // capped at 12 months: always covers year-to-date, keeps memory/load small
   const SYNC_INTERVAL = Number(process.env.ANALYTICS_SYNC_INTERVAL_MS) || 5 * 60 * 1000;
   const READ_SYNC_DEBOUNCE = process.env.ANALYTICS_READ_SYNC_DEBOUNCE_MS !== undefined ? Number(process.env.ANALYTICS_READ_SYNC_DEBOUNCE_MS) : 10 * 1000;   // a lookup tops the store up if the last sync is older than this
@@ -517,8 +640,9 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
     const byId = new Map();
     for (const n of nodesIn) byId.set(gidNum(n.id), n);   // a page can repeat an order; keep the last
     if (!byId.size) return;
+    const cat = await getCatalog();
     const O = { id: [], name: [], cust: [], label: [], created: [], updated: [], cancelled: [], email: [] };
-    const L = { oid: [], lid: [], sku: [], title: [], qty: [], cur: [], unf: [], price: [] };
+    const L = { oid: [], lid: [], sku: [], title: [], qty: [], cur: [], unf: [], price: [], src: [] };
     for (const [oid, n] of byId) {
       O.id.push(oid); O.name.push(n.name || ""); O.cust.push(n.customer?.id ? gidNum(n.customer.id) : null);
       O.label.push(labelOf(n)); O.created.push(n.createdAt); O.updated.push(n.updatedAt || n.createdAt);
@@ -532,10 +656,12 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
       }
       for (const e of edges) {
         const li = e.node;
-        L.oid.push(oid); L.lid.push(gidNum(li.id)); L.sku.push((li.sku || "").toUpperCase()); L.title.push(li.title || "");
+        const rl = resolveLine(li.sku, li.title, cat);
+        L.oid.push(oid); L.lid.push(gidNum(li.id)); L.sku.push(rl.sku); L.title.push(rl.title);
         L.qty.push(li.quantity || 0); L.cur.push(li.currentQuantity ?? li.quantity ?? 0);
         L.unf.push(Math.max(0, li.unfulfilledQuantity || 0));
         L.price.push(parseFloat(li.discountedUnitPriceSet?.shopMoney?.amount) || 0);
+        L.src.push(rl.source);
       }
     }
     const client = await db.connect();
@@ -549,10 +675,10 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
            created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at, cancelled = EXCLUDED.cancelled, email = EXCLUDED.email`,
         [O.id, O.name, O.cust, O.label, O.created, O.updated, O.cancelled, O.email]);
       if (L.oid.length) await client.query(
-        `INSERT INTO analytics_lines (order_id, line_id, sku, title, quantity, current_quantity, unfulfilled_quantity, unit_price)
-         SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::int[], $6::int[], $7::int[], $8::numeric[])
+        `INSERT INTO analytics_lines (order_id, line_id, sku, title, quantity, current_quantity, unfulfilled_quantity, unit_price, sku_source)
+         SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::int[], $6::int[], $7::int[], $8::numeric[], $9::text[])
          ON CONFLICT (order_id, line_id) DO NOTHING`,
-        [L.oid, L.lid, L.sku, L.title, L.qty, L.cur, L.unf, L.price]);
+        [L.oid, L.lid, L.sku, L.title, L.qty, L.cur, L.unf, L.price, L.src]);
       await client.query("COMMIT");
     } catch (e) {
       try { await client.query("ROLLBACK"); } catch (_) {}
@@ -585,6 +711,11 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
         CREATE INDEX IF NOT EXISTS idx_an_orders_cust ON analytics_orders (customer_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_an_lines_sku ON analytics_lines (sku);
         CREATE INDEX IF NOT EXISTS idx_an_lines_open ON analytics_lines (order_id) WHERE unfulfilled_quantity > 0;`);
+      // Added after these tables already existed in production. Rows written before
+      // this column existed are NULL and get re-checked by relabelCustomLines().
+      await db.query(`
+        ALTER TABLE analytics_lines ADD COLUMN IF NOT EXISTS sku_source TEXT;
+        ALTER TABLE analytics_draft_lines ADD COLUMN IF NOT EXISTS sku_source TEXT;`);
       const r = await db.query("SELECT key, value FROM analytics_state");
       const m = {}; r.rows.forEach(x => { m[x.key] = x.value; });
       st.openLoaded = m.open_loaded === "1";
@@ -672,15 +803,18 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
     for (const n of nodesIn) byId.set(gidNum(n.id), n);
     if (!byId.size) return;
     await completeLines([...byId.values()], DRAFT_MORE_LINES_QUERY, "draftOrder");
+    const cat = await getCatalog();
     const D = { id: [], name: [], cust: [], label: [], created: [], updated: [], email: [] };
-    const L = { did: [], lid: [], sku: [], title: [], qty: [], total: [] };
+    const L = { did: [], lid: [], sku: [], title: [], qty: [], total: [], src: [] };
     for (const [did, n] of byId) {
       D.id.push(did); D.name.push(n.name || ""); D.cust.push(n.customer?.id ? gidNum(n.customer.id) : null);
       D.label.push(labelOf(n)); D.created.push(n.createdAt); D.updated.push(n.updatedAt || n.createdAt); D.email.push(n.email || null);
       for (const e of n.lineItems?.edges || []) {
         const li = e.node;
-        L.did.push(did); L.lid.push(gidNum(li.id)); L.sku.push((li.sku || "").toUpperCase()); L.title.push(li.title || "");
+        const rl = resolveLine(li.sku, li.title, cat);
+        L.did.push(did); L.lid.push(gidNum(li.id)); L.sku.push(rl.sku); L.title.push(rl.title);
         L.qty.push(li.quantity || 0); L.total.push(parseFloat(li.discountedTotalSet?.shopMoney?.amount) || 0);
+        L.src.push(rl.source);
       }
     }
     const client = await db.connect();
@@ -694,10 +828,10 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
            created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at, email = EXCLUDED.email`,
         [D.id, D.name, D.cust, D.label, D.created, D.updated, D.email]);
       if (L.did.length) await client.query(
-        `INSERT INTO analytics_draft_lines (draft_id, line_id, sku, title, quantity, total)
-         SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::int[], $6::numeric[])
+        `INSERT INTO analytics_draft_lines (draft_id, line_id, sku, title, quantity, total, sku_source)
+         SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::int[], $6::numeric[], $7::text[])
          ON CONFLICT (draft_id, line_id) DO NOTHING`,
-        [L.did, L.lid, L.sku, L.title, L.qty, L.total]);
+        [L.did, L.lid, L.sku, L.title, L.qty, L.total, L.src]);
       await client.query("COMMIT");
     } catch (e) {
       try { await client.query("ROLLBACK"); } catch (_) {}
@@ -764,6 +898,36 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
     return draftPromise;
   }
 
+  // Re-checks custom lines already in the store against the catalog: rows written
+  // before sku_source existed, rows written while the catalog wasn't loaded, and
+  // previously unmatched rows (a product may have been added since). Also fills in
+  // the product name on lines whose title is blank or just repeats the SKU.
+  // Runs once per catalog build; works per distinct title, so it's cheap.
+  let relabeledFor = 0;
+  async function relabelCustomLines(cat) {
+    let fixed = 0;
+    for (const T of ["analytics_lines", "analytics_draft_lines"]) {
+      const titles = await db.query(
+        `SELECT DISTINCT title FROM ${T} WHERE sku = '' AND (sku_source IS NULL OR sku_source = 'unmatched')`);
+      for (const { title } of titles.rows) {
+        const r = resolveLine("", title, cat);
+        if (r.sku) {
+          const u = await db.query(`UPDATE ${T} SET sku = $1, title = $2, sku_source = $3 WHERE sku = '' AND title = $4`,
+            [r.sku, r.title, r.source, title]);
+          fixed += u.rowCount;
+        } else {
+          await db.query(`UPDATE ${T} SET sku_source = 'unmatched' WHERE sku = '' AND title = $1 AND sku_source IS NULL`, [title]);
+        }
+      }
+      const bare = await db.query(`SELECT DISTINCT sku FROM ${T} WHERE sku <> '' AND (title = '' OR UPPER(title) = sku)`);
+      for (const { sku } of bare.rows) {
+        const e = cat.bySku.get(sku);
+        if (e) await db.query(`UPDATE ${T} SET title = $1 WHERE sku = $2 AND (title = '' OR UPPER(title) = sku)`, [e.name, sku]);
+      }
+    }
+    if (fixed) console.log(`[analytics] store: matched ${fixed} custom lines to catalog SKUs`);
+  }
+
   let storeBusy = null;
   function storeCycle() {
     if (building) { setTimeout(storeCycle, 20000).unref?.(); return; }   // let the customer list rebuild finish first (they share Shopify's rate limit)
@@ -785,6 +949,12 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
           st.phase = "syncing";
           await incrementalSync();
           if (st.draftsLoaded) await syncDrafts({ reconcile: true });
+        }
+        const cat = await getCatalog();
+        if (cat && cat.builtAt !== relabeledFor) {
+          st.phase = "matching custom lines";
+          try { await relabelCustomLines(cat); relabeledFor = cat.builtAt; }
+          catch (e) { console.warn("[analytics] custom-line matching failed, will retry:", e.message); }
         }
         st.phase = "idle"; st.error = null;
         if (more) nextMs = 1000;
@@ -829,7 +999,7 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
     const a = params.length - 1, b = params.length;
     const inRange = `(o.created_at >= $${a}::timestamptz AND o.created_at < $${b}::timestamptz)`;
     const r = await db.query(
-      `SELECT o.name, o.created_at, o.customer_id, o.label, l.sku, l.title,
+      `SELECT o.name, o.created_at, o.customer_id, o.label, l.sku, l.title, l.sku_source,
               l.current_quantity, l.unfulfilled_quantity, l.unit_price, ${inRange} AS in_range
          FROM analytics_orders o JOIN analytics_lines l ON l.order_id = o.id
         WHERE ${where.join(" AND ")}
@@ -842,7 +1012,7 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
     if (customerIds.length) { params.push(customerIds); where.push(`d.customer_id = ANY($${params.length}::text[])`); }
     if (skus.length) { params.push(skus); where.push(`l.sku = ANY($${params.length}::text[])`); }
     const r = await db.query(
-      `SELECT d.name, d.created_at, d.customer_id, d.label, l.sku, l.title, l.quantity, l.total
+      `SELECT d.name, d.created_at, d.customer_id, d.label, l.sku, l.title, l.sku_source, l.quantity, l.total
          FROM analytics_drafts d JOIN analytics_draft_lines l ON l.draft_id = d.id
         WHERE ${where.join(" AND ")}`, params);
     return r.rows;
@@ -853,6 +1023,11 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
       enabled: storeEnabled, ready: st.ready, phase: st.phase, error: st.error,
       openOrdersLoaded: st.openLoaded, openDraftsLoaded: st.draftsLoaded, coveredFrom: st.coveredFrom, targetMonths: STORE_MONTHS,
       lastSync: st.lastSyncAt ? new Date(st.lastSyncAt).toISOString() : null,
+      catalog: {
+        skus: catalog ? catalog.bySku.size : null, variants: catalog ? catalog.variants : null,
+        builtAt: catalog ? new Date(catalog.builtAt).toISOString() : null,
+        error: catalogError, customLinesCheckedFor: relabeledFor ? new Date(relabeledFor).toISOString() : null,
+      },
     };
     try {   // customer-list (grouping) diagnostics
       const cfg = loadGroupRules();
@@ -916,6 +1091,12 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
                                  UNION ALL SELECT customer_id, label FROM analytics_drafts WHERE customer_id IS NOT NULL) x GROUP BY customer_id`);
         const orphans = custs.filter(r => !seen.has(r.cid));
         const noCust = await q(`SELECT (SELECT COUNT(*) FROM analytics_orders WHERE customer_id IS NULL) AS o, (SELECT COUNT(*) FROM analytics_drafts WHERE customer_id IS NULL) AS d`);
+        // custom-line matching: how each order line's SKU was determined, and the
+        // biggest custom lines that still couldn't be matched to the catalog
+        const srcs = await q(`SELECT COALESCE(sku_source, CASE WHEN sku = '' THEN 'pending' ELSE 'sku' END) AS src, COUNT(*) AS n
+                                FROM analytics_lines GROUP BY 1 ORDER BY 2 DESC`);
+        const unmatched = await q(`SELECT title, SUM(quantity) AS units, COUNT(*) AS n FROM analytics_lines
+                                    WHERE sku = '' GROUP BY title ORDER BY SUM(quantity) DESC LIMIT 20`);
         out.store = {
           orders: (await q(`SELECT COUNT(*) AS n FROM analytics_orders`))[0].n * 1, drafts: (await q(`SELECT COUNT(*) AS n FROM analytics_drafts`))[0].n * 1,
           orderNamesUsedTwice: dupNames.map(r => ({ name: r.name, times: Number(r.n) })),
@@ -925,6 +1106,8 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
           ordersWithNoCustomer: Number(noCust[0].o), draftsWithNoCustomer: Number(noCust[0].d),
           customerIdsMissingFromList: orphans.length,
           customerIdsMissingFromListSample: orphans.sort((a, b) => b.n - a.n).slice(0, 15).map(r => ({ id: r.cid, label: r.label, records: Number(r.n) })),
+          orderLineSkuSources: Object.fromEntries(srcs.map(r => [r.src, Number(r.n)])),
+          unmatchedCustomLines: unmatched.map(r => ({ title: r.title, units: Number(r.units), lines: Number(r.n) })),
         };
         // 4) landing-table totals must equal the sum of its rows
         if (overviewReady()) {
@@ -1001,41 +1184,48 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
     return [...map.values()];
   }
 
+  // Lines with a SKU group by SKU. Custom lines that couldn't be matched (sku = '')
+  // group by their title instead (ckey), so different unmatched items each get
+  // their own row rather than piling into one blank-SKU bucket.
+  const CUSTOM_SRC_SQL = "l.sku_source IN ('title','barcode','fuzzy','unmatched')";
+  const CKEY_SQL = "CASE WHEN l.sku = '' THEN l.title ELSE '' END";
   async function overviewBySku(yearStart, cids = []) {
     const yS = yearStart + "T00:00:00Z";
     const fo = ovFilters("o", "l", [], cids, 2);
     const orders = await db.query(
-      `SELECT l.sku, MAX(l.title) AS title,
+      `SELECT l.sku, ${CKEY_SQL} AS ckey, MAX(l.title) AS title, BOOL_OR(${CUSTOM_SRC_SQL}) AS custom,
               COALESCE(SUM(CASE WHEN o.created_at >= $1::timestamptz THEN l.current_quantity * l.unit_price END), 0) AS ytd_value,
               COALESCE(SUM(CASE WHEN o.created_at >= $1::timestamptz THEN l.current_quantity END), 0) AS ytd_units,
               COALESCE(SUM(l.unfulfilled_quantity), 0) AS unf_units,
               COALESCE(SUM(l.unfulfilled_quantity * l.unit_price), 0) AS unf_value
          FROM analytics_orders o JOIN analytics_lines l ON l.order_id = o.id
         WHERE NOT o.cancelled AND (o.created_at >= $1::timestamptz OR l.unfulfilled_quantity > 0)${fo.sql}
-        GROUP BY l.sku`, [yS, ...fo.params]);
+        GROUP BY 1, 2`, [yS, ...fo.params]);
     const fd = ovFilters("d", "l", [], cids, 1);
     const drafts = await db.query(
-      `SELECT l.sku, MAX(l.title) AS title, COALESCE(SUM(l.quantity), 0) AS draft_units, COALESCE(SUM(l.total), 0) AS draft_value
+      `SELECT l.sku, ${CKEY_SQL} AS ckey, MAX(l.title) AS title, BOOL_OR(${CUSTOM_SRC_SQL}) AS custom,
+              COALESCE(SUM(l.quantity), 0) AS draft_units, COALESCE(SUM(l.total), 0) AS draft_value
          FROM analytics_drafts d JOIN analytics_draft_lines l ON l.draft_id = d.id
-        WHERE l.quantity > 0${fd.sql} GROUP BY l.sku`, fd.params);
+        WHERE l.quantity > 0${fd.sql} GROUP BY 1, 2`, fd.params);
     // distinct customers with this SKU open, drafts and orders combined
     const oc = ovFilters("o", "l", [], cids, 1), dc = ovFilters("d", "l", [], cids, 1 + oc.params.length);
     const custs = await db.query(
-      `SELECT sku, COUNT(DISTINCT cid) AS n FROM (
-         SELECT l.sku, o.customer_id AS cid FROM analytics_orders o JOIN analytics_lines l ON l.order_id = o.id
+      `SELECT sku, ckey, COUNT(DISTINCT cid) AS n FROM (
+         SELECT l.sku, ${CKEY_SQL} AS ckey, o.customer_id AS cid FROM analytics_orders o JOIN analytics_lines l ON l.order_id = o.id
           WHERE NOT o.cancelled AND l.unfulfilled_quantity > 0${oc.sql}
          UNION ALL
-         SELECT l.sku, d.customer_id FROM analytics_drafts d JOIN analytics_draft_lines l ON l.draft_id = d.id
+         SELECT l.sku, ${CKEY_SQL}, d.customer_id FROM analytics_drafts d JOIN analytics_draft_lines l ON l.draft_id = d.id
           WHERE l.quantity > 0${dc.sql}
-       ) x GROUP BY sku`, [...oc.params, ...dc.params]);
+       ) x GROUP BY sku, ckey`, [...oc.params, ...dc.params]);
     const map = new Map();
-    const row = (sku, title) => {
-      if (!map.has(sku)) map.set(sku, { sku, title: title || "", ytdValue: 0, ytdUnits: 0, unfUnits: 0, unfValue: 0, draftUnits: 0, draftValue: 0, openCustomers: 0 });
-      const o = map.get(sku); if (!o.title && title) o.title = title; return o;
+    const row = (sku, ckey, title, custom) => {
+      const k = (sku || "") + "|" + (ckey || "");
+      if (!map.has(k)) map.set(k, { sku: sku || "", title: title || "", custom: false, ytdValue: 0, ytdUnits: 0, unfUnits: 0, unfValue: 0, draftUnits: 0, draftValue: 0, openCustomers: 0 });
+      const o = map.get(k); if (!o.title && title) o.title = title; if (custom) o.custom = true; return o;
     };
-    for (const x of orders.rows) { const o = row(x.sku, x.title); o.ytdValue = r2(x.ytd_value); o.ytdUnits = Number(x.ytd_units); o.unfUnits = Number(x.unf_units); o.unfValue = r2(x.unf_value); }
-    for (const x of drafts.rows) { const o = row(x.sku, x.title); o.draftUnits = Number(x.draft_units); o.draftValue = r2(x.draft_value); }
-    for (const x of custs.rows) row(x.sku).openCustomers = Number(x.n);
+    for (const x of orders.rows) { const o = row(x.sku, x.ckey, x.title, x.custom); o.ytdValue = r2(x.ytd_value); o.ytdUnits = Number(x.ytd_units); o.unfUnits = Number(x.unf_units); o.unfValue = r2(x.unf_value); }
+    for (const x of drafts.rows) { const o = row(x.sku, x.ckey, x.title, x.custom); o.draftUnits = Number(x.draft_units); o.draftValue = r2(x.draft_value); }
+    for (const x of custs.rows) row(x.sku, x.ckey).openCustomers = Number(x.n);
     return [...map.values()];
   }
 
@@ -1082,6 +1272,8 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
   //   order record : open = unfulfilledQuantity, fulfilled = currentQuantity - unfulfilledQuantity
   //                  (fulfilled only counted when the order was created inside from..to)
   //                  values = units × discounted unit price (line-level discounts only)
+  //   sku          : resolved SKU ("" = custom line with no catalog match; grouped by title)
+  //   skuSource    : how the SKU was determined (see resolveLine)
   app.post("/api/analytics/query", async (req, res) => {
     const { b2bStore, b2bToken } = CREDS;
     if (!b2bStore || !b2bToken) return res.status(400).json({ error: "Missing B2B credentials." });
@@ -1118,6 +1310,10 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
       const useStoreDrafts = req.body.live !== true && storeEnabled && st.ready && st.draftsLoaded;
       if (useStore || useStoreDrafts) { const t = Date.now(); await freshen(); timing.freshenMs = Date.now() - t; }
 
+      // Store rows are already resolved; the live paths resolve as they go.
+      let catP = null;
+      const liveCatalog = () => catP || (catP = getCatalog());
+
       // Drafts: from the store when it has them, otherwise the cached live pull.
       let t1 = Date.now();
       if (wantOpen && useStoreDrafts) {
@@ -1125,24 +1321,25 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
           records.push({
             type: "draft", name: r.name, createdAt: new Date(r.created_at).toISOString(),
             customerId: r.customer_id || "", label: r.label || "Unknown",
-            sku: r.sku || "—", title: r.title || "",
+            sku: r.sku || "", title: r.title || "", skuSource: r.sku_source || null,
             open: r.quantity, fulfilled: 0,
             openValue: money(r.total), fulfilledValue: 0,
           });
         }
         timing.drafts = "store";
       } else if (wantOpen) {
+        const cat = await liveCatalog();
         for (const d of await getOpenDrafts()) {
           if (idSet.size && !idSet.has(gidNum(d.customer?.id))) continue;
           for (const e of d.lineItems?.edges || []) {
             const li = e.node;
-            const sku = (li.sku || "").toUpperCase();
-            if (skuSet.size && !skuSet.has(sku)) continue;
+            const rl = resolveLine(li.sku, li.title, cat);
+            if (skuSet.size && !skuSet.has(rl.sku)) continue;
             if (!li.quantity) continue;
             records.push({
               type: "draft", name: d.name, createdAt: d.createdAt,
               customerId: gidNum(d.customer?.id), label: labelOf(d),
-              sku: sku || "—", title: li.title || "",
+              sku: rl.sku, title: rl.title, skuSource: rl.source,
               open: li.quantity, fulfilled: 0,
               openValue: money(li.discountedTotalSet?.shopMoney?.amount), fulfilledValue: 0,
             });
@@ -1160,7 +1357,7 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
         records.push({
           type: "order", name: o.name, createdAt: o.createdAt,
           customerId: o.customerId, label: o.label,
-          sku: o.sku || "—", title: o.title || "",
+          sku: o.sku || "", title: o.title || "", skuSource: o.skuSource || null,
           open, fulfilled,
           openValue: money(open * o.unit), fulfilledValue: money(fulfilled * o.unit),
         });
@@ -1174,7 +1371,7 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
         for (const r of rows) {
           addOrderRecord({
             name: r.name, createdAt: new Date(r.created_at).toISOString(), customerId: r.customer_id || "",
-            label: r.label || "Unknown", sku: r.sku, title: r.title,
+            label: r.label || "Unknown", sku: r.sku, title: r.title, skuSource: r.sku_source,
             rawOpen: Math.max(0, r.unfulfilled_quantity || 0), current: r.current_quantity || 0,
             unit: parseFloat(r.unit_price) || 0, inRange: !!r.in_range,
           });
@@ -1186,6 +1383,9 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
         // Orders — two searches per customer chunk, deduped by order id:
         //   A) anything still unfulfilled/partial, any age (this is "on order")
         //   B) anything created inside the date range (this feeds "fulfilled")
+        // Note: Shopify's sku: search only sees the SKU field, so in this fallback a
+        // SKU lookup won't find custom lines where the SKU was typed in the title.
+        // The store path (normal case) does find them.
         const skuClause = skus.length ? "(" + skus.map(s => `sku:"${s}"`).join(" OR ") + ")" : "";
         const chunks = customerIds.length
           ? Array.from({ length: Math.ceil(customerIds.length / ID_CHUNK) }, (_, i) => customerIds.slice(i * ID_CHUNK, (i + 1) * ID_CHUNK))
@@ -1214,17 +1414,18 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
         await Promise.all(Array.from({ length: Math.min(3, jobs.length) }, worker));
         await completeLines([...orderMap.values()], MORE_LINES_QUERY, "order");
 
+        const cat = await liveCatalog();
         for (const o of orderMap.values()) {
           if (o.cancelledAt) continue;
           if (idSet.size && !idSet.has(gidNum(o.customer?.id))) continue;
           const inRange = new Date(o.createdAt).getTime() >= fromMs && new Date(o.createdAt) < toExclusive;
           for (const e of o.lineItems?.edges || []) {
             const li = e.node;
-            const sku = (li.sku || "").toUpperCase();
-            if (skuSet.size && !skuSet.has(sku)) continue;
+            const rl = resolveLine(li.sku, li.title, cat);
+            if (skuSet.size && !skuSet.has(rl.sku)) continue;
             addOrderRecord({
               name: o.name, createdAt: o.createdAt, customerId: gidNum(o.customer?.id), label: labelOf(o),
-              sku, title: li.title,
+              sku: rl.sku, title: rl.title, skuSource: rl.source,
               rawOpen: Math.max(0, li.unfulfilledQuantity ?? 0), current: li.currentQuantity ?? li.quantity ?? 0,
               unit: parseFloat(li.discountedUnitPriceSet?.shopMoney?.amount) || 0, inRange,
             });
