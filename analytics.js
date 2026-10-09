@@ -33,6 +33,13 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
     n.shippingAddress?.company || n.billingAddress?.company ||
     n.customer?.displayName || n.email || "Unknown";
   const money = v => Math.round((parseFloat(v) || 0) * 100) / 100;
+  // First and last date units actually shipped on an order (cancelled fulfillments ignored).
+  // Order-level: a partial order shipped in two waves shows the range, not per-line dates.
+  function fulfillmentDates(n) {
+    const ts = (n.fulfillments || []).filter(f => f && f.createdAt && String(f.status || "").toUpperCase() !== "CANCELLED")
+      .map(f => Date.parse(f.createdAt)).filter(t => !isNaN(t)).sort((a, b) => a - b);
+    return ts.length ? { first: new Date(ts[0]).toISOString(), last: new Date(ts[ts.length - 1]).toISOString() } : { first: null, last: null };
+  }
 
   // ── Catalog index: resolves custom line items back to real SKUs ────────────
   // Port-pickup / outside-network orders are entered as custom line items (no
@@ -214,6 +221,7 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
               }
             }
           }
+          fulfillments(first: 20) { createdAt status }
         }
       }
     }
@@ -567,6 +575,7 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
             pageInfo { hasNextPage endCursor }
             edges { node { ${LINE_FIELDS} } }
           }
+          fulfillments(first: 20) { createdAt status }
         }
       }
     }
@@ -641,12 +650,14 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
     for (const n of nodesIn) byId.set(gidNum(n.id), n);   // a page can repeat an order; keep the last
     if (!byId.size) return;
     const cat = await getCatalog();
-    const O = { id: [], name: [], cust: [], label: [], created: [], updated: [], cancelled: [], email: [] };
+    const O = { id: [], name: [], cust: [], label: [], created: [], updated: [], cancelled: [], email: [], ff: [], lf: [] };
     const L = { oid: [], lid: [], sku: [], title: [], qty: [], cur: [], unf: [], price: [], src: [] };
     for (const [oid, n] of byId) {
       O.id.push(oid); O.name.push(n.name || ""); O.cust.push(n.customer?.id ? gidNum(n.customer.id) : null);
       O.label.push(labelOf(n)); O.created.push(n.createdAt); O.updated.push(n.updatedAt || n.createdAt);
       O.cancelled.push(!!n.cancelledAt); O.email.push(n.email || null);
+      const fd = fulfillmentDates(n);
+      O.ff.push(fd.first); O.lf.push(fd.last);
       let edges = n.lineItems?.edges || [], pi = n.lineItems?.pageInfo, guard = 0;
       while (pi?.hasNextPage && guard++ < 30) {   // orders with more than 100 lines
         const d = await gqlRetry(MORE_LINES_QUERY, { id: n.id, after: pi.endCursor });
@@ -669,11 +680,14 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
       await client.query("BEGIN");
       await client.query("DELETE FROM analytics_lines WHERE order_id = ANY($1::text[])", [O.id]);
       await client.query(
-        `INSERT INTO analytics_orders (id, name, customer_id, label, created_at, updated_at, cancelled, email)
-         SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::timestamptz[], $7::boolean[], $8::text[])
+        `INSERT INTO analytics_orders (id, name, customer_id, label, created_at, updated_at, cancelled, email,
+                                       first_fulfilled_at, last_fulfilled_at, fulfillments_checked)
+         SELECT *, TRUE FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::timestamptz[], $7::boolean[], $8::text[],
+                                    $9::timestamptz[], $10::timestamptz[])
          ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, customer_id = EXCLUDED.customer_id, label = EXCLUDED.label,
-           created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at, cancelled = EXCLUDED.cancelled, email = EXCLUDED.email`,
-        [O.id, O.name, O.cust, O.label, O.created, O.updated, O.cancelled, O.email]);
+           created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at, cancelled = EXCLUDED.cancelled, email = EXCLUDED.email,
+           first_fulfilled_at = EXCLUDED.first_fulfilled_at, last_fulfilled_at = EXCLUDED.last_fulfilled_at, fulfillments_checked = TRUE`,
+        [O.id, O.name, O.cust, O.label, O.created, O.updated, O.cancelled, O.email, O.ff, O.lf]);
       if (L.oid.length) await client.query(
         `INSERT INTO analytics_lines (order_id, line_id, sku, title, quantity, current_quantity, unfulfilled_quantity, unit_price, sku_source)
          SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::int[], $6::int[], $7::int[], $8::numeric[], $9::text[])
@@ -715,7 +729,10 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
       // this column existed are NULL and get re-checked by relabelCustomLines().
       await db.query(`
         ALTER TABLE analytics_lines ADD COLUMN IF NOT EXISTS sku_source TEXT;
-        ALTER TABLE analytics_draft_lines ADD COLUMN IF NOT EXISTS sku_source TEXT;`);
+        ALTER TABLE analytics_draft_lines ADD COLUMN IF NOT EXISTS sku_source TEXT;
+        ALTER TABLE analytics_orders ADD COLUMN IF NOT EXISTS first_fulfilled_at TIMESTAMPTZ;
+        ALTER TABLE analytics_orders ADD COLUMN IF NOT EXISTS last_fulfilled_at TIMESTAMPTZ;
+        ALTER TABLE analytics_orders ADD COLUMN IF NOT EXISTS fulfillments_checked BOOLEAN DEFAULT FALSE;`);
       const r = await db.query("SELECT key, value FROM analytics_state");
       const m = {}; r.rows.forEach(x => { m[x.key] = x.value; });
       st.openLoaded = m.open_loaded === "1";
@@ -928,6 +945,40 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
     if (fixed) console.log(`[analytics] store: matched ${fixed} custom lines to catalog SKUs`);
   }
 
+  // Orders loaded before fulfillment dates were stored: fetch just their fulfillment
+  // dates by id, 100 at a time (no line items, so it's cheap). Only orders with
+  // shipped units need it. Time-boxed per cycle; returns true while work remains.
+  const FULFILLMENT_DATES_QUERY = `
+  query AnalyticsFulfillmentDates($ids: [ID!]!) {
+    nodes(ids: $ids) { ... on Order { id fulfillments(first: 20) { createdAt status } } }
+  }`;
+  async function backfillFulfillmentDates(budgetMs = 60000) {
+    const deadline = Date.now() + budgetMs;
+    let done = 0;
+    for (;;) {
+      const r = await db.query(
+        `SELECT o.id FROM analytics_orders o
+          WHERE NOT o.fulfillments_checked AND NOT o.cancelled
+            AND EXISTS (SELECT 1 FROM analytics_lines l WHERE l.order_id = o.id AND l.current_quantity > l.unfulfilled_quantity)
+          LIMIT 100`);
+      if (!r.rows.length) { if (done) console.log(`[analytics] store: fulfillment dates filled for ${done} orders`); return false; }
+      const ids = r.rows.map(x => x.id);
+      const d = await gqlRetry(FULFILLMENT_DATES_QUERY, { ids: ids.map(id => `gid://shopify/Order/${id}`) });
+      const F = { id: [], ff: [], lf: [] };
+      const got = new Map((d.nodes || []).filter(Boolean).map(n => [gidNum(n.id), n]));
+      for (const id of ids) {
+        const fd = got.has(id) ? fulfillmentDates(got.get(id)) : { first: null, last: null };
+        F.id.push(id); F.ff.push(fd.first); F.lf.push(fd.last);
+      }
+      await db.query(
+        `UPDATE analytics_orders o SET first_fulfilled_at = u.ff, last_fulfilled_at = u.lf, fulfillments_checked = TRUE
+           FROM unnest($1::text[], $2::timestamptz[], $3::timestamptz[]) AS u(id, ff, lf) WHERE o.id = u.id`,
+        [F.id, F.ff, F.lf]);
+      done += ids.length;
+      if (Date.now() > deadline) { console.log(`[analytics] store: fulfillment dates filled for ${done} orders, more to go`); return true; }
+    }
+  }
+
   let storeBusy = null;
   function storeCycle() {
     if (building) { setTimeout(storeCycle, 20000).unref?.(); return; }   // let the customer list rebuild finish first (they share Shopify's rate limit)
@@ -955,6 +1006,11 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
           st.phase = "matching custom lines";
           try { await relabelCustomLines(cat); relabeledFor = cat.builtAt; }
           catch (e) { console.warn("[analytics] custom-line matching failed, will retry:", e.message); }
+        }
+        if (st.openLoaded) {
+          st.phase = "filling fulfillment dates";
+          try { if (await backfillFulfillmentDates()) more = true; }
+          catch (e) { console.warn("[analytics] fulfillment-date backfill failed, will retry:", e.message); }
         }
         st.phase = "idle"; st.error = null;
         if (more) nextMs = 1000;
@@ -999,7 +1055,7 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
     const a = params.length - 1, b = params.length;
     const inRange = `(o.created_at >= $${a}::timestamptz AND o.created_at < $${b}::timestamptz)`;
     const r = await db.query(
-      `SELECT o.name, o.created_at, o.customer_id, o.label, l.sku, l.title, l.sku_source,
+      `SELECT o.name, o.created_at, o.customer_id, o.label, o.first_fulfilled_at, o.last_fulfilled_at, l.sku, l.title, l.sku_source,
               l.current_quantity, l.unfulfilled_quantity, l.unit_price, ${inRange} AS in_range
          FROM analytics_orders o JOIN analytics_lines l ON l.order_id = o.id
         WHERE ${where.join(" AND ")}
@@ -1358,6 +1414,8 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
           type: "order", name: o.name, createdAt: o.createdAt,
           customerId: o.customerId, label: o.label,
           sku: o.sku || "", title: o.title || "", skuSource: o.skuSource || null,
+          fulfilledAt: fulfilled ? o.firstFulfilledAt || null : null,
+          lastFulfilledAt: fulfilled ? o.lastFulfilledAt || null : null,
           open, fulfilled,
           openValue: money(open * o.unit), fulfilledValue: money(fulfilled * o.unit),
         });
@@ -1372,6 +1430,8 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
           addOrderRecord({
             name: r.name, createdAt: new Date(r.created_at).toISOString(), customerId: r.customer_id || "",
             label: r.label || "Unknown", sku: r.sku, title: r.title, skuSource: r.sku_source,
+            firstFulfilledAt: r.first_fulfilled_at ? new Date(r.first_fulfilled_at).toISOString() : null,
+            lastFulfilledAt: r.last_fulfilled_at ? new Date(r.last_fulfilled_at).toISOString() : null,
             rawOpen: Math.max(0, r.unfulfilled_quantity || 0), current: r.current_quantity || 0,
             unit: parseFloat(r.unit_price) || 0, inRange: !!r.in_range,
           });
@@ -1419,6 +1479,7 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
           if (o.cancelledAt) continue;
           if (idSet.size && !idSet.has(gidNum(o.customer?.id))) continue;
           const inRange = new Date(o.createdAt).getTime() >= fromMs && new Date(o.createdAt) < toExclusive;
+          const fd = fulfillmentDates(o);
           for (const e of o.lineItems?.edges || []) {
             const li = e.node;
             const rl = resolveLine(li.sku, li.title, cat);
@@ -1426,6 +1487,7 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
             addOrderRecord({
               name: o.name, createdAt: o.createdAt, customerId: gidNum(o.customer?.id), label: labelOf(o),
               sku: rl.sku, title: rl.title, skuSource: rl.source,
+              firstFulfilledAt: fd.first, lastFulfilledAt: fd.last,
               rawOpen: Math.max(0, li.unfulfilledQuantity ?? 0), current: li.currentQuantity ?? li.quantity ?? 0,
               unit: parseFloat(li.discountedUnitPriceSet?.shopMoney?.amount) || 0, inRange,
             });
