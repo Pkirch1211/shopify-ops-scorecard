@@ -121,6 +121,7 @@ tr.detail td:first-child{position:static}
 .badge.order{background:var(--green-light);color:var(--green)}
 .note{font-size:11px;color:var(--muted);line-height:1.6;margin-top:22px;padding:12px 14px;border-left:3px solid var(--warn);background:#f3ead9;max-width:1100px}
 .empty{padding:36px;text-align:center;color:var(--dim);font-size:13px}
+.ctag{display:inline-block;margin-left:6px;font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:1px 5px;border-radius:2px;background:#f3ead9;color:var(--warn);vertical-align:middle;white-space:nowrap}
 
 @media(max-width:960px){.kpi-grid{grid-template-columns:repeat(2,1fr)}}
 .crumb{margin-bottom:10px}
@@ -298,6 +299,11 @@ function usdK(n) {
   if (n >= 1e3) return '$' + Math.round(n / 1e3) + 'k';
   return '$' + Math.round(n);
 }
+// Custom line items (port pickups entered without a catalog variant) matched back to a SKU
+// server-side. Unmatched ones come back with sku "" and are keyed by their title.
+function isCustomSrc(s) { return s === 'title' || s === 'barcode' || s === 'fuzzy' || s === 'unmatched'; }
+function skuKey(r) { return r.sku || ('~' + (r.title || '')); }
+function ctag(on) { return on ? ' <span class="ctag">custom lines</span>' : ''; }
 function plural(n, one, many) { return n + ' ' + (n === 1 ? one : (many || one + 's')); }
 function ymd(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
 function fmtDate(s) { return new Date(s + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); }
@@ -666,7 +672,7 @@ function ovCustomerGroups(rows) {
 }
 function ovSkuGroups(rows) {
   return rows.map(function(r) {
-    return { key: r.sku, label: r.sku || '(no SKU)', sub: r.title, sku: r.sku, ytdValue: r.ytdValue, ytdUnits: r.ytdUnits,
+    return { key: r.sku || ('~' + (r.title || '')), label: r.sku || r.title || '(no SKU)', sub: r.sku ? r.title : 'No catalog match', custom: !!r.custom, sku: r.sku, ytdValue: r.ytdValue, ytdUnits: r.ytdUnits,
       unfUnits: r.unfUnits, unfValue: r.unfValue, draftUnits: r.draftUnits, draftValue: r.draftValue, openCustomers: r.openCustomers,
       openUnits: r.unfUnits + r.draftUnits, openValue: r.unfValue + r.draftValue, hay: ((r.sku || '') + ' ' + (r.title || '')).toLowerCase() };
   });
@@ -749,7 +755,7 @@ function renderOverviewTable() {
     C.map(function(c) { return '<th data-ovk="' + c.k + '" class="' + (c.sep ? 'dsep ' : '') + (sp.key === c.k ? 'sorted' : '') + '">' + c.h + arrow(c.k) + '</th>'; }).join('') + '</tr>';
   var body = ovShown.map(function(g, i) {
     var sub = view === 'customer' ? (g.locations > 1 ? g.locations + ' locations' : '') : g.sub;
-    return '<tr class="main" data-ci="' + i + '"><td><span class="name">' + esc(g.label) + '</span>' + (sub ? '<span class="desc">' + esc(sub) + '</span>' : '') + '</td>' +
+    return '<tr class="main" data-ci="' + i + '"><td><span class="name">' + esc(g.label) + ctag(g.custom) + '</span>' + (sub ? '<span class="desc">' + esc(sub) + '</span>' : '') + '</td>' +
       C.map(function(c) {
         var v = g[c.k] || 0, cls = [];
         if (c.sep) cls.push('dsep');
@@ -824,7 +830,7 @@ function exportOverviewCsv() {
 function mergeRecords(list) {
   var map = {}, out = [];
   list.forEach(function(r) {
-    var k = r.type + '|' + r.name + '|' + r.sku + '|' + r.customerId;
+    var k = r.type + '|' + r.name + '|' + skuKey(r) + '|' + r.customerId;
     if (!map[k]) { map[k] = Object.assign({}, r); out.push(map[k]); }
     else {
       var m = map[k];
@@ -987,11 +993,17 @@ function render() {
 
   if (view === 'customer') {
     var bySku = {}, order = [];
-    lastReqSkus.forEach(function(s) { bySku[s] = { label: s, sub: '', recs: [] }; order.push(s); });
+    lastReqSkus.forEach(function(s) { bySku[s] = { label: s, sub: '', recs: [], custom: false }; order.push(s); });
     recs.forEach(function(r) {
-      if (!bySku[r.sku]) { bySku[r.sku] = { label: r.sku, sub: '', recs: [] }; order.push(r.sku); }
-      bySku[r.sku].sub = bySku[r.sku].sub || r.title;
-      bySku[r.sku].recs.push(r);
+      var k = skuKey(r);
+      if (!bySku[k]) {
+        bySku[k] = r.sku ? { label: r.sku, sub: '', recs: [], custom: false }
+                         : { label: r.title || 'Custom line', sub: 'No catalog match', recs: [], custom: false };
+        order.push(k);
+      }
+      if (r.sku) bySku[k].sub = bySku[k].sub || r.title;
+      if (isCustomSrc(r.skuSource)) bySku[k].custom = true;
+      bySku[k].recs.push(r);
     });
     var groups = order.map(function(k) { return bySku[k]; });
     // Keep the pasted SKU order unless the reader clicks a column to sort.
@@ -1003,7 +1015,8 @@ function render() {
       var byCo = {}, keys = [];
       sr.forEach(function(r) {
         var co = companyOf(r);
-        if (!byCo[co.key]) { byCo[co.key] = { label: co.label, sub: co.locations > 1 ? co.locations + ' locations' : '', recs: [] }; keys.push(co.key); }
+        if (!byCo[co.key]) { byCo[co.key] = { label: co.label, sub: co.locations > 1 ? co.locations + ' locations' : '', recs: [], custom: false }; keys.push(co.key); }
+        if (isCustomSrc(r.skuSource)) byCo[co.key].custom = true;
         byCo[co.key].recs.push(r);
       });
       var desc = sr.length ? sr[0].title : '';
@@ -1016,6 +1029,7 @@ function render() {
   html += '<div class="note"><b>Heads up:</b> This covers drafts and orders in Shopify. Orders received in MarketTime that haven\'t transferred to Shopify yet are not included. ' +
     'Open = open drafts + unfulfilled orders. Orders counts distinct drafts and orders with open units. ' +
     'Dollars are merchandise value (units × unit price after line-level discounts); order-level discounts, tax and shipping are not included, so they won\'t match invoice totals. ' +
+    'Custom line items (e.g. port pickups entered outside inventory) are matched to their catalog SKU by the SKU or UPC typed on the line, or by a clear product-name match, and tagged CUSTOM LINES; ones that can\'t be matched show under their own title. ' +
     'Click a row to see the drafts and orders behind it, or a column heading to sort.</div>';
   $('results').innerHTML = html;
 }
@@ -1041,7 +1055,7 @@ function table(firstCol, groupsIn, hideSub, useDefault) {
     var t = g.t, gi = groupsStore.length;
     groupsStore.push(g);
     allRecs = allRecs.concat(g.recs);
-    var rows = '<tr class="main" data-g="' + gi + '"><td><span class="name">' + esc(g.label) + '</span>' +
+    var rows = '<tr class="main" data-g="' + gi + '"><td><span class="name">' + esc(g.label) + ctag(g.custom) + '</span>' +
       (g.sub && !hideSub ? '<span class="desc">' + esc(g.sub) + '</span>' : '') + '</td>' +
       C.map(function(c) {
         var cls = [];
@@ -1104,7 +1118,8 @@ function detail(recs) {
     return '<div class="drow"><span class="badge ' + r.type + '">' + (r.type === 'draft' ? 'Draft' : 'Order') + '</span>' +
       '<span><b>' + esc(r.name) + '</b></span>' +
       '<span>' + esc(new Date(r.createdAt).toLocaleDateString()) + '</span>' +
-      '<span class="d-title" style="color:var(--muted)">' + esc(r.label) + (view === 'sku' ? '' : ' · ' + esc(r.sku)) + '</span>' +
+      '<span class="d-title" style="color:var(--muted)">' + esc(r.label) + (view === 'sku' ? '' : ' · ' + esc(r.sku || 'no SKU')) +
+        (isCustomSrc(r.skuSource) ? ' <span class="ctag">custom line</span>' : '') + '</span>' +
       '<span class="d-qty">' + parts.join('<br>') + '</span></div>';
   }).join('');
 }
