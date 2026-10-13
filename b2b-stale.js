@@ -22,6 +22,26 @@ const LABEL_CARRIER = process.env.B2B_LABEL_CARRIER || "ups";
 const LABEL_CARRIER_RE = new RegExp(LABEL_CARRIER, "i");
 const CARRIER_IS_UPS = /^ups$/i.test(LABEL_CARRIER.trim());
 
+// Internal / non-customer orders (inventory transfers, VAS, QC inspections,
+// scrap) that sit unfulfilled by design. Matched case-insensitively on the
+// order email OR the company name. Env vars ADD to these defaults
+// (comma-separated); they don't replace them.
+function csvSet(raw) {
+  return String(raw || "").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+}
+const EXCLUDED_EMAILS = new Set([
+  "weiss@lifelines.com",
+  "tsmith@lifelines.com",
+  "christina@lifelines.com",
+  "rebecca@lifelines.com",
+  ...csvSet(process.env.B2B_STALE_EXCLUDE_EMAILS),
+]);
+const EXCLUDED_COMPANIES = new Set([
+  "tim smith",
+  "inspections - internal qc",
+  ...csvSet(process.env.B2B_STALE_EXCLUDE_COMPANIES),
+]);
+
 // Fulfillment display statuses that mean "done" — never stale.
 const TERMINAL_STATUSES = new Set(["DELIVERED", "CANCELED", "CANCELLED", "LABEL_VOIDED", "PICKED_UP", "READY_FOR_PICKUP"]);
 // Carrier exception signals (display status or latest event status).
@@ -120,6 +140,14 @@ module.exports = function createB2BStale({ app, db, gql, gqlAll, CREDS, HOLD_CUS
     return handle && id ? `https://admin.shopify.com/store/${handle}/orders/${id}` : null;
   }
 
+  function isExcludedOrder(o) {
+    const email = (o.email || "").trim().toLowerCase();
+    if (email === holdEmail || EXCLUDED_EMAILS.has(email)) return true;
+    const s = o.shippingAddress || {}, b = o.billingAddress || {};
+    return [s.company, b.company, s.name, b.name]
+      .some(v => v && EXCLUDED_COMPANIES.has(String(v).trim().toLowerCase()));
+  }
+
   function carrierMatches(t) {
     if (LABEL_CARRIER_RE.test(t.company || "")) return true;
     // UPS tracking numbers start with 1Z — catches labels where the 3PL
@@ -157,10 +185,11 @@ module.exports = function createB2BStale({ app, db, gql, gqlAll, CREDS, HOLD_CUS
     const now = Date.now();
     const sourceCounts = {};
     const rows = [];
+    let excludedCount = 0;
 
     for (const o of orders) {
       if (o.cancelledAt) continue;
-      if ((o.email || "").toLowerCase() === holdEmail) continue; // SKU-hold orders are unfulfilled on purpose
+      if (isExcludedOrder(o)) { excludedCount++; continue; } // hold@ + internal transfers/VAS/QC
 
       const src = o.sourceName || "(none)";
       sourceCounts[src] = (sourceCounts[src] || 0) + 1;
@@ -212,6 +241,7 @@ module.exports = function createB2BStale({ app, db, gql, gqlAll, CREDS, HOLD_CUS
     rows.sort((a, b) => b.daysStale - a.daysStale);
     await writeSnapshot("unfulfilled", rows, {
       scanned: orders.length,
+      excludedCount,
       sourceCounts,
       staleDays: UNFULFILLED_STALE_DAYS,
       lookbackDays: UNFULFILLED_LOOKBACK_DAYS,
@@ -252,7 +282,7 @@ module.exports = function createB2BStale({ app, db, gql, gqlAll, CREDS, HOLD_CUS
 
     for (const o of orders) {
       if (o.cancelledAt) continue;
-      if ((o.email || "").toLowerCase() === holdEmail) continue;
+      if (isExcludedOrder(o)) continue;
       for (const f of o.fulfillments || []) {
         if ((f.status || "").toUpperCase() === "CANCELLED") continue;
         const disp = (f.displayStatus || "").toUpperCase().replace(/ /g, "_");
