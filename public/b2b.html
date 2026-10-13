@@ -346,7 +346,15 @@ function hideBanner(id) { document.getElementById(id).style.display = 'none'; }
 
 async function postJSON(url) {
   var res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-  var data = await res.json();
+  var text = await res.text();
+  var data;
+  try { data = JSON.parse(text); }
+  catch (e) {
+    // Server sent HTML (usually Express's "Cannot POST" 404 page) — the route isn't registered.
+    throw new Error(res.status === 404
+      ? url + ' not found on server (route not registered — check server.js wiring / deploy)'
+      : url + ' returned HTTP ' + res.status + ' (non-JSON response)');
+  }
   if (!res.ok) throw new Error(data.error || 'Server error');
   return data;
 }
