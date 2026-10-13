@@ -3,95 +3,153 @@
 <head>
 <meta charset="UTF-8">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>B2B Order Process — LifeLines</title>
+<title>B2B Fulfillment — LifeLines</title>
 <style>
 @import url('https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=swap');
-:root{--bg:#f0f0eb;--surface:#f7f7f3;--surface2:#e8e8e3;--border:#d4d4cc;--border2:#c8c8c0;--text:#2a2a28;--muted:#6b6b64;--dim:#9a9a92;--green:#4a6741;--green-bg:#4a6741;--green-light:#e8ede7;--dtc:#3d5c8a;--b2b:#4a6741;--warn:#8a5c2a;--danger:#8a2a2a;--sans:'Satoshi',sans-serif;--shadow:0 1px 3px rgba(0,0,0,0.07)}
+:root{--bg:#f0f0eb;--surface:#f7f7f3;--surface2:#e8e8e3;--border:#d4d4cc;--border2:#c8c8c0;--text:#2a2a28;--muted:#6b6b64;--dim:#9a9a92;--green:#4a6741;--green-bg:#4a6741;--green-light:#e8ede7;--b2b:#4a6741;--b2b-light:#e8ede7;--warn:#8a5c2a;--danger:#8a2a2a;--sans:'Satoshi',sans-serif;--shadow:0 1px 3px rgba(0,0,0,0.07)}
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;min-height:100vh}
 header{position:sticky;top:0;z-index:100;display:grid;grid-template-columns:auto 1fr auto;align-items:stretch;border-bottom:2px solid var(--border);background:var(--surface)}
 .header-brand{background:var(--green-bg);color:#fff;padding:14px 22px;display:flex;flex-direction:column;justify-content:center}
-.brand-name{font-family:var(--sans);font-size:15px;font-weight:600;letter-spacing:.12em;text-transform:uppercase}
-.brand-sub{font-family:var(--sans);font-size:9px;letter-spacing:.14em;text-transform:uppercase;opacity:.65;margin-top:2px}
+.brand-name{font-size:15px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+.brand-sub{font-size:9px;letter-spacing:.14em;text-transform:uppercase;opacity:.65;margin-top:2px}
 .header-title{padding:14px 24px;display:flex;flex-direction:column;justify-content:center;border-right:1px solid var(--border)}
-.header-title h1{font-family:var(--sans);font-size:15px;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
-.header-title p{font-family:var(--sans);font-size:10px;color:var(--muted);margin-top:3px;letter-spacing:.05em}
+.header-title h1{font-size:15px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+.header-title p{font-size:10px;color:var(--muted);margin-top:3px;letter-spacing:.05em}
 .header-right{display:flex;align-items:center;gap:20px;padding:0 24px}
 nav{display:flex;gap:3px}
-.nav-link{font-family:var(--sans);font-size:10px;letter-spacing:.1em;text-transform:uppercase;padding:6px 14px;border:1px solid transparent;border-radius:2px;text-decoration:none;color:var(--muted);transition:all .12s}
+.nav-link{font-size:10px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;padding:6px 14px;border:1px solid transparent;border-radius:2px;text-decoration:none;color:var(--muted);transition:all .12s}
 .nav-link:hover{color:var(--text);border-color:var(--border2)}
 .nav-link.active{color:var(--green);border-color:var(--green);background:var(--green-light)}
-.refresh-status{font-family:var(--sans);font-size:10px;color:var(--dim);display:flex;align-items:center;gap:7px;white-space:nowrap}
-.refresh-dot{width:6px;height:6px;border-radius:50%;background:var(--dim);flex-shrink:0;transition:background .3s}
+.refresh-status{font-size:10px;color:var(--dim);display:flex;align-items:center;gap:7px;white-space:nowrap}
+.refresh-dot{width:6px;height:6px;border-radius:50%;background:var(--dim);flex-shrink:0}
 .refresh-dot.live{background:var(--green);animation:pulse 2s infinite}
 .refresh-dot.fetching{background:var(--warn);animation:spin .7s linear infinite;border-radius:0;width:8px;height:8px}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 @keyframes spin{to{transform:rotate(360deg)}}
-.controls-bar{display:flex;align-items:center;gap:10px;padding:14px 28px;background:var(--surface2);border-bottom:1px solid var(--border)}
-.controls-bar label{font-family:var(--sans);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
-.next-refresh{font-family:var(--sans);font-size:10px;color:var(--dim);margin-left:auto}
-main{padding:24px 28px 48px;max-width:1400px;margin:0 auto}
+.controls-bar{display:flex;align-items:center;gap:14px;padding:14px 28px;background:var(--surface2);border-bottom:1px solid var(--border)}
+.fetch-time,.sync-time{font-size:10px;color:var(--dim)}
+.next-refresh{font-size:10px;color:var(--dim);margin-left:auto}
+main{padding:24px 28px 48px;max-width:1500px;margin:0 auto}
 .section-header{display:flex;align-items:center;gap:10px;margin-bottom:12px;margin-top:28px}
 .section-header:first-child{margin-top:0}
-.section-dot{width:6px;height:6px;border-radius:50%;background:var(--green);flex-shrink:0}
-.section-title{font-family:var(--sans);font-size:10px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.section-dot{width:6px;height:6px;border-radius:50%;background:var(--b2b);flex-shrink:0}
+.section-title{font-size:10px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
 .section-line{flex:1;height:1px;background:var(--border)}
-.kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--border);border-radius:3px;overflow:hidden;background:var(--border);gap:1px;box-shadow:var(--shadow)}
+.count-label{font-size:10px;color:var(--muted)}
+
+.kpi-grid{display:grid;grid-template-columns:repeat(6,1fr);border:1px solid var(--border);border-radius:3px;overflow:hidden;background:var(--border);gap:1px;box-shadow:var(--shadow)}
+.kpi-grid.four{grid-template-columns:repeat(4,1fr)}
 .kpi-card{background:var(--surface);padding:18px 20px;cursor:default}
 .kpi-card.clickable{cursor:pointer;transition:background .12s}
 .kpi-card.clickable:hover{background:#eeeee9}
-.kpi-label{font-family:var(--sans);font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
-.kpi-value{font-family:var(--sans);font-size:32px;font-weight:600;color:var(--text);line-height:1}
+.kpi-label{font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+.kpi-value{font-size:32px;font-weight:700;color:var(--text);line-height:1}
 .kpi-value.warn{color:var(--warn)}
-.kpi-hint{font-family:var(--sans);font-size:10px;color:var(--dim);margin-top:8px}
+.kpi-value.danger{color:var(--danger)}
+.kpi-hint{font-size:10px;color:var(--dim);margin-top:8px}
 .kpi-hint.action{color:var(--green)}
-.two-col{display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start}
-.table-wrap{border:1px solid var(--border);border-radius:3px;overflow:hidden;box-shadow:var(--shadow)}
+
+.tabs{display:flex;gap:0;border-bottom:2px solid var(--border);margin-top:28px;margin-bottom:16px;overflow-x:auto}
+.tab{font-family:var(--sans);font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:10px 18px;border:none;background:none;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;white-space:nowrap}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--green);border-bottom-color:var(--green)}
+.tab .tab-count{display:inline-block;margin-left:6px;font-size:10px;padding:1px 6px;border-radius:2px;background:var(--surface2);color:var(--muted)}
+.tab.active .tab-count{background:var(--green-light);color:var(--green)}
+.panel{display:none}
+.panel.active{display:block}
+.panel-meta{font-size:11px;color:var(--muted);margin-bottom:12px;line-height:1.5}
+
+.toolbar{display:flex;align-items:center;gap:6px;margin-bottom:12px;flex-wrap:wrap}
+.filter-btn{font-family:var(--sans);font-size:10px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;padding:5px 12px;border-radius:2px;border:1px solid var(--border2);background:var(--surface);color:var(--muted);cursor:pointer;transition:all .12s}
+.filter-btn:hover{color:var(--text);border-color:var(--b2b)}
+.filter-btn.active{background:var(--b2b-light);color:var(--b2b);border-color:var(--b2b)}
+.search-input{background:var(--surface);border:1px solid var(--border2);color:var(--text);font-family:var(--sans);font-size:12px;padding:5px 10px;border-radius:2px;outline:none;width:220px;margin-left:4px}
+.search-input:focus{border-color:var(--b2b)}
+.result-count{font-size:10px;color:var(--muted);margin-left:auto}
+.export-btn{font-family:var(--sans);font-size:10px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;padding:5px 12px;border-radius:2px;border:1px solid var(--border2);background:var(--surface);color:var(--muted);cursor:pointer;transition:all .12s}
+.export-btn:hover{color:var(--green);border-color:var(--green)}
+
+.table-wrap{border:1px solid var(--border);border-radius:3px;overflow:hidden;box-shadow:var(--shadow);overflow-x:auto}
 table{width:100%;border-collapse:collapse}
+table.wide{min-width:960px}
 thead tr{background:var(--surface2)}
-th{font-family:var(--sans);font-size:9px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);padding:10px 16px;text-align:left;border-bottom:1px solid var(--border)}
+th{font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);padding:10px 14px;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap}
 th.sortable{cursor:pointer;user-select:none}
 th.sortable:hover{color:var(--text)}
-th .sort-icon{margin-left:4px;opacity:.4;font-size:10px}
-th.sorted .sort-icon{opacity:1;color:var(--green)}
-td{padding:12px 16px;border-bottom:1px solid var(--border);font-family:var(--sans);font-size:12px}
+th .si{margin-left:4px;opacity:.4;font-size:10px}
+th.sorted .si{opacity:1;color:var(--b2b)}
+td{padding:12px 14px;border-bottom:1px solid var(--border);font-size:12px;vertical-align:top}
 tr:last-child td{border-bottom:none}
 tbody tr{background:var(--surface)}
-tbody tr:hover{background:var(--bg)}
-.rank-num{color:var(--dim);font-size:11px;width:24px;display:inline-block}
-.customer-name{color:var(--text);font-weight:500}
-.customer-email{color:var(--muted);font-size:11px;margin-top:2px}
-.count-bar-wrap{display:flex;align-items:center;gap:10px}
-.count-bar{height:4px;background:var(--green);border-radius:2px;opacity:.5;min-width:2px}
-.money-cell{color:var(--green)}
-.oos-title{color:var(--text);font-weight:500}
-.oos-variant{color:var(--muted);font-size:11px;margin-top:2px}
-.oos-sku{color:var(--dim);font-size:10px}
-.oos-count{color:var(--warn);font-weight:600}
-.affected-drafts{color:var(--dim);font-size:10px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
+tbody tr.row-main{cursor:pointer;transition:background .1s}
+tbody tr.row-main:hover{background:var(--bg)}
+tbody tr.row-main.expanded{background:var(--b2b-light)}
+.expand-row{display:none}
+.expand-row.open{display:table-row}
+.expand-row td{background:#edf1ec;padding:16px 20px}
+.chev{width:28px;color:var(--dim);font-size:11px}
+.strong{font-weight:600;color:var(--text)}
+.sub{color:var(--muted);font-size:10px;margin-top:2px}
+.dim{color:var(--dim)}
+.num{text-align:right;white-space:nowrap}
+a.order-link{color:var(--text);font-weight:600;text-decoration:none}
+a.order-link:hover{color:var(--green);text-decoration:underline}
+
+.days-badge{display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:2px;border:1px solid;white-space:nowrap}
+.days-badge.critical{background:#f5e0e0;color:var(--danger);border-color:#d49696}
+.days-badge.warn{background:#f5ede0;color:var(--warn);border-color:#d4b896}
+.days-badge.ok{background:var(--b2b-light);color:var(--b2b);border-color:#b4c4b0}
+.status-badge{display:inline-block;font-size:9px;font-weight:600;padding:2px 8px;border-radius:2px;border:1px solid;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
+.status-badge.neutral{background:var(--surface2);color:var(--muted);border-color:var(--border2)}
+.status-badge.partial{background:#f0ede8;color:var(--warn);border-color:#d4b896}
+.status-badge.label_only{background:#f0ede8;color:var(--warn);border-color:#d4b896}
+.status-badge.in_transit{background:var(--b2b-light);color:var(--b2b);border-color:#b4c4b0}
+.status-badge.exception{background:#f5e0e0;color:var(--danger);border-color:#d49696}
+
+.expand-grid{display:grid;grid-template-columns:1fr 1fr 2fr;gap:20px}
+.expand-grid.two{grid-template-columns:1fr 2fr}
+.expand-section-title{font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+.detail-row{display:flex;gap:8px;margin-bottom:5px;font-size:11px}
+.detail-label{color:var(--muted);min-width:80px;flex-shrink:0}
+.detail-val{color:var(--text);word-break:break-word}
+.line-list{display:flex;flex-direction:column;gap:4px}
+.line-item{display:grid;grid-template-columns:110px 1fr 60px;gap:10px;font-size:11px}
+.line-item .li-sku{font-weight:600}
+.line-item .li-title{color:var(--muted)}
+.line-item .li-qty{text-align:right;color:var(--warn);font-weight:600}
+.event-list{display:flex;flex-direction:column;gap:6px}
+.event-item{display:flex;gap:10px;align-items:flex-start;font-size:11px}
+.event-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;margin-top:4px}
+.event-dot.latest{background:var(--b2b)}
+.event-dot.old{background:var(--border2)}
+.event-time{color:var(--muted);white-space:nowrap;min-width:140px;font-size:10px}
+.event-status{font-weight:600;color:var(--text);min-width:120px}
+.event-msg{color:var(--muted)}
+.tracking-num{font-size:11px;color:var(--b2b);font-weight:500}
+.tracking-link{color:var(--b2b);text-decoration:none;font-size:10px}
+.tracking-link:hover{text-decoration:underline}
+.none{font-size:11px;color:var(--dim);font-style:italic}
+.empty-state{padding:50px;text-align:center}
+.empty-title{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--green);margin-bottom:8px}
+.empty-sub{font-size:13px;color:var(--muted)}
+
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start;margin-top:20px}
+.hold-qty,.oos-count{font-weight:600;color:var(--warn)}
 .avail-zero{color:var(--danger);font-weight:600}
 .avail-neg{color:var(--warn);font-weight:600}
+.trunc{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px}
 .table-toolbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px}
-.search-input{background:var(--surface);border:1px solid var(--border2);color:var(--text);font-family:var(--sans);font-size:12px;padding:5px 10px;border-radius:2px;outline:none;width:200px}
-.search-input:focus{border-color:var(--green)}
-.count-label{font-family:var(--sans);font-size:10px;color:var(--muted)}
+
 .state-panel{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:80px 40px;gap:12px;text-align:center}
-.state-title{font-family:var(--sans);font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--text)}
-.state-sub{font-size:13px;color:var(--muted);max-width:340px;line-height:1.6}
-.spinner{width:16px;height:16px;border:2px solid var(--border2);border-top-color:var(--green);border-radius:50%;animation:spin .7s linear infinite}
-.error-banner{background:#f5e0e0;border:1px solid #d49696;color:#8a2a2a;font-family:var(--sans);font-size:11px;padding:10px 16px;border-radius:2px;margin-bottom:16px;display:none}
-.fetch-time{font-family:var(--sans);font-size:10px;color:var(--dim)}
-.export-btn{font-size:10px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;padding:4px 10px;border-radius:2px;border:1px solid var(--border2);background:var(--surface);color:var(--muted);cursor:pointer;transition:all .12s;float:right}
-.export-btn:hover{color:var(--green);border-color:var(--green)}
-.oos-empty{padding:40px;text-align:center;font-family:var(--sans);font-size:11px;color:var(--green)}
-.hold-sku{font-size:11px;font-weight:600;color:var(--text)}
-.hold-desc{color:var(--muted);font-size:11px;margin-top:2px}
-.hold-qty{font-weight:600;color:var(--warn)}
-.hold-orders{color:var(--dim);font-size:10px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:340px}
-.holds-empty{padding:40px;text-align:center;font-family:var(--sans);font-size:11px;color:var(--green)}
-@media(max-width:960px){.two-col{grid-template-columns:1fr}.kpi-grid{grid-template-columns:repeat(2,1fr)}}
+.state-title{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text)}
+.state-sub{font-size:13px;color:var(--muted);max-width:360px;line-height:1.6}
+.spinner{width:16px;height:16px;border:2px solid var(--border2);border-top-color:var(--b2b);border-radius:50%;animation:spin .7s linear infinite}
+.error-banner{background:#f5e0e0;border:1px solid #d49696;color:var(--danger);font-size:11px;padding:10px 16px;border-radius:2px;margin-bottom:16px;display:none}
+
+@media(max-width:1100px){.kpi-grid{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:960px){.two-col{grid-template-columns:1fr}.expand-grid,.expand-grid.two{grid-template-columns:1fr}.kpi-grid.four{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:640px){
   header{grid-template-columns:1fr;position:static}
   .header-brand{padding:10px 16px}
@@ -102,21 +160,21 @@ tbody tr:hover{background:var(--bg)}
   .controls-bar{flex-wrap:wrap;padding:10px 16px;gap:6px}
   .next-refresh{margin-left:0}
   main{padding:14px 14px 32px}
-  .kpi-grid{grid-template-columns:repeat(2,1fr)}
+  .kpi-grid,.kpi-grid.four{grid-template-columns:repeat(2,1fr)}
   .kpi-card{padding:12px 14px}
   .kpi-value{font-size:24px}
-  .table-wrap{overflow-x:auto}
-  table{min-width:480px}
+  .tab{padding:10px 12px;font-size:10px}
+  .search-input{width:100%;margin-left:0}
+  .result-count{margin-left:0}
   th,td{padding:8px 10px}
-  .table-toolbar{flex-wrap:wrap;gap:8px}
-  .search-input{width:100%}
+  .line-item{grid-template-columns:90px 1fr 44px}
 }
 </style>
 </head>
 <body>
 <header>
   <div class="header-brand"><div class="brand-name">LifeLines</div><div class="brand-sub">Ops Tools</div></div>
-  <div class="header-title"><h1>B2B Order Process</h1><p>Open Draft Orders &middot; Live View</p></div>
+  <div class="header-title"><h1>B2B Fulfillment</h1><p>Stale Unfulfilled Orders &middot; UPS Labels Not Delivered &middot; Drafts &amp; Holds</p></div>
   <div class="header-right">
     <nav><a href="/" class="nav-link">Scorecard</a><a href="/dtc.html" class="nav-link">DTC</a><a href="/b2b.html" class="nav-link active">B2B</a><a href="/npi.html" class="nav-link">NPI</a><a href="/care.html" class="nav-link">Care@</a><a href="/draft-health.html" class="nav-link">Order Engine</a><a href="/analytics.html" class="nav-link">Analytics</a></nav>
     <div class="refresh-status"><div class="refresh-dot" id="refreshDot"></div><span id="refreshLabel">Loading...</span></div>
@@ -124,168 +182,569 @@ tbody tr:hover{background:var(--bg)}
 </header>
 <div class="controls-bar">
   <span class="fetch-time" id="fetchTime"></span>
+  <span class="sync-time" id="syncTime"></span>
   <span class="next-refresh" id="nextRefresh"></span>
 </div>
 <main>
   <div class="error-banner" id="errorBanner"></div>
-  <div id="emptyState" class="state-panel"><div class="spinner"></div><div class="state-title">Loading...</div><div class="state-sub">Fetching open draft orders from Shopify.</div></div>
+  <div id="emptyState" class="state-panel"><div class="spinner"></div><div class="state-title">Loading...</div><div class="state-sub">Pulling B2B orders and fulfillments. The very first load after a deploy runs a full sync and can take a minute.</div></div>
+
   <div id="dashboard" style="display:none">
     <div class="section-header"><span class="section-dot"></span><span class="section-title">Overview</span><div class="section-line"></div></div>
     <div class="kpi-grid">
-      <div class="kpi-card">
-        <div class="kpi-label">Total Open Drafts</div>
-        <div class="kpi-value" id="kpiTotal">-</div>
-        <div class="kpi-hint">All statuses</div>
+      <div class="kpi-card clickable" onclick="jump('unfulfilled','all')"><div class="kpi-label">Stale Unfulfilled</div><div class="kpi-value danger" id="kpiUnf">-</div><div class="kpi-hint" id="kpiUnfHint">Draft-converted orders</div></div>
+      <div class="kpi-card clickable" onclick="jump('unfulfilled','all')"><div class="kpi-label">Oldest Unfulfilled</div><div class="kpi-value warn" id="kpiUnfOldest">-</div><div class="kpi-hint" id="kpiUnfOldestHint">&nbsp;</div></div>
+      <div class="kpi-card clickable" onclick="jump('unfulfilled','all')"><div class="kpi-label">Open Units Waiting</div><div class="kpi-value" id="kpiUnfUnits">-</div><div class="kpi-hint" id="kpiUnfValue">&nbsp;</div></div>
+      <div class="kpi-card clickable" onclick="jump('labels','all')"><div class="kpi-label">Labels Not Delivered</div><div class="kpi-value danger" id="kpiLbl">-</div><div class="kpi-hint" id="kpiLblHint">UPS</div></div>
+      <div class="kpi-card clickable" onclick="jump('labels','label_only')"><div class="kpi-label">No Carrier Scan</div><div class="kpi-value warn" id="kpiLblNoScan">-</div><div class="kpi-hint">Label created, never picked up</div></div>
+      <div class="kpi-card clickable" onclick="jump('labels','exception')"><div class="kpi-label">Carrier Exceptions</div><div class="kpi-value danger" id="kpiLblExc">-</div><div class="kpi-hint">Delayed / failed / attempted</div></div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab" data-tab="unfulfilled" onclick="setTab('unfulfilled')">Unfulfilled Orders<span class="tab-count" id="tabCountUnf">0</span></button>
+      <button class="tab" data-tab="labels" onclick="setTab('labels')">Label Created &middot; Not Delivered<span class="tab-count" id="tabCountLbl">0</span></button>
+      <button class="tab" data-tab="drafts" onclick="setTab('drafts')">Drafts &amp; Holds</button>
+    </div>
+
+    <!-- ── Unfulfilled ───────────────────────────────────────────── -->
+    <div class="panel" id="panel-unfulfilled">
+      <div class="panel-meta" id="unfMeta"></div>
+      <div class="toolbar">
+        <button class="filter-btn" data-group="unf" data-filter="all" onclick="setUnfFilter('all')">All</button>
+        <button class="filter-btn" data-group="unf" data-filter="UNFULFILLED" onclick="setUnfFilter('UNFULFILLED')">Unfulfilled</button>
+        <button class="filter-btn" data-group="unf" data-filter="PARTIAL" onclick="setUnfFilter('PARTIAL')">Partial</button>
+        <button class="filter-btn" data-group="unf" data-filter="ship_date" onclick="setUnfFilter('ship_date')">Past Ship Date</button>
+        <input class="search-input" id="unfSearch" type="text" placeholder="Search order, PO, customer, SKU..." oninput="applyUnf()">
+        <span class="result-count" id="unfCount"></span>
+        <button class="export-btn" onclick="exportUnf()">&#8595; Excel</button>
       </div>
-      <div class="kpi-card clickable" onclick="exportNeedsReview()" id="kpiNRCard">
-        <div class="kpi-label">Needs Review</div>
-        <div class="kpi-value warn" id="kpiNR">-</div>
-        <div class="kpi-hint action" id="kpiNRHint">Click to export CSV</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-label">OOS Line Items</div>
-        <div class="kpi-value" id="kpiOOS">-</div>
-        <div class="kpi-hint">Variants at 0 inventory</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-label">SKUs On Hold</div>
-        <div class="kpi-value" id="kpiHolds">-</div>
-        <div class="kpi-hint" id="kpiHoldsHint">Units held back</div>
+      <div class="table-wrap">
+        <table class="wide">
+          <thead><tr>
+            <th></th>
+            <th class="sortable sorted" data-tbl="unf" data-col="daysStale" onclick="sortUnf('daysStale',this)">Days <span class="si">&#8595;</span></th>
+            <th>Order</th>
+            <th>Customer</th>
+            <th>Status</th>
+            <th>Converted</th>
+            <th>Ship Date</th>
+            <th class="sortable num" data-tbl="unf" data-col="openUnits" onclick="sortUnf('openUnits',this)">Open Units <span class="si">&#8597;</span></th>
+            <th class="sortable num" data-tbl="unf" data-col="orderTotal" onclick="sortUnf('orderTotal',this)">Total <span class="si">&#8597;</span></th>
+          </tr></thead>
+          <tbody id="unfBody"></tbody>
+        </table>
       </div>
     </div>
-    <div class="two-col" style="margin-top:28px">
-      <div>
-        <div class="section-header"><span class="section-dot"></span><span class="section-title">SKU Holds</span><div class="section-line"></div><span class="count-label" id="holdsSummary"></span></div>
-        <div id="holdsError" style="display:none" class="error-banner"></div>
-        <div class="table-toolbar">
-          <input class="search-input" type="text" placeholder="Search SKU or description..." oninput="filterHolds(this.value)">
-          <span>
-            <span class="count-label" id="holdsCount"></span>
-            <button class="export-btn" onclick="exportHolds()">&#8595; CSV</button>
-          </span>
-        </div>
-        <div class="table-wrap" id="holdsTableWrap">
-          <table>
-            <thead><tr>
-              <th>SKU / Description</th>
-              <th class="sortable sorted" onclick="sortHolds('quantity',this)" data-col="quantity">Qty On Hold <span class="sort-icon">&#8595;</span></th>
-              <th class="sortable" onclick="sortHolds('orderCount',this)" data-col="orderCount"># Orders <span class="sort-icon">&#8597;</span></th>
-            </tr></thead>
-            <tbody id="holdsBody"></tbody>
-          </table>
-        </div>
-        <div id="holdsEmpty" style="display:none" class="holds-empty">&#10003; No inventory currently on hold</div>
+
+    <!-- ── Labels ─────────────────────────────────────────────────── -->
+    <div class="panel" id="panel-labels">
+      <div class="panel-meta" id="lblMeta"></div>
+      <div class="toolbar">
+        <button class="filter-btn" data-group="lbl" data-filter="all" onclick="setLblFilter('all')">All</button>
+        <button class="filter-btn" data-group="lbl" data-filter="label_only" onclick="setLblFilter('label_only')">No Carrier Scan</button>
+        <button class="filter-btn" data-group="lbl" data-filter="in_transit" onclick="setLblFilter('in_transit')">In Transit</button>
+        <button class="filter-btn" data-group="lbl" data-filter="exception" onclick="setLblFilter('exception')">Exception</button>
+        <input class="search-input" id="lblSearch" type="text" placeholder="Search order, PO, customer, tracking..." oninput="applyLbl()">
+        <span class="result-count" id="lblCount"></span>
+        <button class="export-btn" onclick="exportLbl()">&#8595; Excel</button>
       </div>
-      <div>
-        <div class="section-header"><span class="section-dot"></span><span class="section-title">Out-of-Stock Items in Open Drafts</span><div class="section-line"></div></div>
-        <div class="table-wrap" id="oosTableWrap">
-          <table>
-            <thead><tr>
-              <th>Product / SKU</th>
-              <th class="sortable sorted" onclick="sortOOS('draftCount',this)" data-col="draftCount"># Drafts <span class="sort-icon">&#8595;</span></th>
-              <th>Units Req.</th>
-              <th>On Hand</th>
-            </tr></thead>
-            <tbody id="oosBody"></tbody>
-          </table>
+      <div class="table-wrap">
+        <table class="wide">
+          <thead><tr>
+            <th></th>
+            <th class="sortable sorted" data-tbl="lbl" data-col="daysSinceLabel" onclick="sortLbl('daysSinceLabel',this)">Since Label <span class="si">&#8595;</span></th>
+            <th>Order</th>
+            <th>Customer</th>
+            <th>Stage</th>
+            <th class="sortable" data-tbl="lbl" data-col="daysSinceLastEvent" onclick="sortLbl('daysSinceLastEvent',this)">Last Scan <span class="si">&#8597;</span></th>
+            <th>Est. Delivery</th>
+            <th>Tracking</th>
+          </tr></thead>
+          <tbody id="lblBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── Drafts & Holds (previous B2B tab content) ─────────────── -->
+    <div class="panel" id="panel-drafts">
+      <div class="error-banner" id="draftsError"></div>
+      <div class="kpi-grid four">
+        <div class="kpi-card"><div class="kpi-label">Total Open Drafts</div><div class="kpi-value" id="kpiTotal">-</div><div class="kpi-hint">All statuses</div></div>
+        <div class="kpi-card clickable" onclick="exportNeedsReview()" id="kpiNRCard"><div class="kpi-label">Needs Review</div><div class="kpi-value warn" id="kpiNR">-</div><div class="kpi-hint action" id="kpiNRHint">Click to export Excel</div></div>
+        <div class="kpi-card"><div class="kpi-label">OOS Line Items</div><div class="kpi-value" id="kpiOOS">-</div><div class="kpi-hint">Variants at 0 inventory</div></div>
+        <div class="kpi-card"><div class="kpi-label">SKUs On Hold</div><div class="kpi-value" id="kpiHolds">-</div><div class="kpi-hint" id="kpiHoldsHint">Units held back</div></div>
+      </div>
+      <div class="two-col">
+        <div>
+          <div class="section-header"><span class="section-dot"></span><span class="section-title">SKU Holds</span><div class="section-line"></div><span class="count-label" id="holdsSummary"></span></div>
+          <div class="error-banner" id="holdsError"></div>
+          <div class="table-toolbar">
+            <input class="search-input" style="margin-left:0" type="text" placeholder="Search SKU or description..." oninput="filterHolds(this.value)">
+            <span><span class="count-label" id="holdsCount"></span> <button class="export-btn" onclick="exportHolds()">&#8595; Excel</button></span>
+          </div>
+          <div class="table-wrap" id="holdsTableWrap">
+            <table>
+              <thead><tr>
+                <th>SKU / Description</th>
+                <th class="sortable sorted" data-tbl="holds" data-col="quantity" onclick="sortHolds('quantity',this)">Qty On Hold <span class="si">&#8595;</span></th>
+                <th class="sortable" data-tbl="holds" data-col="orderCount" onclick="sortHolds('orderCount',this)"># Orders <span class="si">&#8597;</span></th>
+              </tr></thead>
+              <tbody id="holdsBody"></tbody>
+            </table>
+          </div>
+          <div id="holdsEmpty" style="display:none" class="empty-state"><div class="empty-title">&#10003; No inventory on hold</div></div>
         </div>
-        <div id="oosEmpty" style="display:none" class="oos-empty">&#10003; No out-of-stock items in open drafts</div>
+        <div>
+          <div class="section-header"><span class="section-dot"></span><span class="section-title">Out-of-Stock Items in Open Drafts</span><div class="section-line"></div></div>
+          <div class="table-wrap" id="oosTableWrap">
+            <table>
+              <thead><tr>
+                <th>Product / SKU</th>
+                <th class="sortable sorted" data-tbl="oos" data-col="draftCount" onclick="sortOOS('draftCount',this)"># Drafts <span class="si">&#8595;</span></th>
+                <th>Units Req.</th>
+                <th>On Hand</th>
+              </tr></thead>
+              <tbody id="oosBody"></tbody>
+            </table>
+          </div>
+          <div id="oosEmpty" style="display:none" class="empty-state"><div class="empty-title">&#10003; No out-of-stock items</div></div>
+        </div>
       </div>
     </div>
   </div>
 </main>
 <script>
-const REFRESH_MS=5*60*1000;
-let allCustomers=[],allOOS=[],exportData=[];
-let allHolds=[];
-let customerSortCol='draftCount',customerSortDir=-1,oosSortCol='draftCount',oosSortDir=-1;
-let holdsSortCol='quantity',holdsSortDir=-1;
-let refreshTimer=null,countdownTimer=null,nextRefreshAt=null,hasData=false;
+var REFRESH_MS = 5 * 60 * 1000;
+var refreshTimer = null, countdownTimer = null, nextRefreshAt = null, hasData = false;
 
-function scheduleRefresh(){clearTimers();nextRefreshAt=Date.now()+REFRESH_MS;refreshTimer=setTimeout(function(){runFetch();},REFRESH_MS);countdownTimer=setInterval(updateCountdown,1000);updateCountdown();}
-function clearTimers(){if(refreshTimer)clearTimeout(refreshTimer);if(countdownTimer)clearInterval(countdownTimer);}
-function updateCountdown(){var r=Math.max(0,nextRefreshAt-Date.now());var m=Math.floor(r/60000);var s=Math.floor((r%60000)/1000);document.getElementById('nextRefresh').textContent='Next refresh in '+m+':'+(s<10?'0':'')+s;}
+var unfRows = [], unfFiltered = [], unfFilter = 'all', unfSortCol = 'daysStale', unfSortDir = -1;
+var lblRows = [], lblFiltered = [], lblFilter = 'all', lblSortCol = 'daysSinceLabel', lblSortDir = -1;
+var allHolds = [], allOOS = [], needsReviewExport = [];
+var holdsSortCol = 'quantity', holdsSortDir = -1;
 
-var isManualRefresh = false;
-async function runFetch(){clearTimers();setStatus('fetching');if(!hasData)show('emptyState');hideError();try{var results=await Promise.all([fetch('/api/b2b-drafts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})}),fetch('/api/sku-holds',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})})]);var res=results[0],res2=results[1];var data=await res.json();if(!res.ok)throw new Error(data.error||'Server error');hasData=true;render(data);try{var holdsData=await res2.json();if(res2.ok){hideHoldsError();renderHolds(holdsData);}else{showHoldsError(holdsData.error||'Server error');}}catch(e){showHoldsError(e.message);}setStatus('live');scheduleRefresh();}catch(err){showError(err.message);setStatus('error');if(!hasData)show('emptyState');scheduleRefresh();}}
+// ── helpers ─────────────────────────────────────────────────────────
+function esc(s) { if (s === null || s === undefined) return ''; return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+function fmtShort(iso) { if (!iso) return '—'; var d = new Date(iso); if (isNaN(d)) return esc(iso); return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); }
+function fmtDate(iso) { if (!iso) return '—'; var d = new Date(iso); if (isNaN(d)) return esc(iso); return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); }
+function fmtDateTime(iso) { if (!iso) return '—'; var d = new Date(iso); return fmtDate(iso) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
+// Ship dates are plain YYYY-MM-DD; parse as local so they don't shift a day.
+function fmtShipDate(v) { if (!v) return '—'; var m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})/); if (!m) return esc(v); return new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); }
+function fmtMoney(n) { if (n === null || n === undefined || isNaN(n)) return '—'; return '$' + Math.round(n).toLocaleString('en-US'); }
+function badge(days, warnAt, critAt) { var c = days >= critAt ? 'critical' : days >= warnAt ? 'warn' : 'ok'; return '<span class="days-badge ' + c + '">' + days + 'd</span>'; }
+function orderLink(r) { return r.adminUrl ? '<a class="order-link" href="' + esc(r.adminUrl) + '" target="_blank" onclick="event.stopPropagation()">' + esc(r.orderName) + '</a>' : '<span class="strong">' + esc(r.orderName) + '</span>'; }
+function stageLabel(s) { return s === 'label_only' ? 'No Carrier Scan' : s === 'exception' ? 'Exception' : 'In Transit'; }
+function pastShipDate(r) { return r.clockFrom === 'ship_date'; }
 
-function showHoldsError(msg){var el=document.getElementById('holdsError');el.textContent='SKU Holds error: '+msg;el.style.display='block';document.getElementById('holdsTableWrap').style.display='none';document.getElementById('holdsEmpty').style.display='none';}
-function hideHoldsError(){document.getElementById('holdsError').style.display='none';}
+// ── refresh loop ────────────────────────────────────────────────────
+function scheduleRefresh() { clearTimers(); nextRefreshAt = Date.now() + REFRESH_MS; refreshTimer = setTimeout(runFetch, REFRESH_MS); countdownTimer = setInterval(updateCountdown, 1000); updateCountdown(); }
+function clearTimers() { if (refreshTimer) clearTimeout(refreshTimer); if (countdownTimer) clearInterval(countdownTimer); }
+function updateCountdown() { var r = Math.max(0, nextRefreshAt - Date.now()); var m = Math.floor(r / 60000), s = Math.floor((r % 60000) / 1000); document.getElementById('nextRefresh').textContent = 'Next refresh in ' + m + ':' + (s < 10 ? '0' : '') + s; }
+function setStatus(state) { var dot = document.getElementById('refreshDot'); dot.className = 'refresh-dot'; if (state === 'live') dot.classList.add('live'); if (state === 'fetching') dot.classList.add('fetching'); }
+function show(id) { ['emptyState', 'dashboard'].forEach(function(s) { document.getElementById(s).style.display = s === id ? (s === 'dashboard' ? 'block' : 'flex') : 'none'; }); }
+function showBanner(id, msg) { var el = document.getElementById(id); el.textContent = msg; el.style.display = 'block'; }
+function hideBanner(id) { document.getElementById(id).style.display = 'none'; }
 
-function render(data){
-  show('dashboard');
-  document.getElementById('kpiTotal').textContent=data.totalDrafts.toLocaleString();
-  document.getElementById('kpiNR').textContent=data.needsReviewCount.toLocaleString();
-  document.getElementById('kpiOOS').textContent=data.oosItems.length.toLocaleString();
-  document.getElementById('fetchTime').textContent='Updated '+new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-  document.getElementById('refreshLabel').textContent='Updated '+new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-  if(data.needsReviewCount===0){document.getElementById('kpiNRHint').textContent='None flagged';document.getElementById('kpiNRCard').classList.remove('clickable');document.getElementById('kpiNRCard').style.cursor='default';}
-  // Build per-customer draft map for export
-  window.allCustomerDrafts = {};
-  (data.needsReviewExport || []).forEach(function(d) { if(d.email){if(!allCustomerDrafts[d.email])allCustomerDrafts[d.email]=[];allCustomerDrafts[d.email].push(d);} });
-  allOOS=data.oosItems;
-  exportData=data.needsReviewExport;
+async function postJSON(url) {
+  var res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  var data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Server error');
+  return data;
+}
+
+async function runFetch() {
+  clearTimers(); setStatus('fetching');
+  if (!hasData) show('emptyState');
+  hideBanner('errorBanner');
+
+  // Each source fails independently so one bad endpoint doesn't blank the page.
+  var results = await Promise.allSettled([postJSON('/api/b2b-stale'), postJSON('/api/b2b-drafts'), postJSON('/api/sku-holds')]);
+  var stale = results[0], drafts = results[1], holds = results[2];
+
+  if (stale.status === 'fulfilled') {
+    hasData = true; show('dashboard'); renderStale(stale.value);
+  } else {
+    showBanner('errorBanner', 'Stale fulfillments error: ' + stale.reason.message);
+  }
+
+  if (drafts.status === 'fulfilled') { hideBanner('draftsError'); renderDrafts(drafts.value); }
+  else showBanner('draftsError', 'Drafts error: ' + drafts.reason.message);
+
+  if (holds.status === 'fulfilled') { hideBanner('holdsError'); renderHolds(holds.value); }
+  else { showBanner('holdsError', 'SKU Holds error: ' + holds.reason.message); document.getElementById('holdsTableWrap').style.display = 'none'; }
+
+  if (!hasData && (drafts.status === 'fulfilled' || holds.status === 'fulfilled')) { hasData = true; show('dashboard'); }
+
+  var t = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  document.getElementById('fetchTime').textContent = 'Updated ' + t;
+  document.getElementById('refreshLabel').textContent = 'Updated ' + t;
+  setStatus(stale.status === 'fulfilled' ? 'live' : 'error');
+  scheduleRefresh();
+}
+
+// ── tabs ────────────────────────────────────────────────────────────
+function setTab(tab) {
+  document.querySelectorAll('.tab').forEach(function(b) { b.classList.toggle('active', b.dataset.tab === tab); });
+  document.querySelectorAll('.panel').forEach(function(p) { p.classList.toggle('active', p.id === 'panel-' + tab); });
+  try { history.replaceState(null, '', '#' + tab); } catch (e) {}
+}
+function jump(tab, filter) {
+  setTab(tab);
+  if (tab === 'unfulfilled') setUnfFilter(filter); else if (tab === 'labels') setLblFilter(filter);
+  document.querySelector('.tabs').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+function markFilter(group, f) { document.querySelectorAll('.filter-btn[data-group="' + group + '"]').forEach(function(b) { b.classList.toggle('active', b.dataset.filter === f); }); }
+function markSort(tbl, col, dir) {
+  document.querySelectorAll('th[data-tbl="' + tbl + '"]').forEach(function(t) {
+    var on = t.dataset.col === col;
+    t.classList.toggle('sorted', on);
+    t.querySelector('.si').innerHTML = on ? (dir === -1 ? '&#8595;' : '&#8593;') : '&#8597;';
+  });
+}
+function sortRows(rows, col, dir) {
+  rows.sort(function(a, b) {
+    var av = a[col], bv = b[col];
+    if (av === null || av === undefined) return 1;
+    if (bv === null || bv === undefined) return -1;
+    if (typeof av === 'string') return dir === -1 ? bv.localeCompare(av) : av.localeCompare(bv);
+    return dir === -1 ? bv - av : av - bv;
+  });
+}
+function toggleExpand(prefix, i) {
+  var row = document.getElementById(prefix + '-row-' + i), exp = document.getElementById(prefix + '-exp-' + i);
+  var open = !exp.classList.contains('open');
+  exp.classList.toggle('open', open); row.classList.toggle('expanded', open);
+  document.getElementById(prefix + '-chev-' + i).innerHTML = open ? '&#9660;' : '&#9654;';
+}
+
+// ── stale render ────────────────────────────────────────────────────
+function renderStale(data) {
+  var unf = data.unfulfilled || {}, lbl = data.labels || {};
+  unfRows = unf.rows || []; lblRows = lbl.rows || [];
+  var um = unf.meta || {}, lm = lbl.meta || {};
+
+  var syncedAt = unf.syncedAt || lbl.syncedAt;
+  document.getElementById('syncTime').textContent = syncedAt ? '· Shopify synced ' + new Date(syncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+
+  // KPIs — unfulfilled
+  var oldest = unfRows.reduce(function(m, r) { return r.daysStale > m.daysStale ? r : m; }, { daysStale: -1 });
+  var openUnits = unfRows.reduce(function(s, r) { return s + (r.openUnits || 0); }, 0);
+  var openValue = unfRows.reduce(function(s, r) { return s + (r.orderTotal || 0); }, 0);
+  document.getElementById('kpiUnf').textContent = unfRows.length.toLocaleString();
+  document.getElementById('kpiUnfHint').textContent = 'Unfulfilled ' + (um.staleDays || 3) + '+ days';
+  document.getElementById('kpiUnfOldest').textContent = oldest.daysStale >= 0 ? oldest.daysStale + 'd' : '—';
+  document.getElementById('kpiUnfOldestHint').textContent = oldest.daysStale >= 0 ? oldest.orderName + ' · ' + (oldest.customerName || '') : 'None';
+  document.getElementById('kpiUnfUnits').textContent = openUnits.toLocaleString();
+  document.getElementById('kpiUnfValue').textContent = fmtMoney(openValue) + ' order value';
+
+  // KPIs — labels
+  var noScan = lblRows.filter(function(r) { return r.stage === 'label_only'; }).length;
+  var exc = lblRows.filter(function(r) { return r.stage === 'exception'; }).length;
+  document.getElementById('kpiLbl').textContent = lblRows.length.toLocaleString();
+  document.getElementById('kpiLblHint').textContent = (lm.carrier || 'UPS').toUpperCase() + ' · ' + (lm.staleDays || 5) + '+ days since label';
+  document.getElementById('kpiLblNoScan').textContent = noScan.toLocaleString();
+  document.getElementById('kpiLblExc').textContent = exc.toLocaleString();
+
+  document.getElementById('tabCountUnf').textContent = unfRows.length;
+  document.getElementById('tabCountLbl').textContent = lblRows.length;
+
+  // Meta lines
+  var otherSources = Object.keys(um.sourceCounts || {}).filter(function(k) { return k !== 'shopify_draft_order'; })
+    .map(function(k) { return k + ' (' + um.sourceCounts[k] + ')'; });
+  document.getElementById('unfMeta').innerHTML =
+    'Draft-converted orders still unfulfilled ' + (um.staleDays || 3) + '+ days. Clock starts at the later of conversion or ship date.' +
+    (unf.resolvedCount ? ' · ' + unf.resolvedCount + ' tagged <b>resolved</b> hidden.' : '') +
+    (otherSources.length ? '<br><span class="dim">Excluded non-draft unfulfilled orders: ' + esc(otherSources.join(', ')) + '</span>' : '');
+  document.getElementById('lblMeta').innerHTML =
+    'Fulfillments with a ' + esc((lm.carrier || 'UPS').toUpperCase()) + ' tracking number, not delivered ' + (lm.staleDays || 5) + '+ days after the label was created (last ' + (lm.lookbackDays || 90) + ' days of orders).' +
+    (lbl.resolvedCount ? ' · ' + lbl.resolvedCount + ' tagged <b>resolved</b> hidden.' : '');
+
+  applyUnf(); applyLbl();
+}
+
+// ── unfulfilled table ───────────────────────────────────────────────
+function setUnfFilter(f) { unfFilter = f; markFilter('unf', f); applyUnf(); }
+function sortUnf(col) { if (unfSortCol === col) unfSortDir *= -1; else { unfSortCol = col; unfSortDir = -1; } markSort('unf', unfSortCol, unfSortDir); applyUnf(); }
+function applyUnf() {
+  var q = document.getElementById('unfSearch').value.toLowerCase();
+  unfFiltered = unfRows.filter(function(r) {
+    if (unfFilter === 'UNFULFILLED' && r.fulfillmentStatus !== 'UNFULFILLED') return false;
+    if (unfFilter === 'PARTIAL' && r.fulfillmentStatus !== 'PARTIALLY_FULFILLED') return false;
+    if (unfFilter === 'ship_date' && !pastShipDate(r)) return false;
+    if (q) {
+      var hay = [r.orderName, r.poNumber, r.customerName, r.email, r.tags, (r.openLines || []).map(function(l) { return l.sku + ' ' + l.title; }).join(' ')].join(' ').toLowerCase();
+      if (hay.indexOf(q) === -1) return false;
+    }
+    return true;
+  });
+  sortRows(unfFiltered, unfSortCol, unfSortDir);
+  document.getElementById('unfCount').textContent = unfFiltered.length + ' of ' + unfRows.length + ' orders';
+  renderUnf();
+}
+function renderUnf() {
+  var tbody = document.getElementById('unfBody');
+  if (!unfFiltered.length) { tbody.innerHTML = '<tr><td colspan="9"><div class="empty-state"><div class="empty-title">Nothing stale</div><div class="empty-sub">No unfulfilled orders matched the current filter.</div></div></td></tr>'; return; }
+  tbody.innerHTML = unfFiltered.map(function(r, i) {
+    var statusCls = r.fulfillmentStatus === 'PARTIALLY_FULFILLED' ? 'partial' : 'neutral';
+    var statusTxt = r.fulfillmentStatus === 'PARTIALLY_FULFILLED' ? 'Partial' : (r.fulfillmentStatus || '').replace(/_/g, ' ');
+    return '<tr class="row-main" id="unf-row-' + i + '" onclick="toggleExpand(\'unf\',' + i + ')">' +
+      '<td class="chev" id="unf-chev-' + i + '">&#9654;</td>' +
+      '<td>' + badge(r.daysStale, 7, 14) + '</td>' +
+      '<td>' + orderLink(r) + (r.poNumber ? '<div class="sub">PO ' + esc(r.poNumber) + '</div>' : '') + '</td>' +
+      '<td><div>' + esc(r.customerName) + '</div><div class="sub">' + esc(r.email) + '</div></td>' +
+      '<td><span class="status-badge ' + statusCls + '">' + esc(statusTxt) + '</span></td>' +
+      '<td><div>' + fmtShort(r.createdAt) + '</div><div class="sub">' + r.daysSinceConversion + 'd ago</div></td>' +
+      '<td>' + (r.shipDate ? fmtShipDate(r.shipDate) : '<span class="dim">—</span>') + '</td>' +
+      '<td class="num">' + (r.openUnits || 0).toLocaleString() + '<div class="sub">' + (r.openLines || []).length + ' line' + ((r.openLines || []).length !== 1 ? 's' : '') + '</div></td>' +
+      '<td class="num">' + fmtMoney(r.orderTotal) + '</td>' +
+      '</tr>' +
+      '<tr class="expand-row" id="unf-exp-' + i + '"><td colspan="9">' + unfDetail(r) + '</td></tr>';
+  }).join('');
+}
+function unfDetail(r) {
+  var lines = (r.openLines || []).map(function(l) {
+    return '<div class="line-item"><span class="li-sku">' + esc(l.sku || '—') + '</span><span class="li-title">' + esc(l.title) + (l.variantTitle ? ' – ' + esc(l.variantTitle) : '') + '</span><span class="li-qty">' + l.openQty + (l.openQty !== l.quantity ? '/' + l.quantity : '') + '</span></div>';
+  }).join('');
+  return '<div class="expand-grid two">' +
+    '<div>' +
+      '<div class="expand-section-title">Order Details</div>' +
+      '<div class="detail-row"><span class="detail-label">Order</span><span class="detail-val">' + orderLink(r) + '</span></div>' +
+      '<div class="detail-row"><span class="detail-label">PO</span><span class="detail-val">' + esc(r.poNumber || '—') + '</span></div>' +
+      '<div class="detail-row"><span class="detail-label">Customer</span><span class="detail-val">' + esc(r.customerName) + '</span></div>' +
+      '<div class="detail-row"><span class="detail-label">Email</span><span class="detail-val">' + esc(r.email || '—') + '</span></div>' +
+      '<div class="detail-row"><span class="detail-label">Ship to</span><span class="detail-val">' + esc(r.shipTo || '—') + '</span></div>' +
+      '<div class="detail-row"><span class="detail-label">Converted</span><span class="detail-val">' + fmtDateTime(r.createdAt) + '</span></div>' +
+      '<div class="detail-row"><span class="detail-label">Ship date</span><span class="detail-val">' + (r.shipDate ? fmtShipDate(r.shipDate) : '—') + '</span></div>' +
+      '<div class="detail-row"><span class="detail-label">Stale since</span><span class="detail-val">' + (r.clockFrom === 'ship_date' ? 'Ship date' : 'Conversion') + ' (' + r.daysStale + 'd)</span></div>' +
+      '<div class="detail-row"><span class="detail-label">Total</span><span class="detail-val">' + fmtMoney(r.orderTotal) + '</span></div>' +
+      '<div class="detail-row"><span class="detail-label">Tags</span><span class="detail-val" style="color:var(--muted)">' + esc(r.tags || '—') + '</span></div>' +
+    '</div>' +
+    '<div><div class="expand-section-title">Open Lines (open / ordered)</div><div class="line-list">' + (lines || '<div class="none">No open lines</div>') + '</div></div>' +
+  '</div>';
+}
+
+// ── labels table ────────────────────────────────────────────────────
+function setLblFilter(f) { lblFilter = f; markFilter('lbl', f); applyLbl(); }
+function sortLbl(col) { if (lblSortCol === col) lblSortDir *= -1; else { lblSortCol = col; lblSortDir = -1; } markSort('lbl', lblSortCol, lblSortDir); applyLbl(); }
+function applyLbl() {
+  var q = document.getElementById('lblSearch').value.toLowerCase();
+  lblFiltered = lblRows.filter(function(r) {
+    if (lblFilter !== 'all' && r.stage !== lblFilter) return false;
+    if (q) {
+      var hay = [r.orderName, r.poNumber, r.fulfillmentName, r.customerName, r.email, r.shippingAddress, r.tags,
+        (r.items || []).join(' '), (r.tracking || []).map(function(t) { return t.number; }).join(' ')].join(' ').toLowerCase();
+      if (hay.indexOf(q) === -1) return false;
+    }
+    return true;
+  });
+  sortRows(lblFiltered, lblSortCol, lblSortDir);
+  document.getElementById('lblCount').textContent = lblFiltered.length + ' of ' + lblRows.length + ' shipments';
+  renderLbl();
+}
+function trackingCell(r) {
+  if (!r.tracking || !r.tracking.length) return '<span class="dim">—</span>';
+  return r.tracking.map(function(t) {
+    return '<div class="tracking-num">' + (t.url ? '<a class="tracking-link" style="font-size:11px" href="' + esc(t.url) + '" target="_blank" onclick="event.stopPropagation()">' + esc(t.number) + ' &#8599;</a>' : esc(t.number)) + '</div>' +
+      (t.company ? '<div class="sub">' + esc(t.company) + '</div>' : '');
+  }).join('');
+}
+function renderLbl() {
+  var tbody = document.getElementById('lblBody');
+  if (!lblFiltered.length) { tbody.innerHTML = '<tr><td colspan="8"><div class="empty-state"><div class="empty-title">Nothing stale</div><div class="empty-sub">No shipments matched the current filter.</div></div></td></tr>'; return; }
+  tbody.innerHTML = lblFiltered.map(function(r, i) {
+    var last = r.lastEvent
+      ? '<div class="strong" style="font-weight:500">' + esc((r.lastEvent.status || '').replace(/_/g, ' ')) + '</div><div class="sub">' + fmtShort(r.lastEvent.happenedAt) + ' · ' + r.daysSinceLastEvent + 'd ago</div>'
+      : '<span class="dim">No scans</span>';
+    return '<tr class="row-main" id="lbl-row-' + i + '" onclick="toggleExpand(\'lbl\',' + i + ')">' +
+      '<td class="chev" id="lbl-chev-' + i + '">&#9654;</td>' +
+      '<td>' + badge(r.daysSinceLabel, 8, 14) + '<div class="sub">' + fmtShort(r.labelCreatedAt) + '</div></td>' +
+      '<td>' + orderLink(r) + '<div class="sub">' + esc(r.fulfillmentName) + (r.poNumber ? ' · PO ' + esc(r.poNumber) : '') + '</div></td>' +
+      '<td><div>' + esc(r.customerName) + '</div><div class="sub">' + esc(r.email) + '</div></td>' +
+      '<td><span class="status-badge ' + r.stage + '">' + stageLabel(r.stage) + '</span></td>' +
+      '<td>' + last + '</td>' +
+      '<td>' + (r.estimatedDeliveryAt ? fmtShort(r.estimatedDeliveryAt) : '<span class="dim">—</span>') + '</td>' +
+      '<td>' + trackingCell(r) + '</td>' +
+      '</tr>' +
+      '<tr class="expand-row" id="lbl-exp-' + i + '"><td colspan="8">' + lblDetail(r) + '</td></tr>';
+  }).join('');
+}
+function lblDetail(r) {
+  var events = (r.allEvents || []).length
+    ? '<div class="event-list">' + r.allEvents.map(function(e, i) {
+        return '<div class="event-item"><div class="event-dot ' + (i === 0 ? 'latest' : 'old') + '"></div><div class="event-time">' + fmtDateTime(e.happenedAt) + '</div><div class="event-status">' + esc((e.status || '').replace(/_/g, ' ')) + '</div><div class="event-msg">' + esc(e.message || '') + '</div></div>';
+      }).join('') + '</div>'
+    : '<div class="none">No carrier scans recorded — label created but the package hasn\'t been picked up.</div>';
+  var items = (r.items || []).length ? '<div class="line-list">' + r.items.map(function(s) { return '<div style="font-size:11px;color:var(--muted)">' + esc(s) + '</div>'; }).join('') + '</div>' : '<div class="none">No item data</div>';
+  return '<div class="expand-grid">' +
+    '<div>' +
+      '<div class="expand-section-title">Shipment</div>' +
+      '<div class="detail-row"><span class="detail-label">Order</span><span class="detail-val">' + orderLink(r) + '</span></div>' +
+      '<div class="detail-row"><span class="detail-label">Fulfillment</span><span class="detail-val">' + esc(r.fulfillmentName || '—') + '</span></div>' +
+      '<div class="detail-row"><span class="detail-label">PO</span><span class="detail-val">' + esc(r.poNumber || '—') + '</span></div>' +
+      '<div class="detail-row"><span class="detail-label">Label</span><span class="detail-val">' + fmtDateTime(r.labelCreatedAt) + '</span></div>' +
+      '<div class="detail-row"><span class="detail-label">First scan</span><span class="detail-val">' + (r.inTransitAt ? fmtDateTime(r.inTransitAt) : '—') + '</span></div>' +
+      '<div class="detail-row"><span class="detail-label">Est. delivery</span><span class="detail-val">' + (r.estimatedDeliveryAt ? fmtDate(r.estimatedDeliveryAt) : '—') + '</span></div>' +
+      '<div class="detail-row"><span class="detail-label">Shopify status</span><span class="detail-val">' + esc((r.displayStatus || '').replace(/_/g, ' ')) + '</span></div>' +
+    '</div>' +
+    '<div>' +
+      '<div class="expand-section-title">Customer</div>' +
+      '<div class="detail-row"><span class="detail-label">Name</span><span class="detail-val">' + esc(r.customerName) + '</span></div>' +
+      '<div class="detail-row"><span class="detail-label">Email</span><span class="detail-val">' + esc(r.email || '—') + '</span></div>' +
+      '<div class="detail-row"><span class="detail-label">Ship to</span><span class="detail-val">' + esc(r.shippingAddress || '—') + '</span></div>' +
+      '<div class="detail-row"><span class="detail-label">Total</span><span class="detail-val">' + fmtMoney(r.orderTotal) + '</span></div>' +
+      '<div class="detail-row"><span class="detail-label">Tags</span><span class="detail-val" style="color:var(--muted)">' + esc(r.tags || '—') + '</span></div>' +
+      '<div style="margin-top:12px"><div class="expand-section-title">Items</div>' + items + '</div>' +
+      '<div style="margin-top:12px"><div class="expand-section-title">Tracking</div>' + trackingCell(r) + '</div>' +
+    '</div>' +
+    '<div><div class="expand-section-title">Carrier Event History (newest first)</div>' + events + '</div>' +
+  '</div>';
+}
+
+// ── drafts & holds (carried over from the previous B2B tab) ─────────
+function renderDrafts(data) {
+  document.getElementById('kpiTotal').textContent = (data.totalDrafts || 0).toLocaleString();
+  document.getElementById('kpiNR').textContent = (data.needsReviewCount || 0).toLocaleString();
+  document.getElementById('kpiOOS').textContent = (data.oosItems || []).length.toLocaleString();
+  var nrCard = document.getElementById('kpiNRCard'), nrHint = document.getElementById('kpiNRHint');
+  if (!data.needsReviewCount) { nrHint.textContent = 'None flagged'; nrHint.classList.remove('action'); nrCard.classList.remove('clickable'); }
+  else { nrHint.textContent = 'Click to export Excel'; nrHint.classList.add('action'); nrCard.classList.add('clickable'); }
+  needsReviewExport = data.needsReviewExport || [];
+  allOOS = data.oosItems || [];
   renderOOS(allOOS);
 }
-
-function renderOOS(rows){
-  var tbody=document.getElementById('oosBody');
-  var wrap=document.getElementById('oosTableWrap');
-  var empty=document.getElementById('oosEmpty');
-  if(!rows.length){tbody.innerHTML='';wrap.style.display='none';empty.style.display='block';return;}
-  wrap.style.display='';empty.style.display='none';
-  tbody.innerHTML=rows.map(function(r){var ac=r.available<0?'avail-neg':'avail-zero';var drafts=[...new Set(r.affectedDrafts)].slice(0,4).join(', ')+(r.affectedDrafts.length>4?' +'+(r.affectedDrafts.length-4)+' more':'');return'<tr><td><div class="oos-title">'+esc(r.productTitle)+'</div>'+(r.variantTitle?'<div class="oos-variant">'+esc(r.variantTitle)+'</div>':'')+'<div class="oos-sku">SKU: '+esc(r.sku)+'</div><div class="affected-drafts">'+esc(drafts)+'</div></td><td class="oos-count">'+r.draftCount+'</td><td style="color:var(--muted)">'+r.totalUnitsRequested+'</td><td class="'+ac+'">'+r.available+'</td></tr>';}).join('');
+function renderOOS(rows) {
+  var tbody = document.getElementById('oosBody'), wrap = document.getElementById('oosTableWrap'), empty = document.getElementById('oosEmpty');
+  if (!rows.length) { tbody.innerHTML = ''; wrap.style.display = 'none'; empty.style.display = 'block'; return; }
+  wrap.style.display = ''; empty.style.display = 'none';
+  tbody.innerHTML = rows.map(function(r) {
+    var uniq = Array.from(new Set(r.affectedDrafts || []));
+    var drafts = uniq.slice(0, 4).join(', ') + (uniq.length > 4 ? ' +' + (uniq.length - 4) + ' more' : '');
+    return '<tr><td><div class="strong" style="font-weight:500">' + esc(r.productTitle) + '</div>' + (r.variantTitle ? '<div class="sub">' + esc(r.variantTitle) + '</div>' : '') +
+      '<div class="sub dim">SKU: ' + esc(r.sku) + '</div><div class="sub dim trunc">' + esc(drafts) + '</div></td>' +
+      '<td class="oos-count">' + r.draftCount + '</td><td style="color:var(--muted)">' + r.totalUnitsRequested + '</td>' +
+      '<td class="' + (r.available < 0 ? 'avail-neg' : 'avail-zero') + '">' + r.available + '</td></tr>';
+  }).join('');
 }
+function sortOOS(col) { allOOS.sort(function(a, b) { return b[col] - a[col]; }); renderOOS(allOOS); }
 
-function sortOOS(col,th){if(oosSortCol===col)oosSortDir*=-1;else{oosSortCol=col;oosSortDir=-1;}th.closest('thead').querySelectorAll('th[data-col]').forEach(function(t){t.classList.remove('sorted');t.querySelector('.sort-icon').innerHTML='&#8597;';});th.classList.add('sorted');th.querySelector('.sort-icon').innerHTML=oosSortDir===-1?'&#8595;':'&#8593;';allOOS.sort(function(a,b){return oosSortDir*(b[col]-a[col]);});renderOOS(allOOS);}
-
-function renderHolds(data){
-  allHolds=data.holds||[];
-  document.getElementById('kpiHolds').textContent=allHolds.length.toLocaleString();
-  document.getElementById('kpiHoldsHint').textContent=(data.totalUnitsOnHold||0).toLocaleString()+' total units';
-  var summary=allHolds.length+' SKUs · '+(data.totalUnitsOnHold||0).toLocaleString()+' units across '+(data.ordersFound||0)+' orders';
-  document.getElementById('holdsSummary').textContent=summary;
+function renderHolds(data) {
+  allHolds = data.holds || [];
+  document.getElementById('holdsTableWrap').style.display = '';
+  document.getElementById('kpiHolds').textContent = allHolds.length.toLocaleString();
+  document.getElementById('kpiHoldsHint').textContent = (data.totalUnitsOnHold || 0).toLocaleString() + ' total units';
+  document.getElementById('holdsSummary').textContent = allHolds.length + ' SKUs · ' + (data.totalUnitsOnHold || 0).toLocaleString() + ' units across ' + (data.ordersFound || 0) + ' orders';
+  renderHoldsRows(allHolds);
+}
+function renderHoldsRows(rows) {
+  var tbody = document.getElementById('holdsBody'), wrap = document.getElementById('holdsTableWrap'), empty = document.getElementById('holdsEmpty');
+  document.getElementById('holdsCount').textContent = rows.length + ' SKUs';
+  if (!rows.length) { tbody.innerHTML = ''; wrap.style.display = 'none'; empty.style.display = 'block'; return; }
+  wrap.style.display = ''; empty.style.display = 'none';
+  tbody.innerHTML = rows.map(function(r) {
+    var orders = Array.from(new Set(r.orders || []));
+    var txt = orders.slice(0, 4).join(', ') + (orders.length > 4 ? ' +' + (orders.length - 4) + ' more' : '');
+    return '<tr><td><div class="strong" style="font-size:11px">' + esc(r.sku) + '</div><div class="sub">' + esc(r.description) + '</div>' + (orders.length ? '<div class="sub dim trunc">' + esc(txt) + '</div>' : '') + '</td>' +
+      '<td class="hold-qty">' + r.quantity.toLocaleString() + '</td><td style="color:var(--muted)">' + r.orderCount + '</td></tr>';
+  }).join('');
+}
+function filterHolds(q) {
+  q = (q || '').toLowerCase();
+  renderHoldsRows(q ? allHolds.filter(function(r) { return (r.sku || '').toLowerCase().indexOf(q) !== -1 || (r.description || '').toLowerCase().indexOf(q) !== -1; }) : allHolds);
+}
+function sortHolds(col) {
+  if (holdsSortCol === col) holdsSortDir *= -1; else { holdsSortCol = col; holdsSortDir = -1; }
+  markSort('holds', holdsSortCol, holdsSortDir);
+  allHolds.sort(function(a, b) { return holdsSortDir === -1 ? b[col] - a[col] : a[col] - b[col]; });
   renderHoldsRows(allHolds);
 }
 
-function renderHoldsRows(rows){
-  var tbody=document.getElementById('holdsBody');
-  var wrap=document.getElementById('holdsTableWrap');
-  var empty=document.getElementById('holdsEmpty');
-  document.getElementById('holdsCount').textContent=rows.length+' SKUs';
-  if(!rows.length){tbody.innerHTML='';wrap.style.display='none';empty.style.display='block';return;}
-  wrap.style.display='';empty.style.display='none';
-  tbody.innerHTML=rows.map(function(r){var orders=[...new Set(r.orders||[])];var ordersTxt=orders.slice(0,4).join(', ')+(orders.length>4?' +'+(orders.length-4)+' more':'');return'<tr><td><div class="hold-sku">'+esc(r.sku)+'</div><div class="hold-desc">'+esc(r.description)+'</div>'+(orders.length?'<div class="hold-orders">'+esc(ordersTxt)+'</div>':'')+'</td><td class="hold-qty">'+r.quantity.toLocaleString()+'</td><td style="color:var(--muted)">'+r.orderCount+'</td></tr>';}).join('');
+// ── Excel export (green header, no banding, full precision) ─────────
+var excelJsLoading = null;
+function loadExcelJS() {
+  if (window.ExcelJS) return Promise.resolve();
+  if (excelJsLoading) return excelJsLoading;
+  excelJsLoading = new Promise(function(resolve, reject) {
+    var s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js';
+    s.onload = resolve; s.onerror = function() { excelJsLoading = null; reject(new Error('Could not load Excel library')); };
+    document.head.appendChild(s);
+  });
+  return excelJsLoading;
+}
+async function exportXlsx(filename, sheetName, headers, rows) {
+  if (!rows.length) return;
+  try {
+    await loadExcelJS();
+    var wb = new ExcelJS.Workbook();
+    var ws = wb.addWorksheet(sheetName);
+    ws.addRow(headers);
+    var head = ws.getRow(1);
+    head.eachCell(function(c) {
+      c.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4A6741' } };
+      c.alignment = { vertical: 'middle' };
+    });
+    rows.forEach(function(r) { ws.addRow(r); });
+    ws.views = [{ state: 'frozen', ySplit: 1 }];
+    ws.columns.forEach(function(col, i) {
+      var max = String(headers[i]).length;
+      rows.forEach(function(r) { var v = r[i]; var len = v === null || v === undefined ? 0 : String(v).length; if (len > max) max = len; });
+      col.width = Math.min(Math.max(max + 2, 10), 60);
+    });
+    var buf = await wb.xlsx.writeBuffer();
+    var blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = filename + '-' + new Date().toISOString().slice(0, 10) + '.xlsx';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+  } catch (err) {
+    showBanner('errorBanner', 'Export failed: ' + err.message);
+  }
+}
+function d(iso) { if (!iso) return null; var x = new Date(iso); return isNaN(x) ? iso : x; }
+
+function exportUnf() {
+  exportXlsx('b2b-stale-unfulfilled', 'Stale Unfulfilled',
+    ['Order', 'PO Number', 'Company', 'Email', 'Status', 'Converted At', 'Ship Date', 'Stale From', 'Days Stale', 'Days Since Conversion', 'Open Units', 'Order Total', 'Open Lines', 'Tags'],
+    unfFiltered.map(function(r) {
+      return [r.orderName, r.poNumber, r.customerName, r.email, r.fulfillmentStatus, d(r.createdAt), r.shipDate || '', r.clockFrom === 'ship_date' ? 'Ship date' : 'Conversion',
+        r.daysStale, r.daysSinceConversion, r.openUnits, r.orderTotal,
+        (r.openLines || []).map(function(l) { return (l.sku || l.title) + ' x' + l.openQty; }).join('; '), r.tags];
+    }));
+}
+function exportLbl() {
+  exportXlsx('b2b-stale-labels', 'Labels Not Delivered',
+    ['Order', 'Fulfillment', 'PO Number', 'Company', 'Email', 'Stage', 'Shopify Status', 'Label Created', 'Days Since Label', 'First Scan', 'Last Scan Status', 'Last Scan At', 'Days Since Last Scan', 'Last Scan Message', 'Est. Delivery', 'Carrier', 'Tracking #', 'Tracking URL', 'Ship To', 'Order Total', 'Items', 'Tags'],
+    lblFiltered.map(function(r) {
+      var t = (r.tracking || [])[0] || {}, e = r.lastEvent || {};
+      return [r.orderName, r.fulfillmentName, r.poNumber, r.customerName, r.email, stageLabel(r.stage), r.displayStatus, d(r.labelCreatedAt), r.daysSinceLabel,
+        d(r.inTransitAt), e.status || '', d(e.happenedAt), r.daysSinceLastEvent, e.message || '', d(r.estimatedDeliveryAt),
+        t.company || '', (r.tracking || []).map(function(x) { return x.number; }).join('; '), t.url || '', r.shippingAddress, r.orderTotal, (r.items || []).join('; '), r.tags];
+    }));
+}
+function exportHolds() {
+  exportXlsx('sku-holds', 'SKU Holds', ['SKU', 'Description', 'Qty On Hold', '# Orders', 'Order Numbers'],
+    allHolds.map(function(r) { return [r.sku, r.description, r.quantity, r.orderCount, (r.orders || []).join('; ')]; }));
+}
+function exportNeedsReview() {
+  if (!needsReviewExport.length) return;
+  var rows = [];
+  needsReviewExport.forEach(function(dr) {
+    var base = [dr.name, dr.customerName, dr.email, d(dr.createdAt), dr.tags, dr.subtotal != null ? parseFloat(dr.subtotal) : null, dr.total != null ? parseFloat(dr.total) : null];
+    if (!dr.lineItems || !dr.lineItems.length) rows.push(base.concat(['', '', '', null, null]));
+    else dr.lineItems.forEach(function(li) { rows.push(base.concat([li.title, li.variantTitle, li.sku, li.quantity, li.price != null ? parseFloat(li.price) : null])); });
+  });
+  exportXlsx('needs-review-drafts', 'Needs Review',
+    ['Draft #', 'Customer', 'Email', 'Created At', 'Tags', 'Subtotal', 'Total', 'Line Item', 'Variant', 'SKU', 'Qty', 'Unit Price'], rows);
 }
 
-function filterHolds(q){var filtered=q?allHolds.filter(function(r){return r.sku.toLowerCase().includes(q.toLowerCase())||r.description.toLowerCase().includes(q.toLowerCase());}):allHolds;renderHoldsRows(filtered);}
-
-function sortHolds(col,th){if(holdsSortCol===col)holdsSortDir*=-1;else{holdsSortCol=col;holdsSortDir=-1;}th.closest('thead').querySelectorAll('th[data-col]').forEach(function(t){t.classList.remove('sorted');t.querySelector('.sort-icon').innerHTML='&#8597;';});th.classList.add('sorted');th.querySelector('.sort-icon').innerHTML=holdsSortDir===-1?'&#8595;':'&#8593;';allHolds.sort(function(a,b){return holdsSortDir*(b[col]-a[col]);});renderHoldsRows(allHolds);}
-
-function exportHolds(){
-  if(!allHolds.length)return;
-  var rows=[['SKU','Description','Qty On Hold','# Orders','Order Numbers'].map(csvEsc).join(',')];
-  allHolds.forEach(function(r){rows.push([r.sku,r.description,r.quantity,r.orderCount,(r.orders||[]).join('; ')].map(csvEsc).join(','));});
-  var blob=new Blob([rows.join('\n')],{type:'text/csv'});
-  var url=URL.createObjectURL(blob);
-  var a=document.createElement('a');a.href=url;a.download='sku-holds-'+new Date().toISOString().slice(0,10)+'.csv';a.click();URL.revokeObjectURL(url);
-}
-
-function exportNeedsReview(){
-  if(!exportData.length)return;
-  var rows=[['Draft #','Customer','Email','Created At','Updated At','Tags','Note','Subtotal','Total','Line Item','Variant','SKU','Qty','Unit Price'].map(csvEsc).join(',')];
-  exportData.forEach(function(d){if(!d.lineItems.length){rows.push([d.name,d.customerName,d.email,d.createdAt,d.updatedAt,d.tags,d.note,d.subtotal,d.total,'','','','',''].map(csvEsc).join(','));}else{d.lineItems.forEach(function(li){rows.push([d.name,d.customerName,d.email,d.createdAt,d.updatedAt,d.tags,d.note,d.subtotal,d.total,li.title,li.variantTitle,li.sku,li.quantity,li.price].map(csvEsc).join(','));});}});
-  var blob=new Blob([rows.join('\n')],{type:'text/csv'});
-  var url=URL.createObjectURL(blob);
-  var a=document.createElement('a');a.href=url;a.download='needs-review-drafts-'+new Date().toISOString().slice(0,10)+'.csv';a.click();URL.revokeObjectURL(url);
-}
-function csvEsc(v){var s=String(v===null||v===undefined?'':v);if(s.includes(',')||s.includes('"')||s.includes('\n'))return'"'+s.replace(/"/g,'""')+'"';return s;}
-function setStatus(state){var dot=document.getElementById('refreshDot');dot.className='refresh-dot';if(state==='live')dot.classList.add('live');if(state==='fetching')dot.classList.add('fetching');}
-function show(id){['emptyState','dashboard'].forEach(function(s){document.getElementById(s).style.display=s===id?(s==='dashboard'?'block':'flex'):'none';});}
-function showError(msg){var el=document.getElementById('errorBanner');el.textContent='Error: '+msg;el.style.display='block';}
-function hideError(){document.getElementById('errorBanner').style.display='none';}
-function esc(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
-runFetch();
+// ── init ────────────────────────────────────────────────────────────
+(function init() {
+  var hash = (location.hash || '').replace('#', '');
+  setTab(['unfulfilled', 'labels', 'drafts'].indexOf(hash) !== -1 ? hash : 'unfulfilled');
+  markFilter('unf', 'all'); markFilter('lbl', 'all');
+  runFetch();
+})();
 </script>
 </body>
 </html>
