@@ -752,6 +752,12 @@ async function runSync(isFullBackfill = false) {
     } catch (err) {
       console.warn("[sync] DTC stale fulfillments error:", err.message);
     }
+
+    try {
+      await b2bStale.sync();
+    } catch (err) {
+      console.warn("[sync] B2B stale error:", err.message);
+    }
   } catch (err) {
     console.error("[sync] Error:", err.message);
   } finally {
@@ -1761,11 +1767,15 @@ app.get("/api/sync-status", async (req, res) => {
 // ── Analytics (read-only B2B customer/SKU summary) ────────────────────────────
 require("./analytics")(app, { gql, gqlAll, CREDS, db });
 
+// ── B2B stale fulfillments (unfulfilled draft-converted orders + UPS labels not delivered) ──
+const b2bStale = require("./b2b-stale")({ app, db, gql, gqlAll, CREDS, HOLD_CUSTOMER_EMAIL });
+
 // ── Boot ──────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 
 async function boot() {
   await initDB();
+  await b2bStale.initTable();
 
   const stateRes = await db.query("SELECT value FROM sync_state WHERE key = 'last_sync'");
   const needsBackfill = !stateRes.rows[0];
