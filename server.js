@@ -1768,14 +1768,21 @@ app.get("/api/sync-status", async (req, res) => {
 require("./analytics")(app, { gql, gqlAll, CREDS, db });
 
 // ── B2B stale fulfillments (unfulfilled draft-converted orders + UPS labels not delivered) ──
-const b2bStale = require("./b2b-stale")({ app, db, gql, gqlAll, CREDS, HOLD_CUSTOMER_EMAIL });
+// Fail-safe: if the module is missing or throws on load, log it and keep the
+// rest of the server running instead of crashing the whole deploy.
+let b2bStale = { initTable: async () => {}, sync: async () => {} };
+try {
+  b2bStale = require("./b2b-stale")({ app, db, gql, gqlAll, CREDS, HOLD_CUSTOMER_EMAIL });
+} catch (err) {
+  console.error("[b2b-stale] module not loaded — B2B stale view disabled:", err.message);
+}
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 
 async function boot() {
   await initDB();
-  await b2bStale.initTable();
+  try { await b2bStale.initTable(); } catch (err) { console.error("[b2b-stale] initTable failed:", err.message); }
 
   const stateRes = await db.query("SELECT value FROM sync_state WHERE key = 'last_sync'");
   const needsBackfill = !stateRes.rows[0];
