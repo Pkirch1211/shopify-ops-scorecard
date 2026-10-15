@@ -1074,6 +1074,38 @@ module.exports = function registerAnalytics(app, { gql, gqlAll, CREDS, db }) {
     return r.rows;
   }
 
+  // ── Product search list for the SKU box ────────────────────────────────────
+  // Every catalog SKU with its product name, plus any SKU that only exists on
+  // orders (legacy / custom-line SKUs), with this year's units for ranking.
+  // The page downloads it once and searches it locally as you type.
+  let skuListCache = null, skuListTime = 0;
+  app.get("/api/analytics/sku-list", async (req, res) => {
+    try {
+      if (skuListCache && Date.now() - skuListTime < 10 * 60 * 1000) return res.json(skuListCache);
+      const bySku = new Map();
+      const cat = await getCatalog();
+      if (cat) for (const e of cat.bySku.values()) bySku.set(e.sku, { sku: e.sku, name: e.name, units: 0 });
+      if (st.ready) {
+        const r = await db.query(
+          `SELECT l.sku, MAX(l.title) AS title,
+                  COALESCE(SUM(CASE WHEN o.created_at >= $1::timestamptz THEN l.current_quantity END), 0) AS units
+             FROM analytics_lines l JOIN analytics_orders o ON o.id = l.order_id
+            WHERE l.sku <> '' AND NOT o.cancelled GROUP BY l.sku`, [yearStartStr() + "T00:00:00Z"]);
+        for (const x of r.rows) {
+          const e = bySku.get(x.sku);
+          if (e) e.units = Number(x.units);
+          else bySku.set(x.sku, { sku: x.sku, name: x.title || "", units: Number(x.units) });
+        }
+      }
+      const out = { skus: [...bySku.values()], catalogLoaded: !!cat };
+      if (cat) { skuListCache = out; skuListTime = Date.now(); }   // don't cache a partial list
+      res.json(out);
+    } catch (err) {
+      console.error("[analytics] sku-list error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get("/api/analytics/sync-status", async (req, res) => {
     const out = {
       enabled: storeEnabled, ready: st.ready, phase: st.phase, error: st.error,
