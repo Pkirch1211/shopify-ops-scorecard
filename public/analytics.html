@@ -50,6 +50,8 @@ nav{display:flex;gap:3px}
 .combo-item.idle{color:var(--muted)}
 .combo-item .meta{font-size:11px;color:var(--green);white-space:nowrap;font-variant-numeric:tabular-nums}
 .combo-item.idle .meta{color:var(--dim)}
+.combo-item.all{font-weight:600;color:var(--green)}
+.combo-item .sku-name{color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis}
 .chips{display:flex;flex-wrap:wrap;gap:6px}
 .chips:empty{display:none}
 .chip{background:var(--green-light);border:1px solid var(--green);color:var(--green);font-size:12px;font-weight:500;padding:3px 5px 3px 9px;border-radius:2px;display:inline-flex;align-items:center;gap:6px}
@@ -247,7 +249,10 @@ tr.main[data-ci]{cursor:pointer}
 
     <div class="sel sku">
       <label for="skuInput" id="skuLabel">Filter SKUs (optional)</label>
-      <input type="text" id="skuInput" placeholder="Paste SKUs, e.g. LL-16-3366, LL-16-3369" autocomplete="off">
+      <div class="combo" id="skuCombo">
+        <input type="text" id="skuInput" placeholder="Paste SKUs or type a product name" autocomplete="off">
+        <div class="combo-list" id="skuList"></div>
+      </div>
     </div>
 
     <div class="sel" style="flex:0 0 170px">
@@ -351,8 +356,8 @@ async function api(url, opts) {
   };
   $('fromDate').onchange = schedule;
   $('toDate').onchange = schedule;
-  $('skuInput').addEventListener('change', schedule);
-  $('skuInput').addEventListener('keydown', function(e) { if (e.key === 'Enter') { e.preventDefault(); schedule(); } });
+  $('skuInput').addEventListener('change', function() { if ($('skuList').style.display !== 'block') schedule(); });
+  wireSkuCombo();
   $('csvBtn').onclick = exportCsv;
   $('results').addEventListener('click', onResultsClick);
   (function() {   // phones: nav is one swipeable row, so bring the active tab into view
@@ -389,11 +394,11 @@ function setView(v) {
   if (v === 'customer') {
     $('custLabel').textContent = 'Customer';
     $('skuLabel').textContent = 'Filter SKUs (optional)';
-    $('skuInput').placeholder = 'Paste SKUs, e.g. LL-16-3366, LL-16-3369';
+    $('skuInput').placeholder = 'Paste SKUs or type a product name';
   } else {
     $('custLabel').textContent = 'Customer (optional)';
     $('skuLabel').textContent = 'SKUs';
-    $('skuInput').placeholder = 'Paste one or more SKUs from the email';
+    $('skuInput').placeholder = 'Paste SKUs or type a product name';
   }
   sortState = { key: null, dir: 'desc' };
   ovSort = { key: null, dir: 'desc' }; ovLimit = 100; ovFilter = '';
@@ -469,6 +474,115 @@ function wireCombo() {
   });
 }
 
+// ── SKU box: paste SKUs, or type part of a product name ──────────────────────
+// Whatever is after the last comma is the "current piece". If it reads like a
+// product name ("cozy cottage"), a list of matching SKUs drops down; pick one, or
+// "Add all" to drop every match in. Pasted SKUs work exactly as before.
+var skuCatalog = null, skuCatalogP = null, skuMatches = [], skuHl = -1;
+var SKU_ADD_ALL_MAX = 60;
+
+function loadSkuCatalog() {
+  if (skuCatalog || skuCatalogP) return skuCatalogP;
+  skuCatalogP = api('/api/analytics/sku-list').then(function(d) {
+    skuCatalog = (d.skus || []).map(function(x) {
+      x.hay = (x.sku + ' ' + (x.name || '')).toLowerCase();
+      x.words = x.hay.split(/[^a-z0-9]+/).filter(Boolean);
+      return x;
+    });
+    if (!d.catalogLoaded) { var keep = skuCatalog; skuCatalog = null; skuCatalogP = null; return keep; }   // retry later for the full list
+    return skuCatalog;
+  }).catch(function() { skuCatalogP = null; return null; });
+  return skuCatalogP;
+}
+
+function skuPiece() {
+  var v = $('skuInput').value, i = v.lastIndexOf(',');
+  return { before: i >= 0 ? v.slice(0, i + 1) : '', piece: (i >= 0 ? v.slice(i + 1) : v).trim() };
+}
+// A piece is a name search when it has at least 3 letters and isn't itself a SKU.
+function isNameSearch(piece) {
+  return (piece.match(/[a-z]/gi) || []).length >= 3 && !/^[A-Za-z]{1,4}-\d/.test(piece) && !/^[A-Za-z0-9]+(-[A-Za-z0-9]+)+$/.test(piece);
+}
+
+function searchSkus(q, list) {
+  var qt = q.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean), ql = q.toLowerCase().trim();
+  if (!qt.length) return [];
+  var out = [];
+  for (var i = 0; i < list.length; i++) {
+    var x = list[i], ok = true;
+    for (var t = 0; t < qt.length && ok; t++) {
+      var tok = qt[t], hit = false;
+      for (var w = 0; w < x.words.length; w++) if (x.words[w].indexOf(tok) === 0) { hit = true; break; }
+      if (!hit && tok.length >= 4 && x.hay.indexOf(tok) >= 0) hit = true;   // mid-word, only for longer bits
+      ok = hit;
+    }
+    if (!ok) continue;
+    var s = (x.hay.indexOf(ql) >= 0 ? 50 : 0) + Math.min(30, Math.log10((x.units || 0) + 1) * 6);
+    out.push({ x: x, s: s });
+  }
+  out.sort(function(a, b) { return b.s - a.s || a.x.sku.localeCompare(b.x.sku); });
+  return out.map(function(o) { return o.x; });
+}
+
+function renderSkuCombo() {
+  var list = $('skuList'), p = skuPiece();
+  if (!isNameSearch(p.piece)) { list.style.display = 'none'; skuMatches = []; return; }
+  if (!skuCatalog) {
+    list.innerHTML = '<div class="combo-empty">Loading products…</div>'; list.style.display = 'block';
+    loadSkuCatalog().then(function(c) { if (c) { if (!skuCatalog) skuCatalog = c; renderSkuCombo(); } else { list.innerHTML = '<div class="combo-empty">Product list unavailable — paste SKUs instead</div>'; } });
+    return;
+  }
+  var already = parseSkus(p.before), found = searchSkus(p.piece, skuCatalog).filter(function(x) { return already.indexOf(x.sku) < 0; });
+  skuMatches = [];
+  if (found.length > 1) skuMatches.push({ all: true, skus: found.slice(0, SKU_ADD_ALL_MAX).map(function(x) { return x.sku; }) });
+  found.slice(0, 40).forEach(function(x) { skuMatches.push(x); });
+  skuHl = skuMatches.length ? 0 : -1;
+  if (!skuMatches.length) { list.innerHTML = '<div class="combo-empty">No products match “' + esc(p.piece) + '”</div>'; list.style.display = 'block'; return; }
+  list.innerHTML = skuMatches.map(function(m, i) {
+    var cls = 'combo-item' + (i === 0 ? ' hl' : '') + (m.all ? ' all' : '');
+    if (m.all) return '<div class="' + cls + '" data-i="' + i + '"><span>Add all ' + found.length + ' matching SKUs' +
+      (found.length > SKU_ADD_ALL_MAX ? ' (first ' + SKU_ADD_ALL_MAX + ')' : '') + '</span></div>';
+    return '<div class="' + cls + '" data-i="' + i + '"><span>' + esc(m.sku) + ' <span class="sku-name">' + esc(m.name || '') + '</span></span>' +
+      '<span class="meta">' + (m.units ? m.units.toLocaleString() + ' YTD' : '') + '</span></div>';
+  }).join('');
+  list.style.display = 'block';
+}
+
+function pickSku(m) {
+  if (!m) return;
+  var p = skuPiece(), add = m.all ? m.skus : [m.sku];
+  var base = p.before.replace(/[\s,]+$/, '');
+  $('skuInput').value = (base ? base + ', ' : '') + add.join(', ');
+  $('skuList').style.display = 'none';
+  skuMatches = [];
+  schedule();
+}
+
+function wireSkuCombo() {
+  var input = $('skuInput'), list = $('skuList');
+  input.addEventListener('focus', loadSkuCatalog);
+  input.addEventListener('input', renderSkuCombo);
+  input.addEventListener('keydown', function(e) {
+    var open = list.style.display === 'block' && skuMatches.length;
+    if (e.key === 'ArrowDown' && open) { e.preventDefault(); moveSkuHl(1); }
+    else if (e.key === 'ArrowUp' && open) { e.preventDefault(); moveSkuHl(-1); }
+    else if (e.key === 'Enter') { e.preventDefault(); if (open && skuHl >= 0) pickSku(skuMatches[skuHl]); else schedule(); }
+    else if (e.key === 'Escape') { list.style.display = 'none'; }
+  });
+  list.addEventListener('mousedown', function(e) {
+    var el = e.target.closest('.combo-item');
+    if (el) { e.preventDefault(); pickSku(skuMatches[parseInt(el.getAttribute('data-i'), 10)]); }
+  });
+  document.addEventListener('click', function(e) { if (!e.target.closest('#skuCombo')) list.style.display = 'none'; });
+}
+
+function moveSkuHl(d) {
+  skuHl = (skuHl + d + skuMatches.length) % skuMatches.length;
+  var items = $('skuList').querySelectorAll('.combo-item');
+  items.forEach(function(el, i) { el.classList.toggle('hl', i === skuHl); });
+  if (items[skuHl]) items[skuHl].scrollIntoView({ block: 'nearest' });
+}
+
 function isActive(c) { return (c.ytd || 0) > 0 || (c.drafts || 0) > 0; }
 
 function locNote(c) { return c.locations > 1 ? c.locations + ' locations · ' : ''; }
@@ -541,6 +655,7 @@ function renderChips() {
 
 // ── Query ────────────────────────────────────────────────────────────────────
 function parseSkus(text) {
+  text = text.split(',').filter(function(part) { return !isNameSearch(part.trim()) || /[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+/.test(part); }).join(',');
   var found = (text.match(/[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+/g) || []).map(function(s) { return s.toUpperCase(); });
   if (!found.length) {
     found = text.split(/[\s,;]+/).filter(function(s) { return /\d/.test(s); }).map(function(s) { return s.toUpperCase(); });
@@ -609,7 +724,7 @@ function setViewQuiet(v) {   // setView without scheduling (applyHash runs the q
   view = v;
   $('custLabel').textContent = v === 'customer' ? 'Customer' : 'Customer (optional)';
   $('skuLabel').textContent = v === 'customer' ? 'Filter SKUs (optional)' : 'SKUs';
-  $('skuInput').placeholder = v === 'customer' ? 'Paste SKUs, e.g. LL-16-3366, LL-16-3369' : 'Paste one or more SKUs from the email';
+  $('skuInput').placeholder = 'Paste SKUs or type a product name';
   ovSort = { key: null, dir: 'desc' }; ovLimit = 100; ovFilter = '';
 }
 
