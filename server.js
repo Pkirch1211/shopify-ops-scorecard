@@ -78,6 +78,29 @@ const CREDS = {
 // and had drifted all the way back to 2024-01 before this fix.
 const SHOPIFY_API_VERSION = process.env.SHOPIFY_API_VERSION || "2026-07";
 
+// ── Care@ identification ──────────────────────────────────────────────────────
+// Care@ replacement orders are placed under the "Replacements and Customer
+// Care" company on the B2B store, but the ORDER's email is the end customer's
+// (so they get shipping notifications) — not care@lifelines.com. Matching on
+// email alone was missing nearly all of them.
+//
+// Shopify's order search has no company filter, and this token lacks
+// read_customers (so purchasingEntity/company can't be read either). What
+// read_orders CAN do is filter by customer_id — the company's contact
+// customer. CARE_CUSTOMER_IDS is a comma-separated list of B2B customer IDs
+// (numeric, or full gid://shopify/Customer/… — both accepted). If the company
+// ever gets additional contacts, add their IDs here and every order under
+// them is picked up. care@lifelines.com email matching is kept as a fallback.
+const CARE_EMAIL = "care@lifelines.com";
+const CARE_CUSTOMER_IDS = (process.env.CARE_CUSTOMER_IDS || "")
+  .split(",")
+  .map(s => s.trim().replace(/^gid:\/\/shopify\/Customer\//, ""))
+  .filter(s => /^\d+$/.test(s));
+
+function careSearchClause() {
+  return [...CARE_CUSTOMER_IDS.map(id => `customer_id:${id}`), `email:${CARE_EMAIL}`].join(" OR ");
+}
+
 // ── Admin unlock (destructive-action gate) ─────────────────────────────────────
 // Separate from SITE_PASSWORD. NOTE: requireAuth above already exempts every
 // /api/* path from site-password checks, so this cookie/session is the only
@@ -160,8 +183,12 @@ async function initDB() {
   // Added after the orders table already existed in production — CREATE TABLE
   // IF NOT EXISTS above won't add columns to a table that's already there.
   await db.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS order_total NUMERIC;`);
+  // is_care: set only by syncCareOrders(). Never touched by the main upsert's
+  // ON CONFLICT clause, so a later regular sync of the same order can't clear it.
+  await db.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS is_care BOOLEAN DEFAULT FALSE;`);
   await db.query(`
     CREATE INDEX IF NOT EXISTS idx_orders_store_email_created ON orders(store, email, created_at);
+    CREATE INDEX IF NOT EXISTS idx_orders_care_created ON orders(created_at) WHERE is_care = TRUE;
 
     CREATE TABLE IF NOT EXISTS sync_state (
       key TEXT PRIMARY KEY,
@@ -501,32 +528,10 @@ const EXCLUDED_SKUS_SNAPSHOT_URL =
 // ── Sync logic ────────────────────────────────────────────────────────────────
 let syncInProgress = false;
 
-async function syncStore(store, token, label, since) {
-  // IMPORTANT: Shopify's orders search defaults to status:open when no status
-  // clause is given — closed/archived orders (the common case once an order
-  // is paid + fulfilled) silently drop out of results. That was undercounting
-  // every customer's synced order history, which fed directly into the B2B
-  // 12-month spend rollup (getB2BCustomerSpendMap) used for the under-$75
-  // segmentation. status:any restores full coverage; cancelled orders are
-  // explicitly filtered back out below since they shouldn't count as spend.
-  const query = since
-    ? `status:any updated_at:>=${since}`
-    : `status:any created_at:>=${new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)}`;
-
-  console.log(`[sync] ${label}: fetching orders since ${since || "12mo ago"}`);
-  const allOrders = await gqlAll(store, token, ORDERS_QUERY, { first: 250, query },
-    d => d.orders.edges, d => d.orders.pageInfo, 600000);
-  const cancelledIds = allOrders.filter(n => n.cancelledAt).map(n => n.id);
-  const orders = allOrders.filter(n => !n.cancelledAt);
-  console.log(`[sync] ${label}: got ${allOrders.length} orders (${cancelledIds.length} cancelled, excluded)`);
-
-  // Clean up any order that was previously synced as active and has since
-  // been cancelled, so it stops counting toward spend/flag totals.
-  if (cancelledIds.length) {
-    await db.query(`DELETE FROM orders WHERE id = ANY($1)`, [cancelledIds]);
-  }
-  if (!orders.length) return 0;
-
+// Batch upsert of Shopify order nodes into the orders table. Extracted
+// unchanged from syncStore() so syncCareOrders() can reuse the exact same
+// write path. Does not touch is_care.
+async function upsertOrderNodes(orders, label) {
   const BATCH = 50;
   let upserted = 0;
   for (let i = 0; i < orders.length; i += BATCH) {
@@ -555,6 +560,69 @@ async function syncStore(store, token, label, since) {
     upserted += batch.length;
   }
   return upserted;
+}
+
+async function syncStore(store, token, label, since) {
+  // IMPORTANT: Shopify's orders search defaults to status:open when no status
+  // clause is given — closed/archived orders (the common case once an order
+  // is paid + fulfilled) silently drop out of results. That was undercounting
+  // every customer's synced order history, which fed directly into the B2B
+  // 12-month spend rollup (getB2BCustomerSpendMap) used for the under-$75
+  // segmentation. status:any restores full coverage; cancelled orders are
+  // explicitly filtered back out below since they shouldn't count as spend.
+  const query = since
+    ? `status:any updated_at:>=${since}`
+    : `status:any created_at:>=${new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)}`;
+
+  console.log(`[sync] ${label}: fetching orders since ${since || "12mo ago"}`);
+  const allOrders = await gqlAll(store, token, ORDERS_QUERY, { first: 250, query },
+    d => d.orders.edges, d => d.orders.pageInfo, 600000);
+  const cancelledIds = allOrders.filter(n => n.cancelledAt).map(n => n.id);
+  const orders = allOrders.filter(n => !n.cancelledAt);
+  console.log(`[sync] ${label}: got ${allOrders.length} orders (${cancelledIds.length} cancelled, excluded)`);
+
+  // Clean up any order that was previously synced as active and has since
+  // been cancelled, so it stops counting toward spend/flag totals.
+  if (cancelledIds.length) {
+    await db.query(`DELETE FROM orders WHERE id = ANY($1)`, [cancelledIds]);
+  }
+  if (!orders.length) return 0;
+
+  return upsertOrderNodes(orders, label);
+}
+
+// Pulls every order under the care customer(s) on the B2B store, upserts them
+// through the normal write path (so this is self-sufficient even if the main
+// sync ever missed some), then marks them is_care. When `since` is null this
+// covers the trailing 12 months — used for the one-time care backfill and for
+// full backfills.
+async function syncCareOrders(store, token, since) {
+  if (!CARE_CUSTOMER_IDS.length) {
+    console.warn("[sync] CARE_CUSTOMER_IDS not set — Care@ falls back to care@lifelines.com email match only");
+    return 0;
+  }
+  const window = since
+    ? `updated_at:>=${since}`
+    : `created_at:>=${new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)}`;
+  const idClause = CARE_CUSTOMER_IDS.map(id => `customer_id:${id}`).join(" OR ");
+  const query = `status:any (${idClause}) ${window}`;
+
+  const allOrders = await gqlAll(store, token, ORDERS_QUERY, { first: 250, query },
+    d => d.orders.edges, d => d.orders.pageInfo, 600000);
+  const cancelledIds = allOrders.filter(n => n.cancelledAt).map(n => n.id);
+  const orders = allOrders.filter(n => !n.cancelledAt);
+
+  if (cancelledIds.length) {
+    await db.query(`DELETE FROM orders WHERE id = ANY($1)`, [cancelledIds]);
+  }
+  if (!orders.length) return 0;
+
+  await upsertOrderNodes(orders, "B2B");
+  await db.query(
+    `UPDATE orders SET is_care = TRUE WHERE id = ANY($1) AND is_care IS DISTINCT FROM TRUE`,
+    [orders.map(n => n.id)]
+  );
+  return orders.length;
 }
 
 // Trailing-12-month spend per B2B customer, from the already-synced `orders`
@@ -747,6 +815,27 @@ async function runSync(isFullBackfill = false) {
 
     console.log(`[sync] Done — DTC: ${dtcCount}, B2B: ${b2bCount} orders upserted`);
 
+    // Care@ tagging. Runs a one-time 12-month backfill the first time
+    // CARE_CUSTOMER_IDS is set (tracked by care_backfill_v1), then rides the
+    // normal incremental window. Isolated so a failure here never blocks the
+    // rest of the sync, and the backfill marker is only written on success.
+    try {
+      const careState = await db.query("SELECT value FROM sync_state WHERE key = 'care_backfill_v1'");
+      const careBackfilled = !!careState.rows[0];
+      const careCount = await syncCareOrders(b2bStore, b2bToken, careBackfilled ? since : null);
+      if (!careBackfilled && CARE_CUSTOMER_IDS.length) {
+        await db.query(`
+          INSERT INTO sync_state (key, value, updated_at) VALUES ('care_backfill_v1', $1, NOW())
+          ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()
+        `, [new Date().toISOString()]);
+        console.log(`[sync] Care@ backfill complete — ${careCount} orders tagged`);
+      } else if (careCount) {
+        console.log(`[sync] Care@: ${careCount} orders tagged`);
+      }
+    } catch (err) {
+      console.warn("[sync] Care@ sync error:", err.message);
+    }
+
     try {
       await syncStaleFulfillments(dtcStore, dtcToken);
     } catch (err) {
@@ -871,33 +960,36 @@ function buildDayArray(daysInMonth, rows, countField, unitsField) {
 }
 
 // ── Care@ endpoint ────────────────────────────────────────────────────────────
+// Care@ = every order under the care customer(s) (is_care, set by
+// syncCareOrders) plus anything still placed with the care@ email.
 app.post("/api/care-scorecard", async (req, res) => {
   const { year, month } = req.body;
   const start = new Date(Date.UTC(year, month - 1, 1));
   const end   = new Date(Date.UTC(year, month, 1));
+  const CARE_WHERE = `(is_care = TRUE OR LOWER(email) = $3)`;
 
   try {
     const [statsRes, syncRes] = await Promise.all([
       db.query(`
         SELECT COUNT(*) AS total_orders, SUM(units) AS total_units,
           AVG(fulfillment_hours) AS avg_fulfillment, AVG(delivery_hours) AS avg_delivery
-        FROM orders WHERE created_at >= $1 AND created_at < $2 AND LOWER(email) = 'care@lifelines.com'
-      `, [start, end]),
+        FROM orders WHERE created_at >= $1 AND created_at < $2 AND ${CARE_WHERE}
+      `, [start, end, CARE_EMAIL]),
       db.query("SELECT value FROM sync_state WHERE key = 'last_sync'"),
     ]);
 
     const dailyRes = await db.query(`
       SELECT DATE(created_at) AS day, COUNT(*) AS orders, SUM(units) AS units
-      FROM orders WHERE created_at >= $1 AND created_at < $2 AND LOWER(email) = 'care@lifelines.com'
+      FROM orders WHERE created_at >= $1 AND created_at < $2 AND ${CARE_WHERE}
       GROUP BY DATE(created_at) ORDER BY day
-    `, [start, end]);
+    `, [start, end, CARE_EMAIL]);
 
     const fulfillRes = await db.query(`
       SELECT DATE(created_at) AS day, COUNT(*) AS fulfilled
       FROM orders WHERE created_at >= $1 AND created_at < $2
-        AND LOWER(email) = 'care@lifelines.com' AND fulfillment_hours IS NOT NULL
+        AND ${CARE_WHERE} AND fulfillment_hours IS NOT NULL
       GROUP BY DATE(created_at) ORDER BY day
-    `, [start, end]);
+    `, [start, end, CARE_EMAIL]);
 
     const daysInMonth = new Date(year, month, 0).getDate();
     const stats = statsRes.rows[0] || {};
@@ -1617,6 +1709,9 @@ app.post("/api/delivery-trend", async (req, res) => {
 });
 
 // ── Care@ SKU breakdown ───────────────────────────────────────────────────────
+// Live B2B query, same Care@ definition as the scorecard: any order under the
+// care customer(s) OR placed with the care@ email. status:any so archived
+// (fulfilled + closed) orders — most care orders — aren't silently dropped.
 app.post("/api/care-skus", async (req, res) => {
   const { year, month } = req.body;
   const { b2bStore, b2bToken } = CREDS;
@@ -1628,7 +1723,7 @@ query CareOrders($first: Int!, $after: String, $query: String!) {
     pageInfo { hasNextPage endCursor }
     edges {
       node {
-        id name createdAt
+        id name createdAt cancelledAt
         lineItems(first: 50) { edges { node { sku title quantity } } }
       }
     }
@@ -1637,12 +1732,13 @@ query CareOrders($first: Int!, $after: String, $query: String!) {
 
   const start = `${year}-${String(month).padStart(2, "0")}-01`;
   const endDate = new Date(Date.UTC(year, month, 1));
-  const end = `${endDate.getFullYear()}-${String(endDate.getMonth() + 1).padStart(2, "0")}-01`;
+  const end = `${endDate.getUTCFullYear()}-${String(endDate.getUTCMonth() + 1).padStart(2, "0")}-01`;
 
   try {
-    const orders = await gqlAll(b2bStore, b2bToken, CARE_SKU_QUERY,
-      { first: 250, query: `email:care@lifelines.com created_at:>=${start} created_at:<${end}` },
-      d => d.orders.edges, d => d.orders.pageInfo, 30000);
+    const allOrders = await gqlAll(b2bStore, b2bToken, CARE_SKU_QUERY,
+      { first: 250, query: `status:any (${careSearchClause()}) created_at:>=${start} created_at:<${end}` },
+      d => d.orders.edges, d => d.orders.pageInfo, 60000);
+    const orders = allOrders.filter(o => !o.cancelledAt);
 
     const skuMap = {};
     for (const order of orders) {
@@ -1751,13 +1847,15 @@ app.post("/api/trigger-backfill", async (req, res) => {
 // ── Sync status endpoint ──────────────────────────────────────────────────────
 app.get("/api/sync-status", async (req, res) => {
   try {
-    const [syncRes, countRes] = await Promise.all([
+    const [syncRes, countRes, careRes] = await Promise.all([
       db.query("SELECT * FROM sync_state"),
       db.query("SELECT store, COUNT(*) as count FROM orders GROUP BY store"),
+      db.query("SELECT COUNT(*) AS count FROM orders WHERE is_care = TRUE"),
     ]);
     res.json({
       state: Object.fromEntries(syncRes.rows.map(r => [r.key, r.value])),
       counts: Object.fromEntries(countRes.rows.map(r => [r.store, parseInt(r.count)])),
+      care: { customerIds: CARE_CUSTOMER_IDS, taggedOrders: parseInt(careRes.rows[0]?.count || 0) },
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
