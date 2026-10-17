@@ -92,9 +92,11 @@ const SHOPIFY_API_VERSION = process.env.SHOPIFY_API_VERSION || "2026-07";
 // ever gets additional contacts, add their IDs here and every order under
 // them is picked up. care@lifelines.com email matching is kept as a fallback.
 const CARE_EMAIL = "care@lifelines.com";
-const CARE_CUSTOMER_IDS = (process.env.CARE_CUSTOMER_IDS || "")
+// Default = "Replacements Customer Care Customer Care" contact on the B2B
+// store (company: Replacements and Customer Care). Env var overrides.
+const CARE_CUSTOMER_IDS = (process.env.CARE_CUSTOMER_IDS || "7107442770238")
   .split(",")
-  .map(s => s.trim().replace(/^gid:\/\/shopify\/Customer\//, ""))
+  .map(s => s.trim().replace(/^["']|["']$/g, "").replace(/^gid:\/\/shopify\/Customer\//, ""))
   .filter(s => /^\d+$/.test(s));
 
 function careSearchClause() {
