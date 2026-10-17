@@ -702,24 +702,100 @@ async function buildDraftsMap(store, token, since, deadlineMs = 120000) {
   return result;
 }
 
+// ── DTC stale thresholds ──────────────────────────────────────────────────────
+// Three buckets, each with its own clock:
+//   UNFULFILLED  — order placed, nothing fulfilled/no label yet. Clock = order createdAt.
+//   NO_SCAN      — fulfillment exists but the carrier has never moved it: label
+//                  printed/confirmed with no scan, OR no tracking number at all
+//                  (displayStatus FULFILLED / MARKED_AS_FULFILLED — previously
+//                  filtered out entirely, which is why "No Tracking" was always 0).
+//   IN_MOTION    — carrier has it but it hasn't been delivered. Normal ground
+//                  transit is 3–5 days, so this gets the longer threshold.
+// Clock for fulfillment buckets = fulfillment createdAt.
+const STALE_DAYS_UNFULFILLED = 3;
+const STALE_DAYS_NO_SCAN = 3;
+const STALE_DAYS_IN_MOTION = 5;
+const STALE_NO_SCAN_STATUSES = new Set([
+  "CONFIRMED", "LABEL_PRINTED", "LABEL_PURCHASED", "SUBMITTED",
+  "FULFILLED", "MARKED_AS_FULFILLED",
+]);
+const STALE_IN_MOTION_STATUSES = new Set([
+  "IN_TRANSIT", "CARRIER_PICKED_UP", "OUT_FOR_DELIVERY", "DELAYED",
+  "ATTEMPTED_DELIVERY", "FAILURE", "NOT_DELIVERED",
+]);
+
+const DTC_UNFULFILLED_QUERY = `
+query UnfulfilledOrders($first: Int!, $after: String, $query: String!) {
+  orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT, reverse: true) {
+    pageInfo { hasNextPage endCursor }
+    edges {
+      node {
+        id name createdAt cancelledAt email displayFulfillmentStatus
+        totalPriceSet { shopMoney { amount currencyCode } }
+        shippingAddress { name address1 address2 city province zip country }
+        tags
+        lineItems(first: 50) { edges { node { sku title quantity unfulfilledQuantity } } }
+      }
+    }
+  }
+}`;
+
 async function syncStaleFulfillments(store, token) {
-  const TARGET = new Set(["IN_TRANSIT", "CONFIRMED"]);
   const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
-  const orders = await gqlAll(store, token, DTC_STALE_QUERY,
-    { first: 250, query: `fulfillment_status:fulfilled -status:cancelled created_at:>=${ninetyDaysAgo}` },
-    d => d.orders.edges, d => d.orders.pageInfo, 120000);
+  // status:any — without it Shopify defaults to open orders only, so anything
+  // archived after fulfillment (still in transit) silently dropped out.
+  // Both fetches complete BEFORE the table is cleared, so a failed fetch
+  // leaves the last good snapshot in place instead of an empty table.
+  const [orders, unfulfilledOrders] = await Promise.all([
+    gqlAll(store, token, DTC_STALE_QUERY,
+      { first: 250, query: `status:any fulfillment_status:fulfilled created_at:>=${ninetyDaysAgo}` },
+      d => d.orders.edges, d => d.orders.pageInfo, 120000),
+    gqlAll(store, token, DTC_UNFULFILLED_QUERY,
+      { first: 250, query: `status:any fulfillment_status:unfulfilled created_at:>=${ninetyDaysAgo}` },
+      d => d.orders.edges, d => d.orders.pageInfo, 120000),
+  ]);
 
   await db.query("DELETE FROM stale_fulfillments");
 
   const rows = [];
+
+  for (const order of unfulfilledOrders) {
+    if (order.cancelledAt) continue;
+    const days = (Date.now() - new Date(order.createdAt).getTime()) / 864e5;
+    if (days < STALE_DAYS_UNFULFILLED) continue;
+    const skus = (order.lineItems?.edges || [])
+      .map(e => e.node)
+      .filter(li => (li.unfulfilledQuantity ?? li.quantity) > 0)
+      .map(li => `${li.sku || li.title} x${li.unfulfilledQuantity ?? li.quantity}`);
+    if (!skus.length) continue;
+    const addr = order.shippingAddress || {};
+    const total = order.totalPriceSet?.shopMoney || {};
+    rows.push({
+      // Synthetic key — there's no fulfillment yet, one row per order.
+      fulfillment_id: `${order.id}#unfulfilled`, order_id: order.id, order_name: order.name,
+      order_created_at: order.createdAt, email: order.email || null,
+      customer_name: addr.name || order.email || "",
+      shipping_address: [addr.address1, addr.address2, addr.city, addr.province, addr.zip, addr.country].filter(Boolean).join(", "),
+      order_total: total.amount ? `${total.currencyCode} ${parseFloat(total.amount).toFixed(2)}` : "",
+      fulfilled_at: null, display_status: "UNFULFILLED",
+      has_tracking: false, tracking_json: "[]",
+      skus: skus.join(" | "), tags: (order.tags || []).join(", "),
+      latest_event_json: null, all_events_json: "[]",
+      days_since_fulfilled: Math.floor(days), // days since ORDER placed for this bucket
+    });
+  }
+
   for (const order of orders) {
     if (order.cancelledAt) continue;
     for (const f of order.fulfillments || []) {
       const status = (f.displayStatus || "").toUpperCase().replace(/ /g, "_");
-      if (!TARGET.has(status)) continue;
+      const tracking = (f.trackingInfo || []).map(t => ({ company: t.company, number: t.number, url: t.url }));
+      const noScan = STALE_NO_SCAN_STATUSES.has(status);
+      const inMotion = STALE_IN_MOTION_STATUSES.has(status);
+      if (!noScan && !inMotion) continue;
       const days = (Date.now() - new Date(f.createdAt).getTime()) / 864e5;
-      if (days < 5) continue;
+      if (days < (inMotion ? STALE_DAYS_IN_MOTION : STALE_DAYS_NO_SCAN)) continue;
 
       const events = (f.events.edges || []).map(e => e.node).filter(e => e.happenedAt)
         .sort((a, b) => new Date(b.happenedAt) - new Date(a.happenedAt));
@@ -727,7 +803,6 @@ async function syncStaleFulfillments(store, token) {
         .map(e => `${e.node.lineItem.sku || e.node.lineItem.title} x${e.node.quantity}`);
       const addr = order.shippingAddress || {};
       const total = order.totalPriceSet?.shopMoney || {};
-      const tracking = (f.trackingInfo || []).map(t => ({ company: t.company, number: t.number, url: t.url }));
 
       rows.push({
         fulfillment_id: f.id, order_id: order.id, order_name: order.name,
@@ -770,7 +845,8 @@ async function syncStaleFulfillments(store, token) {
     `, params);
   }
 
-  console.log(`[sync] DTC stale: ${rows.length} stale fulfillments synced`);
+  const unfulfilledCount = rows.filter(r => r.display_status === "UNFULFILLED").length;
+  console.log(`[sync] DTC stale: ${rows.length} rows synced (${unfulfilledCount} unfulfilled, ${rows.length - unfulfilledCount} fulfillments)`);
   return rows.length;
 }
 
